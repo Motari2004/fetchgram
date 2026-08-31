@@ -5,7 +5,13 @@ const errorMsg = document.getElementById("error-msg");
 const results = document.getElementById("results");
 const template = document.getElementById("result-template");
 
-// New elements for direct URL display
+// Session elements
+const sessionIndicator = document.getElementById("session-indicator");
+const sessionText = document.getElementById("session-text");
+const detectSessionBtn = document.getElementById("detect-session-btn");
+const logoutSessionBtn = document.getElementById("logout-session-btn");
+
+// Direct URL elements
 const directUrlSection = document.getElementById("direct-url-section");
 const directUrlDisplay = document.getElementById("direct-url-display");
 const copyBtn = document.getElementById("copy-url-btn");
@@ -44,23 +50,97 @@ function formatDuration(seconds) {
   return `${m}:${String(rem).padStart(2, "0")}`;
 }
 
+function updateSessionStatus(hasSession, username) {
+  if (hasSession) {
+    sessionIndicator.textContent = '🟢';
+    sessionIndicator.className = 'session-indicator online';
+    sessionText.textContent = `Logged in as @${username || 'Instagram User'}`;
+    detectSessionBtn.hidden = true;
+    logoutSessionBtn.hidden = false;
+  } else {
+    sessionIndicator.textContent = '⚪';
+    sessionIndicator.className = 'session-indicator offline';
+    sessionText.textContent = 'Not logged in to Instagram';
+    detectSessionBtn.hidden = false;
+    logoutSessionBtn.hidden = true;
+  }
+}
+
+async function checkSessionStatus() {
+  try {
+    const response = await fetch('/api/session/status');
+    const data = await response.json();
+    updateSessionStatus(data.has_session, data.username);
+  } catch (error) {
+    console.error('Failed to check session:', error);
+    updateSessionStatus(false);
+  }
+}
+
+// Detect session from browser
+detectSessionBtn.addEventListener('click', async function() {
+  this.textContent = '⏳ Detecting...';
+  this.disabled = true;
+  
+  try {
+    const response = await fetch('/api/session/use_browser', {
+      method: 'POST'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      updateSessionStatus(true, data.username);
+      showError(`✅ ${data.message}`);
+      setTimeout(() => clearError(), 3000);
+    } else {
+      showError(`❌ ${data.error}`);
+    }
+  } catch (error) {
+    showError(`❌ Failed to detect session: ${error.message}`);
+  } finally {
+    this.textContent = '🔍 Detect Account';
+    this.disabled = false;
+  }
+});
+
+// Logout session
+logoutSessionBtn.addEventListener('click', async function() {
+  this.textContent = '⏳ Logging out...';
+  this.disabled = true;
+  
+  try {
+    const response = await fetch('/api/session/logout', {
+      method: 'POST'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      updateSessionStatus(false);
+      showError('✅ Logged out successfully');
+      setTimeout(() => clearError(), 3000);
+    }
+  } catch (error) {
+    showError(`❌ Failed to logout: ${error.message}`);
+  } finally {
+    this.textContent = '🚪 Logout';
+    this.disabled = false;
+  }
+});
+
 function downloadVideo(url, filename) {
   if (!url) {
     showError("No video URL available to download");
     return;
   }
   
-  // Show progress
   downloadProgress.hidden = false;
   progressFill.style.width = '0%';
   progressText.textContent = 'Starting download...';
   
-  // Sanitize filename
   const safeFilename = (filename || 'instagram_video')
     .replace(/[^a-zA-Z0-9]/g, '_')
     .substring(0, 50) + '.mp4';
   
-  // Method: Using fetch with progress
   fetch(url)
     .then(response => {
       if (!response.ok) throw new Error('Network response was not ok');
@@ -71,7 +151,6 @@ function downloadVideo(url, filename) {
       
       progressText.textContent = 'Downloading...';
       
-      // Create a readable stream to track progress
       const reader = response.body.getReader();
       const stream = new ReadableStream({
         start(controller) {
@@ -119,8 +198,6 @@ function downloadVideo(url, filename) {
     .catch(error => {
       console.error('Download failed:', error);
       progressText.textContent = 'Download failed, opening in new tab...';
-      
-      // Fallback: open in new tab
       setTimeout(() => {
         window.open(url, '_blank');
         downloadProgress.hidden = true;
@@ -160,15 +237,11 @@ function renderResults(items, sourceUrl) {
 
     const dlBtn = node.querySelector(".dl-btn");
     
-    // Download button click handler - ONLY downloads when clicked
     dlBtn.addEventListener('click', function(e) {
       e.preventDefault();
-      
-      // If we have a direct URL, download it
       if (currentVideoUrl) {
         downloadVideo(currentVideoUrl, item.title || 'instagram_video');
       } else {
-        // Fallback: use the API
         const params = new URLSearchParams({ url: sourceUrl, id: item.id || "" });
         window.open(`/api/download?${params.toString()}`, '_blank');
       }
@@ -185,7 +258,6 @@ function showDirectUrl(url, item) {
   directUrlSection.hidden = false;
   directUrlDisplay.value = url;
   
-  // Show video preview
   if (url && (url.endsWith('.mp4') || url.includes('video'))) {
     videoPreview.hidden = false;
     previewVideo.src = url;
@@ -196,11 +268,8 @@ function showDirectUrl(url, item) {
     if (item.title) infoHtml += `<p><strong>Title:</strong> ${item.title}</p>`;
     if (item.duration) infoHtml += `<p><strong>Duration:</strong> ${formatDuration(item.duration)}</p>`;
     
-    // Add download button below video info
-    const existingContent = videoInfo.innerHTML;
     videoInfo.innerHTML = infoHtml + `<button id="video-download-btn" class="copy-btn video-download-btn">⬇ Download Video</button>`;
     
-    // Re-attach video download button event
     document.getElementById('video-download-btn').addEventListener('click', function() {
       if (currentVideoUrl) {
         downloadVideo(currentVideoUrl, item?.title || 'instagram_video');
@@ -232,18 +301,18 @@ copyBtn.addEventListener('click', async function() {
   }
 });
 
-// Direct Download button handler
+// Direct Download button
 directDownloadBtn.addEventListener('click', function() {
   if (currentVideoUrl) {
     downloadVideo(currentVideoUrl, currentVideoItem?.title || 'instagram_video');
   }
 });
 
-// Also allow direct download via right-click on the URL display
 directUrlDisplay.addEventListener('click', function() {
   this.select();
 });
 
+// Main form submission
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   clearError();
@@ -259,7 +328,6 @@ form.addEventListener("submit", async (e) => {
 
   setLoading(true);
   try {
-    // Try the new API endpoint first for direct URL
     const res = await fetch("/api/commands/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -272,13 +340,9 @@ form.addEventListener("submit", async (e) => {
       return;
     }
 
-    // Check if we got a direct URL
     if (data.download_url) {
-      // Display single video with direct URL
       const item = data.video_info || { title: "Instagram video" };
       renderResults([item], data.url);
-      
-      // Show the direct URL and preview - NO AUTO-DOWNLOAD
       setTimeout(() => {
         showDirectUrl(data.download_url, item);
       }, 100);
@@ -288,7 +352,6 @@ form.addEventListener("submit", async (e) => {
       showError("No video found at that link.");
     }
   } catch (err) {
-    // Fallback to old API
     try {
       const res = await fetch("/api/fetch", {
         method: "POST",
@@ -310,3 +373,6 @@ form.addEventListener("submit", async (e) => {
     setLoading(false);
   }
 });
+
+// Check session status on page load
+checkSessionStatus();

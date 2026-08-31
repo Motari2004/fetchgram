@@ -25,6 +25,16 @@
     <h1>Save any public Instagram video, straight to your device.</h1>
     <p class="lede">Paste a reel, post, or IGTV link below. We pull the file server-side and hand you a direct download — no account, no watermark, no app.</p>
 
+    <!-- Session Status -->
+    <div id="session-section" class="session-section">
+      <div class="session-status-bar">
+        <span id="session-indicator" class="session-indicator offline">⚪</span>
+        <span id="session-text" class="session-text">Not logged in to Instagram</span>
+        <button id="detect-session-btn" class="session-btn">🔍 Detect Account</button>
+        <button id="logout-session-btn" class="session-btn logout-btn" hidden>🚪 Logout</button>
+      </div>
+    </div>
+
     <form id="fetch-form" class="url-row" autocomplete="off">
       <input
         id="url-input"

@@ -4,12 +4,15 @@ import uuid
 import shutil
 import tempfile
 import json
+import time
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file, render_template, after_this_request, redirect
+from flask import Flask, request, jsonify, send_file, render_template, after_this_request, redirect, session
 from flask_cors import CORS
 import yt_dlp
+import requests
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 CORS(app)
 
 IG_URL_RE = re.compile(r"^https?://(www\.)?instagram\.com/", re.IGNORECASE)
@@ -33,9 +36,15 @@ def is_valid_instagram_url(url: str) -> bool:
 
 def get_cookie_file():
     """
-    Get cookies from environment variable (Vercel) or cookies.json (local).
+    Get cookies from login session, environment variable, or file.
     """
-    # PRIORITY 1: Check environment variable (for Vercel)
+    # PRIORITY 1: Check if we have login cookies from session
+    cookie_file = session.get('cookie_file')
+    if cookie_file and os.path.exists(cookie_file):
+        app.logger.info(f"Using login cookies from: {cookie_file}")
+        return cookie_file
+    
+    # PRIORITY 2: Check environment variable (Vercel)
     cookies_json_env = os.environ.get('COOKIES_JSON')
     if cookies_json_env:
         try:
@@ -71,9 +80,8 @@ def get_cookie_file():
             
         except Exception as e:
             app.logger.error(f"Failed to parse COOKIES_JSON: {e}")
-            # Fall through to file-based cookies
     
-    # PRIORITY 2: Check for cookies.json in the current directory (local development)
+    # PRIORITY 3: Check for cookies.json in the current directory (local development)
     cookie_json_path = os.path.join(os.getcwd(), 'cookies.json')
     if os.path.exists(cookie_json_path):
         try:
@@ -108,8 +116,88 @@ def get_cookie_file():
             app.logger.error(f"Failed to parse cookies.json: {e}")
             return None
     
-    app.logger.warning("No cookies found in environment or file")
+    app.logger.warning("No cookies found")
     return None
+
+
+def get_instagram_session_from_browser():
+    """
+    Detect Instagram session from browser cookies using yt-dlp's cookie extraction.
+    """
+    try:
+        # Try to extract cookies from browser
+        import subprocess
+        
+        # Use yt-dlp to extract cookies
+        cmd = ['yt-dlp', '--cookies-from-browser', 'chrome', '--cookies', '/tmp/browser_cookies.txt', '--skip-download', 'https://instagram.com']
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if os.path.exists('/tmp/browser_cookies.txt'):
+            # Read the cookies
+            with open('/tmp/browser_cookies.txt', 'r') as f:
+                cookies = f.read()
+            
+            # Parse to get username
+            session_cookie = None
+            for line in cookies.split('\n'):
+                if 'sessionid' in line:
+                    session_cookie = line
+                    break
+            
+            if session_cookie:
+                # Extract username from session cookie
+                parts = session_cookie.split('\t')
+                if len(parts) >= 7:
+                    username = parts[6] if parts[6] else 'Instagram User'
+                    return {
+                        'success': True,
+                        'username': username,
+                        'cookie_file': '/tmp/browser_cookies.txt',
+                        'message': f'Found Instagram session for @{username}'
+                    }
+        
+        return {
+            'success': False,
+            'error': 'Could not detect Instagram session in browser'
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+def detect_instagram_user_from_cookies(cookie_file):
+    """
+    Detect Instagram username from cookies.
+    """
+    try:
+        if not os.path.exists(cookie_file):
+            return None
+        
+        with open(cookie_file, 'r') as f:
+            content = f.read()
+        
+        # Look for ds_user_id or sessionid
+        for line in content.split('\n'):
+            if 'ds_user_id' in line or 'sessionid' in line:
+                parts = line.split('\t')
+                if len(parts) >= 7:
+                    # Try to find username
+                    if parts[5] == 'ds_user':
+                        return parts[6]
+                    elif parts[5] == 'sessionid':
+                        # sessionid format: username%3A...
+                        if '%3A' in parts[6]:
+                            return parts[6].split('%3A')[0]
+                        elif ':' in parts[6]:
+                            return parts[6].split(':')[0]
+        
+        return None
+    except Exception:
+        return None
 
 
 def base_ydl_opts(extra=None):
@@ -128,7 +216,7 @@ def base_ydl_opts(extra=None):
         },
     }
     
-    # Try to use cookies (from env or file)
+    # Try to get cookies
     cookie_file = get_cookie_file()
     if cookie_file and os.path.exists(cookie_file):
         opts["cookiefile"] = cookie_file
@@ -231,7 +319,7 @@ def clean_error(msg: str) -> str:
     if "rate limited" in msg.lower():
         return "Too many requests. Please wait a moment and try again."
     if "cookies" in msg.lower() or "cookie" in msg.lower():
-        return "Authentication required. Please check your cookies.json file or COOKIES_JSON environment variable."
+        return "Authentication required. Please login or check your cookies."
     if len(msg) > 160:
         return "Couldn't process that link. Double-check it's a public post and try again."
     return msg
@@ -493,6 +581,75 @@ def api_status():
     })
 
 
+@app.route("/api/session/detect", methods=["GET"])
+def detect_session():
+    """Detect Instagram session from browser cookies."""
+    result = get_instagram_session_from_browser()
+    return jsonify(result)
+
+
+@app.route("/api/session/status", methods=["GET"])
+def session_status():
+    """Check if we have a valid Instagram session."""
+    cookie_file = get_cookie_file()
+    if cookie_file and os.path.exists(cookie_file):
+        # Try to detect username
+        username = detect_instagram_user_from_cookies(cookie_file)
+        return jsonify({
+            "status": "success",
+            "has_session": True,
+            "username": username or "Unknown",
+            "cookie_file": cookie_file
+        })
+    else:
+        return jsonify({
+            "status": "success",
+            "has_session": False,
+            "message": "No Instagram session found"
+        })
+
+
+@app.route("/api/session/use_browser", methods=["POST"])
+def use_browser_session():
+    """Use the browser's Instagram session."""
+    result = get_instagram_session_from_browser()
+    
+    if result['success']:
+        session['cookie_file'] = result['cookie_file']
+        session['username'] = result.get('username', 'Instagram User')
+        
+        return jsonify({
+            "status": "success",
+            "username": result.get('username'),
+            "message": result.get('message'),
+            "cookie_file": result.get('cookie_file')
+        })
+    else:
+        return jsonify({
+            "status": "error",
+            "error": result.get('error', 'Failed to detect Instagram session')
+        }), 404
+
+
+@app.route("/api/session/logout", methods=["POST"])
+def logout_session():
+    """Clear the session."""
+    # Remove cookie files
+    for file in ['cookies_netscape.txt', 'browser_cookies.txt', 'instagram_cookies.json']:
+        path = os.path.join('/tmp', file)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except:
+                pass
+    
+    session.clear()
+    return jsonify({
+        "status": "success",
+        "message": "Session cleared successfully"
+    })
+
+
 @app.route("/api/debug/cookies", methods=["GET"])
 def debug_cookies():
     """Debug endpoint to check cookie status."""
@@ -500,11 +657,15 @@ def debug_cookies():
     if cookie_file and os.path.exists(cookie_file):
         with open(cookie_file, 'r') as f:
             first_lines = f.readlines()[:10]
+        
+        username = detect_instagram_user_from_cookies(cookie_file)
+        
         return jsonify({
             "cookie_file_exists": True,
             "cookie_file_path": cookie_file,
             "sample_cookies": first_lines,
             "has_session_cookie": any("sessionid" in line for line in first_lines),
+            "username": username or "Unknown",
             "env_cookies_configured": bool(os.environ.get('COOKIES_JSON'))
         })
     return jsonify({
@@ -512,23 +673,6 @@ def debug_cookies():
         "message": "No cookie file found",
         "env_cookies_configured": bool(os.environ.get('COOKIES_JSON'))
     })
-
-
-@app.route("/api/test-cookies", methods=["GET"])
-def test_cookies():
-    """Test if cookies are working."""
-    cookie_file = get_cookie_file()
-    if cookie_file and os.path.exists(cookie_file):
-        return jsonify({
-            "status": "success",
-            "cookie_file": cookie_file,
-            "file_exists": os.path.exists(cookie_file)
-        })
-    else:
-        return jsonify({
-            "status": "error",
-            "message": "No cookie file found"
-        }), 404
 
 
 if __name__ == "__main__":
