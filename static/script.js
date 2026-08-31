@@ -9,9 +9,17 @@ const template = document.getElementById("result-template");
 const directUrlSection = document.getElementById("direct-url-section");
 const directUrlDisplay = document.getElementById("direct-url-display");
 const copyBtn = document.getElementById("copy-url-btn");
+const directDownloadBtn = document.getElementById("direct-download-btn");
 const videoPreview = document.getElementById("video-preview");
 const previewVideo = document.getElementById("preview-video");
 const videoInfo = document.getElementById("video-info");
+const videoDownloadBtn = document.getElementById("video-download-btn");
+const downloadProgress = document.getElementById("download-progress");
+const progressFill = document.getElementById("progress-fill");
+const progressText = document.getElementById("progress-text");
+
+let currentVideoUrl = null;
+let currentVideoItem = null;
 
 function setLoading(isLoading) {
   fetchBtn.disabled = isLoading;
@@ -37,11 +45,96 @@ function formatDuration(seconds) {
   return `${m}:${String(rem).padStart(2, "0")}`;
 }
 
+function downloadVideo(url, filename) {
+  if (!url) {
+    showError("No video URL available to download");
+    return;
+  }
+  
+  // Show progress
+  downloadProgress.hidden = false;
+  progressFill.style.width = '0%';
+  progressText.textContent = 'Starting download...';
+  
+  // Sanitize filename
+  const safeFilename = (filename || 'instagram_video')
+    .replace(/[^a-zA-Z0-9]/g, '_')
+    .substring(0, 50) + '.mp4';
+  
+  // Method: Using fetch with progress
+  fetch(url)
+    .then(response => {
+      if (!response.ok) throw new Error('Network response was not ok');
+      
+      const contentLength = response.headers.get('content-length');
+      const total = parseInt(contentLength, 10);
+      let loaded = 0;
+      
+      progressText.textContent = 'Downloading...';
+      
+      // Create a readable stream to track progress
+      const reader = response.body.getReader();
+      const stream = new ReadableStream({
+        start(controller) {
+          function push() {
+            reader.read().then(({done, value}) => {
+              if (done) {
+                controller.close();
+                return;
+              }
+              loaded += value.byteLength;
+              if (total) {
+                const percent = Math.round((loaded / total) * 100);
+                progressFill.style.width = percent + '%';
+                progressText.textContent = `Downloading... ${percent}%`;
+              }
+              controller.enqueue(value);
+              push();
+            });
+          }
+          push();
+        }
+      });
+      
+      return new Response(stream, {
+        headers: response.headers
+      }).blob();
+    })
+    .then(blob => {
+      progressText.textContent = 'Download complete!';
+      progressFill.style.width = '100%';
+      
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = safeFilename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+        downloadProgress.hidden = true;
+      }, 2000);
+    })
+    .catch(error => {
+      console.error('Download failed:', error);
+      progressText.textContent = 'Download failed, opening in new tab...';
+      
+      // Fallback: open in new tab
+      setTimeout(() => {
+        window.open(url, '_blank');
+        downloadProgress.hidden = true;
+      }, 1000);
+    });
+}
+
 function renderResults(items, sourceUrl) {
   results.innerHTML = "";
   results.hidden = false;
   directUrlSection.hidden = true;
   videoPreview.hidden = true;
+  downloadProgress.hidden = true;
 
   items.forEach((item) => {
     const node = template.content.cloneNode(true);
@@ -68,49 +161,17 @@ function renderResults(items, sourceUrl) {
 
     const dlBtn = node.querySelector(".dl-btn");
     
-    // Add direct URL fetch on click
-    dlBtn.addEventListener('click', async function(e) {
+    // Download button click handler
+    dlBtn.addEventListener('click', function(e) {
       e.preventDefault();
-      const label = this.querySelector('.btn-label');
-      const originalText = label.textContent;
-      label.textContent = 'Getting URL…';
       
-      try {
+      // If we have a direct URL, download it
+      if (currentVideoUrl) {
+        downloadVideo(currentVideoUrl, item.title || 'instagram_video');
+      } else {
+        // Fallback: use the API
         const params = new URLSearchParams({ url: sourceUrl, id: item.id || "" });
-        const response = await fetch(`/api/download?${params.toString()}`, {
-          method: 'GET',
-          redirect: 'manual'
-        });
-        
-        if (response.status === 200 || response.status === 302) {
-          const data = await response.text();
-          // Try to parse as JSON (for direct URL) or use location
-          try {
-            const jsonData = JSON.parse(data);
-            if (jsonData.download_url) {
-              showDirectUrl(jsonData.download_url, item);
-              return;
-            }
-          } catch {
-            // Not JSON, might be a redirect or file
-          }
-          
-          // Check if it's a redirect URL
-          if (response.url && response.url.startsWith('http')) {
-            showDirectUrl(response.url, item);
-            return;
-          }
-        }
-        
-        // Fallback: open in new tab
-        const params2 = new URLSearchParams({ url: sourceUrl, id: item.id || "" });
-        window.open(`/api/download?${params2.toString()}`, '_blank');
-      } catch (err) {
-        // Fallback: open in new tab
-        const params3 = new URLSearchParams({ url: sourceUrl, id: item.id || "" });
-        window.open(`/api/download?${params3.toString()}`, '_blank');
-      } finally {
-        label.textContent = originalText;
+        window.open(`/api/download?${params.toString()}`, '_blank');
       }
     });
 
@@ -119,6 +180,9 @@ function renderResults(items, sourceUrl) {
 }
 
 function showDirectUrl(url, item) {
+  currentVideoUrl = url;
+  currentVideoItem = item;
+  
   directUrlSection.hidden = false;
   directUrlDisplay.value = url;
   
@@ -132,7 +196,17 @@ function showDirectUrl(url, item) {
     if (item.uploader) infoHtml += `<p><strong>Uploader:</strong> @${item.uploader}</p>`;
     if (item.title) infoHtml += `<p><strong>Title:</strong> ${item.title}</p>`;
     if (item.duration) infoHtml += `<p><strong>Duration:</strong> ${formatDuration(item.duration)}</p>`;
-    videoInfo.innerHTML = infoHtml || '<p>Video ready for download</p>';
+    
+    // Keep the download button
+    const existingContent = videoInfo.innerHTML;
+    videoInfo.innerHTML = infoHtml + `<button id="video-download-btn" class="copy-btn video-download-btn">⬇ Download Video</button>`;
+    
+    // Re-attach video download button event
+    document.getElementById('video-download-btn').addEventListener('click', function() {
+      if (currentVideoUrl) {
+        downloadVideo(currentVideoUrl, item?.title || 'instagram_video');
+      }
+    });
   }
 }
 
@@ -143,20 +217,26 @@ copyBtn.addEventListener('click', async function() {
   
   try {
     await navigator.clipboard.writeText(url);
-    this.textContent = 'Copied!';
+    this.textContent = '✅ Copied!';
     this.classList.add('copied');
     setTimeout(() => {
-      this.textContent = 'Copy';
+      this.textContent = '📋 Copy';
       this.classList.remove('copied');
     }, 2000);
   } catch {
-    // Fallback
     directUrlDisplay.select();
     document.execCommand('copy');
-    this.textContent = 'Copied!';
+    this.textContent = '✅ Copied!';
     setTimeout(() => {
-      this.textContent = 'Copy';
+      this.textContent = '📋 Copy';
     }, 2000);
+  }
+});
+
+// Direct Download button handler
+directDownloadBtn.addEventListener('click', function() {
+  if (currentVideoUrl) {
+    downloadVideo(currentVideoUrl, currentVideoItem?.title || 'instagram_video');
   }
 });
 
@@ -171,6 +251,9 @@ form.addEventListener("submit", async (e) => {
   results.hidden = true;
   directUrlSection.hidden = true;
   videoPreview.hidden = true;
+  downloadProgress.hidden = true;
+  currentVideoUrl = null;
+  currentVideoItem = null;
 
   const url = input.value.trim();
   if (!url) return;
@@ -195,9 +278,14 @@ form.addEventListener("submit", async (e) => {
       // Display single video with direct URL
       const item = data.video_info || { title: "Instagram video" };
       renderResults([item], data.url);
-      // Show the direct URL
+      
+      // Show the direct URL and auto-download after a short delay
       setTimeout(() => {
         showDirectUrl(data.download_url, item);
+        // Auto-download after showing
+        setTimeout(() => {
+          downloadVideo(data.download_url, item.title || 'instagram_video');
+        }, 800);
       }, 100);
     } else if (data.items) {
       renderResults(data.items, data.source_url);

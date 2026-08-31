@@ -55,22 +55,34 @@
             <span class="uploader"></span><span class="dot">·</span><span class="duration"></span>
           </p>
         </div>
-        <a class="dl-btn" download>
-          <span class="btn-label">Download</span>
+        <a class="dl-btn" download href="#">
+          <span class="btn-label">⬇ Download</span>
         </a>
       </article>
     </template>
     
     <!-- Direct URL Display Section -->
     <div id="direct-url-section" class="direct-url-section" hidden>
-      <h3>Direct Download URL</h3>
+      <h3>📹 Direct Download URL</h3>
       <div class="url-container">
         <input type="text" id="direct-url-display" readonly />
-        <button id="copy-url-btn" class="copy-btn">Copy</button>
+        <button id="copy-url-btn" class="copy-btn">📋 Copy</button>
+        <button id="direct-download-btn" class="copy-btn download-btn">⬇ Download</button>
       </div>
+      
       <div class="video-preview" id="video-preview" hidden>
         <video controls id="preview-video" class="preview-video"></video>
-        <div class="video-info" id="video-info"></div>
+        <div class="video-info" id="video-info">
+          <button id="video-download-btn" class="copy-btn video-download-btn">⬇ Download Video</button>
+        </div>
+      </div>
+      
+      <!-- Download progress -->
+      <div id="download-progress" class="download-progress" hidden>
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+        </div>
+        <p id="progress-text" class="progress-text">Downloading...</p>
       </div>
     </div>
   </main>

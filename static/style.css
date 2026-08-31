@@ -243,19 +243,20 @@ body {
   padding: 10px 18px;
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
+  color: #fff;
+  background: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: var(--radius);
   text-decoration: none;
   white-space: nowrap;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
   cursor: pointer;
 }
 
 .dl-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent-ink);
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
+  color: #fff;
 }
 
 /* Direct URL Section */
@@ -277,10 +278,12 @@ body {
   display: flex;
   gap: 10px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
 #direct-url-display {
   flex: 1;
+  min-width: 200px;
   padding: 10px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -302,21 +305,44 @@ body {
   cursor: pointer;
   font-weight: 600;
   transition: background 0.15s ease;
+  white-space: nowrap;
 }
 
 .copy-btn:hover { background: var(--accent-ink); }
 .copy-btn.copied { background: #2E7D32; }
 
+.download-btn {
+  background: #2E7D32;
+}
+
+.download-btn:hover {
+  background: #1B5E20;
+}
+
+.video-download-btn {
+  background: #2E7D32;
+  width: 100%;
+  padding: 12px;
+  margin-top: 8px;
+  font-size: 16px;
+}
+
+.video-download-btn:hover {
+  background: #1B5E20;
+}
+
 .video-preview {
   margin-top: 12px;
   border-radius: var(--radius);
   overflow: hidden;
+  background: #000;
 }
 
 .preview-video {
   width: 100%;
   max-height: 400px;
   background: #000;
+  display: block;
 }
 
 .video-info {
@@ -333,6 +359,37 @@ body {
 
 .video-info strong {
   color: var(--text);
+}
+
+/* Download Progress */
+.download-progress {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+  border-radius: 4px;
+}
+
+.progress-text {
+  margin: 8px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
 }
 
 /* Footer */
@@ -353,6 +410,7 @@ body {
 @media (max-width: 520px) {
   .url-row { flex-direction: column; }
   #fetch-btn { width: 100%; }
+  
   .result-card {
     grid-template-columns: 64px 1fr;
     grid-template-rows: auto auto;
@@ -363,11 +421,16 @@ body {
     justify-content: center;
     margin-top: 4px;
   }
+  
   .url-container {
     flex-direction: column;
   }
   #direct-url-display {
     white-space: normal;
     word-break: break-all;
+  }
+  .copy-btn {
+    width: 100%;
+    justify-content: center;
   }
 }
