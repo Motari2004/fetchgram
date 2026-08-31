@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fetchgram — save Instagram videos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="topbar">
+    <div class="mark">
+      <span class="mark-glyph">↓</span>
+      <span class="mark-name">fetchgram</span>
+    </div>
+    <span class="topbar-note">runs locally, nothing is stored</span>
+  </header>
+
+  <main class="hero">
+    <h1>Save any public Instagram video, straight to your device.</h1>
+    <p class="lede">Paste a reel, post, or IGTV link below. We pull the file server-side and hand you a direct download — no account, no watermark, no app.</p>
+
+    <form id="fetch-form" class="url-row" autocomplete="off">
+      <input
+        id="url-input"
+        type="url"
+        name="url"
+        placeholder="https://www.instagram.com/reel/…"
+        inputmode="url"
+        required
+      />
+      <button type="submit" id="fetch-btn">
+        <span class="btn-label">Fetch</span>
+        <span class="btn-spinner" hidden></span>
+      </button>
+    </form>
+
+    <p id="error-msg" class="error-msg" hidden></p>
+
+    <section id="results" class="results" hidden></section>
+
+    <template id="result-template">
+      <article class="result-card">
+        <div class="thumb">
+          <img alt="" />
+        </div>
+        <div class="meta">
+          <p class="meta-title"></p>
+          <p class="meta-sub">
+            <span class="uploader"></span><span class="dot">·</span><span class="duration"></span>
+          </p>
+        </div>
+        <a class="dl-btn" download>
+          <span class="btn-label">Download</span>
+        </a>
+      </article>
+    </template>
+  </main>
+
+  <footer class="foot">
+    <p>Only for content you own or have permission to save. Respect creators' rights and Instagram's terms of service.</p>
+  </footer>
+
+</div>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
