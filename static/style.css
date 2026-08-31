@@ -361,109 +361,6 @@ body {
   color: var(--text);
 }
 
-/* Bluesky Section */
-.bluesky-section {
-  margin-top: 24px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-}
-
-.bluesky-section h3 {
-  margin: 0 0 12px;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.bluesky-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.form-group label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-muted);
-}
-
-.bluesky-textarea {
-  padding: 10px;
-  font-family: var(--font-display);
-  font-size: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  resize: vertical;
-  min-height: 60px;
-}
-
-.bluesky-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.char-count {
-  font-size: 12px;
-  color: var(--text-muted);
-  text-align: right;
-}
-
-.bluesky-btn {
-  background: #005CFF;
-  padding: 12px;
-  font-size: 16px;
-  width: 100%;
-}
-
-.bluesky-btn:hover {
-  background: #003DCC;
-}
-
-.bluesky-btn:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-.bluesky-status {
-  padding: 10px;
-  border-radius: var(--radius);
-  font-size: 13px;
-}
-
-.bluesky-status.success {
-  background: #E8F5E9;
-  color: #2E7D32;
-  border: 1px solid #A5D6A7;
-}
-
-.bluesky-status.error {
-  background: #FFEBEE;
-  color: #C62828;
-  border: 1px solid #EF9A9A;
-}
-
-#bluesky-credentials {
-  padding: 12px;
-  background: var(--bg);
-  border-radius: var(--radius);
-}
-
-#bluesky-credentials input {
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 14px;
-  margin-bottom: 8px;
-  width: 100%;
-}
-
 /* Download Progress */
 .download-progress {
   margin-top: 16px;
@@ -535,9 +432,5 @@ body {
   .copy-btn {
     width: 100%;
     justify-content: center;
-  }
-  
-  #bluesky-credentials input {
-    width: 100%;
   }
 }

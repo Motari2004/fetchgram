@@ -13,7 +13,6 @@ const directDownloadBtn = document.getElementById("direct-download-btn");
 const videoPreview = document.getElementById("video-preview");
 const previewVideo = document.getElementById("preview-video");
 const videoInfo = document.getElementById("video-info");
-const videoDownloadBtn = document.getElementById("video-download-btn");
 const downloadProgress = document.getElementById("download-progress");
 const progressFill = document.getElementById("progress-fill");
 const progressText = document.getElementById("progress-text");
@@ -161,7 +160,7 @@ function renderResults(items, sourceUrl) {
 
     const dlBtn = node.querySelector(".dl-btn");
     
-    // Download button click handler
+    // Download button click handler - ONLY downloads when clicked
     dlBtn.addEventListener('click', function(e) {
       e.preventDefault();
       
@@ -197,7 +196,7 @@ function showDirectUrl(url, item) {
     if (item.title) infoHtml += `<p><strong>Title:</strong> ${item.title}</p>`;
     if (item.duration) infoHtml += `<p><strong>Duration:</strong> ${formatDuration(item.duration)}</p>`;
     
-    // Keep the download button
+    // Add download button below video info
     const existingContent = videoInfo.innerHTML;
     videoInfo.innerHTML = infoHtml + `<button id="video-download-btn" class="copy-btn video-download-btn">⬇ Download Video</button>`;
     
@@ -279,7 +278,7 @@ form.addEventListener("submit", async (e) => {
       const item = data.video_info || { title: "Instagram video" };
       renderResults([item], data.url);
       
-      // Show the direct URL and preview (NO AUTO-DOWNLOAD)
+      // Show the direct URL and preview - NO AUTO-DOWNLOAD
       setTimeout(() => {
         showDirectUrl(data.download_url, item);
       }, 100);
