@@ -1036,6 +1036,124 @@ def api_status():
 
 
 
+@app.route("/api/instagram/save_cookies", methods=["POST"])
+def save_instagram_cookies():
+    """Save Instagram cookies persistently."""
+    data = request.get_json(silent=True) or {}
+    cookies_data = data.get("cookies", [])
+    remember = data.get("remember", True)
+    
+    if not cookies_data:
+        return jsonify({"error": "No cookies provided"}), 400
+    
+    try:
+        # Encrypt and store cookies
+        if remember:
+            cookies_json = json.dumps(cookies_data)
+            encrypted = encrypt_credentials(cookies_json, "instagram_cookies")
+            if encrypted:
+                session['instagram_encrypted'] = encrypted
+                
+                # Extract username
+                username = None
+                for cookie in cookies_data:
+                    if isinstance(cookie, dict) and cookie.get('name') == 'ds_user':
+                        username = cookie.get('value')
+                        break
+                    if isinstance(cookie, dict) and cookie.get('name') == 'sessionid':
+                        value = cookie.get('value', '')
+                        if '%3A' in value:
+                            username = value.split('%3A')[0]
+                        elif ':' in value:
+                            username = value.split(':')[0]
+                        break
+                
+                session['instagram_username'] = username or 'Instagram User'
+                session['instagram_saved'] = True
+                
+                # Also write to cookie file for immediate use
+                cookie_file = os.path.join('/tmp', f'instagram_cookies_persistent.txt')
+                with open(cookie_file, 'w') as f:
+                    f.write("# Netscape HTTP Cookie File\n")
+                    for cookie in cookies_data:
+                        if isinstance(cookie, dict):
+                            domain = cookie.get('domain', '')
+                            flag = 'TRUE' if cookie.get('hostOnly') != True else 'FALSE'
+                            path = cookie.get('path', '/')
+                            secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                            expiry = cookie.get('expirationDate')
+                            if expiry is None:
+                                expiry = cookie.get('expiry', 0)
+                            expiry = str(int(expiry) if expiry else '0')
+                            name = cookie.get('name', '')
+                            value = cookie.get('value', '')
+                            if not name or not domain:
+                                continue
+                            f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+                
+                session['cookie_file'] = cookie_file
+                
+                return jsonify({
+                    "status": "success",
+                    "message": "Cookies saved successfully!",
+                    "username": username
+                })
+        
+        return jsonify({"status": "error", "error": "Failed to save cookies"}), 500
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/instagram/cookies_status", methods=["GET"])
+def instagram_cookies_status():
+    """Check if Instagram cookies are saved."""
+    encrypted = session.get('instagram_encrypted')
+    
+    if encrypted:
+        try:
+            decrypted = decrypt_credentials(encrypted)
+            if decrypted:
+                return jsonify({
+                    "status": "success",
+                    "has_cookies": True,
+                    "username": session.get('instagram_username', 'Instagram User'),
+                    "message": "Cookies are saved and valid"
+                })
+        except:
+            pass
+    
+    return jsonify({
+        "status": "success",
+        "has_cookies": False,
+        "message": "No saved cookies found"
+    })
+
+
+@app.route("/api/instagram/clear_cookies", methods=["POST"])
+def clear_instagram_cookies():
+    """Clear saved Instagram cookies."""
+    session.pop('instagram_encrypted', None)
+    session.pop('instagram_username', None)
+    session.pop('instagram_saved', None)
+    session.pop('cookie_file', None)
+    
+    # Remove any cookie files
+    for file in ['cookies_netscape.txt', 'instagram_cookies_persistent.txt']:
+        path = os.path.join('/tmp', file)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except:
+                pass
+    
+    return jsonify({
+        "status": "success",
+        "message": "Instagram cookies cleared successfully"
+    })
+
+
+
 
 
 
