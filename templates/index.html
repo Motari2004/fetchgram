@@ -3,162 +3,263 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Fetchgram — Save Instagram videos</title>
+<title>Fetchgram — Premium Instagram Downloader</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 
+<!-- Premium Background Effects -->
+<div class="bg-effects">
+  <div class="gradient-blob blob-1"></div>
+  <div class="gradient-blob blob-2"></div>
+  <div class="gradient-blob blob-3"></div>
+</div>
+
 <div class="wrap">
 
+  <!-- Premium Header -->
   <header class="topbar">
     <div class="mark">
-      <span class="mark-glyph">↓</span>
+      <div class="mark-icon">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect x="2" y="2" width="24" height="24" rx="8" stroke="currentColor" stroke-width="2"/>
+          <path d="M8 14L12 18L20 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M18 14H22M18 10H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
       <span class="mark-name">fetchgram</span>
+      <span class="mark-badge">PRO</span>
     </div>
-    <span class="topbar-note">runs locally, nothing is stored</span>
+    <div class="topbar-actions">
+      <span class="topbar-note">⚡ Premium</span>
+    </div>
   </header>
 
   <main class="hero">
-    <h1>Save any public Instagram video, straight to your device.</h1>
-    <p class="lede">Paste a reel, post, or IGTV link below. We pull the file server-side and hand you a direct download — no account, no watermark, no app.</p>
-
-    <!-- Cookie Upload Section -->
-    <div id="cookie-section" class="cookie-section">
-      <div class="cookie-status">
-        <span id="cookie-indicator" class="status-indicator offline">⚪</span>
-        <span id="cookie-status-text" class="status-text">No cookies uploaded</span>
+    <!-- Hero Section -->
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span>✨ Premium Video Downloader</span>
       </div>
-      
-      <div class="cookie-upload-area">
-        <div class="cookie-upload-actions">
-          <label for="cookie-file-input" class="cookie-upload-label">
-            <span id="file-label-text">📁 Choose cookies.json</span>
-            <input type="file" id="cookie-file-input" accept=".json" />
-          </label>
-          <button id="upload-cookie-btn" class="cookie-btn upload-btn" disabled>⬆ Upload</button>
-          <button id="clear-cookie-btn" class="cookie-btn clear-btn" hidden>🗑️ Clear</button>
+      <h1>Download Instagram videos <br /><span class="gradient-text">in seconds</span></h1>
+      <p class="lede">Paste any Instagram reel, post, or IGTV link and get a direct download URL — no account, no watermark, no limits.</p>
+    </div>
+
+    <!-- Status Cards -->
+    <div class="status-grid">
+      <!-- Cookie Status -->
+      <div class="status-card" id="cookie-status-card">
+        <div class="status-card-header">
+          <span class="status-icon" id="cookie-indicator">⚪</span>
+          <span class="status-label">Instagram Auth</span>
         </div>
-        <div id="cookie-upload-info" class="cookie-upload-info" hidden></div>
-        <div id="cookie-upload-error" class="cookie-upload-error" hidden></div>
+        <div class="status-card-body">
+          <span class="status-text" id="cookie-status-text">Not connected</span>
+          <span class="status-sub">Upload your cookies to start</span>
+        </div>
+        <div class="status-card-actions">
+          <label for="cookie-file-input" class="btn btn-sm btn-ghost">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Upload Cookies
+          </label>
+          <input type="file" id="cookie-file-input" accept=".json" style="display:none" />
+          <button id="clear-cookie-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
+        </div>
+        <div id="cookie-upload-info" class="status-message success" hidden></div>
+        <div id="cookie-upload-error" class="status-message error" hidden></div>
+      </div>
+
+      <!-- Bluesky Status -->
+      <div class="status-card" id="bluesky-status-card">
+        <div class="status-card-header">
+          <span class="status-icon" id="bluesky-indicator">⚪</span>
+          <span class="status-label">Bluesky</span>
+        </div>
+        <div class="status-card-body">
+          <span class="status-text" id="bluesky-status-text">Not connected</span>
+          <span class="status-sub" id="bluesky-username-display"></span>
+        </div>
+        <div class="status-card-actions">
+          <button id="bluesky-toggle-btn" class="btn btn-sm btn-ghost">⚙️ Configure</button>
+          <button id="clear-bluesky-creds-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
+        </div>
+        <div id="saved-credentials-info" class="status-message success" hidden></div>
       </div>
     </div>
 
-    <form id="fetch-form" class="url-row" autocomplete="off">
-      <input
-        id="url-input"
-        type="url"
-        name="url"
-        placeholder="https://www.instagram.com/reel/…"
-        inputmode="url"
-        required
-      />
-      <button type="submit" id="fetch-btn">
-        <span class="btn-label">Fetch</span>
-        <span class="btn-spinner" hidden></span>
-      </button>
-    </form>
+    <!-- Main Input Area -->
+    <div class="input-area">
+      <div class="input-wrapper">
+        <div class="input-icon">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M2 10C2 5.58172 5.58172 2 10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M8 7L12 10L8 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <input
+          id="url-input"
+          type="url"
+          class="input-field"
+          placeholder="Paste Instagram reel URL here..."
+          autocomplete="off"
+        />
+        <button type="submit" id="fetch-btn" class="btn btn-primary">
+          <span class="btn-label">Fetch</span>
+          <span class="btn-spinner" hidden></span>
+        </button>
+      </div>
+      <div id="error-msg" class="error-msg" hidden></div>
+    </div>
 
-    <p id="error-msg" class="error-msg" hidden></p>
-
+    <!-- Results Section -->
     <section id="results" class="results" hidden></section>
 
     <template id="result-template">
-      <article class="result-card">
-        <div class="thumb">
+      <div class="result-card premium-card">
+        <div class="result-thumb">
           <img alt="" />
+          <div class="thumb-overlay">
+            <span class="thumb-badge">Video</span>
+          </div>
         </div>
-        <div class="meta">
+        <div class="result-meta">
           <p class="meta-title"></p>
-          <p class="meta-sub">
-            <span class="uploader"></span><span class="dot">·</span><span class="duration"></span>
-          </p>
+          <div class="meta-sub">
+            <span class="uploader"></span>
+            <span class="dot">·</span>
+            <span class="duration"></span>
+          </div>
         </div>
-        <a class="dl-btn" download href="#">
-          <span class="btn-label">⬇ Download</span>
-        </a>
-      </article>
+        <div class="result-actions">
+          <button class="dl-btn btn btn-primary btn-sm">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download
+          </button>
+        </div>
+      </div>
     </template>
-    
-    <!-- Direct URL Display Section -->
-    <div id="direct-url-section" class="direct-url-section" hidden>
-      <h3>📹 Direct Download URL</h3>
-      <div class="url-container">
-        <input type="text" id="direct-url-display" readonly />
-        <button id="copy-url-btn" class="copy-btn">📋 Copy</button>
-        <button id="direct-download-btn" class="copy-btn download-btn">⬇ Download</button>
+
+    <!-- Direct URL Display -->
+    <div id="direct-url-section" class="url-section premium-card" hidden>
+      <div class="url-section-header">
+        <h3>📹 Direct Download URL</h3>
+        <span class="badge">Copiable</span>
+      </div>
+      <div class="url-display-wrapper">
+        <input type="text" id="direct-url-display" class="url-display" readonly />
+        <div class="url-actions">
+          <button id="copy-url-btn" class="btn btn-sm btn-ghost">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 5V3C5 2.46957 5.21071 1.96086 5.58579 1.58579C5.96086 1.21071 6.46957 1 7 1H13C13.5304 1 14.0391 1.21071 14.4142 1.58579C14.7893 1.96086 15 2.46957 15 3V9C15 9.53043 14.7893 10.0391 14.4142 10.4142C14.0391 10.7893 13.5304 11 13 11H11M3 15H9C9.53043 15 10.0391 14.7893 10.4142 14.4142C10.7893 14.0391 11 13.5304 11 13V7C11 6.46957 10.7893 5.96086 10.4142 5.58579C10.0391 5.21071 9.53043 5 9 5H3C2.46957 5 1.96086 5.21071 1.58579 5.58579C1.21071 5.96086 1 6.46957 1 7V13C1 13.5304 1.21071 14.0391 1.58579 14.4142C1.96086 14.7893 2.46957 15 3 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Copy
+          </button>
+          <button id="direct-download-btn" class="btn btn-sm btn-success">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download
+          </button>
+        </div>
       </div>
       
       <div class="video-preview" id="video-preview" hidden>
         <video controls id="preview-video" class="preview-video"></video>
         <div class="video-info" id="video-info">
-          <button id="video-download-btn" class="copy-btn video-download-btn">⬇ Download Video</button>
+          <button id="video-download-btn" class="btn btn-success btn-block">⬇ Download Video</button>
         </div>
       </div>
-      
-      <!-- Download progress -->
-      <div id="download-progress" class="download-progress" hidden>
-        <div class="progress-bar">
-          <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+    </div>
+
+    <!-- Bluesky Configuration Modal -->
+    <div id="bluesky-modal" class="modal-overlay" hidden>
+      <div class="modal-content premium-card">
+        <div class="modal-header">
+          <h3>🚀 Connect Bluesky</h3>
+          <button id="bluesky-modal-close" class="modal-close">✕</button>
         </div>
-        <p id="progress-text" class="progress-text">Downloading...</p>
+        <div class="modal-body">
+          <p class="modal-desc">Connect your Bluesky account to post videos directly.</p>
+          
+          <div class="form-group">
+            <label for="bluesky-identifier-modal">Bluesky Handle</label>
+            <input type="text" id="bluesky-identifier-modal" class="input-field" placeholder="username.bsky.social" />
+          </div>
+          
+          <div class="form-group">
+            <label for="bluesky-password-modal">Password <span class="label-hint">(App Password recommended)</span></label>
+            <input type="password" id="bluesky-password-modal" class="input-field" placeholder="Your Bluesky app password" />
+          </div>
+          
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="bluesky-remember-modal" checked />
+              <span>Remember my credentials (encrypted, 30 days)</span>
+            </label>
+          </div>
+          
+          <div class="form-group">
+            <button id="bluesky-save-btn" class="btn btn-primary btn-block">Save Connection</button>
+          </div>
+          
+          <div id="bluesky-modal-status" class="status-message" hidden></div>
+        </div>
+        <div class="modal-footer">
+          <small>🔐 Your credentials are encrypted and stored securely.</small>
+        </div>
       </div>
     </div>
 
     <!-- Bluesky Post Section -->
-    <div id="bluesky-section" class="bluesky-section" hidden>
-      <h3>📤 Post to Bluesky</h3>
+    <div id="bluesky-section" class="bluesky-section premium-card" hidden>
+      <div class="bluesky-header">
+        <div class="bluesky-header-left">
+          <span class="bluesky-icon">🦋</span>
+          <h3>Post to Bluesky</h3>
+        </div>
+        <span class="badge" id="bluesky-connected-badge" hidden>Connected</span>
+      </div>
       
-      <div class="bluesky-form">
+      <div class="bluesky-body">
         <div class="form-group">
-          <label for="bluesky-text">Caption:</label>
+          <label for="bluesky-text">Caption</label>
           <textarea id="bluesky-text" class="bluesky-textarea" rows="2" placeholder="What's on your mind?">Check out this video! 🎬</textarea>
           <span class="char-count" id="char-count">0/300</span>
         </div>
         
-        <div class="form-group" id="bluesky-credentials">
-          <label for="bluesky-identifier">Bluesky Handle:</label>
-          <input type="text" id="bluesky-identifier" placeholder="username.bsky.social" />
-          
-          <label for="bluesky-password">Password (App Password recommended):</label>
-          <input type="password" id="bluesky-password" placeholder="Your Bluesky app password" />
-          
-          <div class="remember-me">
-            <label>
-              <input type="checkbox" id="bluesky-remember" checked />
-              Remember my credentials (encrypted, 30 days)
-            </label>
-          </div>
-          
-          <div class="credential-hint">
-            <small>💡 Use an <a href="https://bsky.app/settings/app-passwords" target="_blank">App Password</a> for better security</small>
-          </div>
-          
-          <div id="saved-credentials-info" class="saved-credentials-info" hidden>
-            <span id="saved-credentials-text">✅ Credentials are saved and encrypted</span>
-            <button id="clear-bluesky-creds-btn" class="clear-creds-btn">Clear</button>
-          </div>
-        </div>
+        <button id="bluesky-post-btn" class="btn btn-primary btn-block">
+          <span class="btn-content">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Post to Bluesky
+          </span>
+        </button>
         
-        <div class="bluesky-actions">
-          <button id="bluesky-post-btn" class="copy-btn bluesky-btn">
-            📤 Post to Bluesky
-          </button>
-        </div>
-        
-        <div id="bluesky-status" class="bluesky-status" hidden></div>
-        <div id="bluesky-post-url" class="bluesky-post-url" hidden></div>
+        <div id="bluesky-status" class="status-message" hidden></div>
+        <div id="bluesky-post-url" class="post-url" hidden></div>
+      </div>
+    </div>
+
+    <!-- Download Progress -->
+    <div id="download-progress" class="progress-section" hidden>
+      <div class="progress-header">
+        <span class="progress-label">Downloading...</span>
+        <span class="progress-percent" id="progress-text">0%</span>
+      </div>
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
       </div>
     </div>
   </main>
 
   <footer class="foot">
-    <p>Only for content you own or have permission to save. Respect creators' rights and Instagram's terms of service.</p>
-    <p style="margin-top: 8px; font-size: 11px; color: var(--text-muted);">
-      🔐 Your cookies and credentials are stored locally and never shared.
-    </p>
+    <p>Only for content you own or have permission to save. Respect creators' rights.</p>
+    <div class="foot-extra">
+      <span>🔐 Encrypted</span>
+      <span>⚡ Premium</span>
+      <span>🛡️ Secure</span>
+    </div>
   </footer>
 
 </div>
