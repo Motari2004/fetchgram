@@ -14,7 +14,7 @@ CORS(app)
 
 IG_URL_RE = re.compile(r"^https?://(www\.)?instagram\.com/", re.IGNORECASE)
 
-# For Vercel - only /tmp is writable
+# For Vercel compatibility
 DOWNLOAD_ROOT = os.path.join('/tmp', "igdl_downloads")
 os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
 
@@ -32,28 +32,18 @@ def is_valid_instagram_url(url: str) -> bool:
 
 
 def get_cookie_file():
-    """
-    Get cookies from cookies.json in the root directory.
-    Vercel can read this file (read-only is fine).
-    """
-    # Check for cookies.json in the current directory
-    cookie_json_path = os.path.join(os.getcwd(), 'cookies.json')
-    
-    if os.path.exists(cookie_json_path):
+    """Get cookies from cookies.json or cookies.txt"""
+    # Check for cookies.json in current directory
+    if os.path.exists('cookies.json'):
         try:
-            app.logger.info(f"Found cookies.json at: {cookie_json_path}")
-            
-            # Read and parse cookies.json
-            with open(cookie_json_path, 'r') as f:
+            # Convert JSON cookies to Netscape format for yt-dlp
+            with open('cookies.json', 'r') as f:
                 cookies_data = json.load(f)
             
-            # Convert to Netscape format for yt-dlp
-            # Write to /tmp (the only writable directory on Vercel)
+            # Create a temporary Netscape format cookie file
             cookie_file = os.path.join('/tmp', 'cookies_netscape.txt')
-            
             with open(cookie_file, 'w') as f:
                 f.write("# Netscape HTTP Cookie File\n")
-                
                 for cookie in cookies_data:
                     if isinstance(cookie, dict):
                         # Handle different cookie formats
@@ -61,13 +51,7 @@ def get_cookie_file():
                         flag = 'TRUE' if cookie.get('hostOnly') != True else 'FALSE'
                         path = cookie.get('path', '/')
                         secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
-                        
-                        # Handle expiry
-                        expiry = cookie.get('expirationDate')
-                        if expiry is None:
-                            expiry = cookie.get('expiry', 0)
-                        expiry = str(int(expiry) if expiry else '0')
-                        
+                        expiry = str(cookie.get('expirationDate', cookie.get('expiry', 0)))
                         name = cookie.get('name', '')
                         value = cookie.get('value', '')
                         
@@ -77,14 +61,18 @@ def get_cookie_file():
                         
                         f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
             
-            app.logger.info(f"Converted cookies.json to Netscape format at: {cookie_file}")
             return cookie_file
-            
         except Exception as e:
-            app.logger.error(f"Failed to parse cookies.json: {e}")
-            return None
+            app.logger.warning(f"Failed to parse cookies.json: {e}")
+            # Fall through to other options
     
-    app.logger.warning("No cookies.json found")
+    # Check for cookies.txt
+    if os.path.exists('cookies.txt'):
+        return 'cookies.txt'
+    
+    if os.path.exists('/tmp/cookies.txt'):
+        return '/tmp/cookies.txt'
+    
     return None
 
 
@@ -106,16 +94,15 @@ def base_ydl_opts(extra=None):
     
     # Try to use cookies.json
     cookie_file = get_cookie_file()
-    if cookie_file and os.path.exists(cookie_file):
+    if cookie_file:
         opts["cookiefile"] = cookie_file
         app.logger.info(f"Using cookies from: {cookie_file}")
     else:
         # Fallback: try browser cookies (works locally)
         try:
             opts["cookiesfrombrowser"] = ("chrome",)
-            app.logger.info("Using browser cookies")
-        except Exception as e:
-            app.logger.warning(f"No cookies available: {e}")
+        except:
+            pass  # No cookies available
     
     if extra:
         opts.update(extra)
@@ -473,7 +460,7 @@ def api_status():
 def test_cookies():
     """Test if cookies are working."""
     cookie_file = get_cookie_file()
-    if cookie_file and os.path.exists(cookie_file):
+    if cookie_file:
         return jsonify({
             "status": "success",
             "cookie_file": cookie_file,
