@@ -31,21 +31,45 @@ def is_valid_instagram_url(url: str) -> bool:
     return bool(url) and bool(IG_URL_RE.match(url.strip()))
 
 
-def get_cookies_from_env():
-    """Get cookies from environment variable or file"""
-    cookies = os.environ.get('INSTAGRAM_COOKIES')
-    if cookies:
-        # Save cookies to a temporary file
-        cookie_file = os.path.join('/tmp', 'cookies.txt')
-        with open(cookie_file, 'w') as f:
-            f.write(cookies)
-        return cookie_file
+def get_cookie_file():
+    """Get cookies from cookies.json or cookies.txt"""
+    # Check for cookies.json in current directory
+    if os.path.exists('cookies.json'):
+        try:
+            # Convert JSON cookies to Netscape format for yt-dlp
+            with open('cookies.json', 'r') as f:
+                cookies_data = json.load(f)
+            
+            # Create a temporary Netscape format cookie file
+            cookie_file = os.path.join('/tmp', 'cookies_netscape.txt')
+            with open(cookie_file, 'w') as f:
+                f.write("# Netscape HTTP Cookie File\n")
+                for cookie in cookies_data:
+                    if isinstance(cookie, dict):
+                        # Handle different cookie formats
+                        domain = cookie.get('domain', '')
+                        flag = 'TRUE' if cookie.get('hostOnly') != True else 'FALSE'
+                        path = cookie.get('path', '/')
+                        secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                        expiry = str(cookie.get('expirationDate', cookie.get('expiry', 0)))
+                        name = cookie.get('name', '')
+                        value = cookie.get('value', '')
+                        
+                        # Skip if missing required fields
+                        if not name or not domain:
+                            continue
+                        
+                        f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+            
+            return cookie_file
+        except Exception as e:
+            app.logger.warning(f"Failed to parse cookies.json: {e}")
+            # Fall through to other options
     
-    # Check if cookies file exists in project
+    # Check for cookies.txt
     if os.path.exists('cookies.txt'):
         return 'cookies.txt'
     
-    # Check if cookies file exists in /tmp
     if os.path.exists('/tmp/cookies.txt'):
         return '/tmp/cookies.txt'
     
@@ -68,21 +92,17 @@ def base_ydl_opts(extra=None):
         },
     }
     
-    # Try to use cookies from environment
-    cookie_file = get_cookies_from_env()
+    # Try to use cookies.json
+    cookie_file = get_cookie_file()
     if cookie_file:
         opts["cookiefile"] = cookie_file
+        app.logger.info(f"Using cookies from: {cookie_file}")
     else:
         # Fallback: try browser cookies (works locally)
         try:
-            # Try Chrome first
             opts["cookiesfrombrowser"] = ("chrome",)
         except:
-            # Fallback to Firefox if Chrome not available
-            try:
-                opts["cookiesfrombrowser"] = ("firefox",)
-            except:
-                pass  # No cookies available
+            pass  # No cookies available
     
     if extra:
         opts.update(extra)
@@ -173,8 +193,8 @@ def clean_error(msg: str) -> str:
         return "The video is unavailable. It may have been removed or is restricted."
     if "rate limited" in msg.lower():
         return "Too many requests. Please wait a moment and try again."
-    if "cookies" in msg.lower():
-        return "Authentication required. Please set INSTAGRAM_COOKIES environment variable."
+    if "cookies" in msg.lower() or "cookie" in msg.lower():
+        return "Authentication required. Please check your cookies.json file."
     if len(msg) > 160:
         return "Couldn't process that link. Double-check it's a public post and try again."
     return msg
@@ -426,7 +446,7 @@ def api_batch_download():
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     """Get service status and download history."""
-    cookie_status = "configured" if get_cookies_from_env() else "not configured"
+    cookie_status = "configured" if get_cookie_file() else "not configured"
     return jsonify({
         "status": "running",
         "version": "1.0.0",
@@ -434,6 +454,23 @@ def api_status():
         "download_history_count": len(download_history),
         "recent_downloads": download_history[-10:]
     })
+
+
+@app.route("/api/test-cookies", methods=["GET"])
+def test_cookies():
+    """Test if cookies are working."""
+    cookie_file = get_cookie_file()
+    if cookie_file:
+        return jsonify({
+            "status": "success",
+            "cookie_file": cookie_file,
+            "file_exists": os.path.exists(cookie_file)
+        })
+    else:
+        return jsonify({
+            "status": "error",
+            "message": "No cookie file found"
+        }), 404
 
 
 if __name__ == "__main__":
