@@ -12,6 +12,7 @@
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
   --success: #2E7D32;
   --error: #C62828;
+  --instagram: #E1306C;
 }
 
 * { box-sizing: border-box; }
@@ -97,63 +98,97 @@ body {
   margin: 0 0 36px;
 }
 
-/* Session Status */
-.session-section {
-  margin-bottom: 24px;
-  padding: 12px 16px;
+/* OAuth Section */
+.oauth-section {
+  margin: 24px 0;
+  padding: 16px 20px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-}
-
-.session-status-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
 }
 
-.session-indicator {
-  font-size: 18px;
-}
-
-.session-indicator.online {
-  color: var(--success);
-}
-
-.session-indicator.offline {
-  color: var(--error);
-}
-
-.session-text {
-  font-size: 14px;
-  color: var(--text-muted);
+.oauth-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
 }
 
-.session-btn {
-  padding: 6px 14px;
-  background: var(--accent);
-  color: #fff;
+.status-indicator {
+  font-size: 18px;
+}
+
+.status-indicator.online {
+  color: var(--success);
+}
+
+.status-indicator.offline {
+  color: var(--error);
+}
+
+.status-text {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.oauth-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.oauth-btn {
+  padding: 10px 20px;
   border: none;
   border-radius: var(--radius);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  transition: background 0.15s ease;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.15s ease;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   white-space: nowrap;
 }
 
-.session-btn:hover {
-  background: var(--accent-ink);
+.instagram-btn {
+  background: var(--instagram);
+  color: white;
 }
 
-.session-btn.logout-btn {
+.instagram-btn:hover {
+  background: #C13584;
+  color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(225, 48, 108, 0.3);
+}
+
+.logout-btn {
   background: var(--error);
+  color: white;
 }
 
-.session-btn.logout-btn:hover {
+.logout-btn:hover {
   background: #B71C1C;
+  color: white;
+}
+
+.user-info {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.user-info strong {
+  color: var(--text);
 }
 
 /* URL form */
@@ -495,11 +530,14 @@ body {
     justify-content: center;
   }
   
-  .session-status-bar {
+  .oauth-section {
     flex-direction: column;
     align-items: stretch;
   }
-  .session-btn {
+  .oauth-actions {
+    flex-direction: column;
+  }
+  .oauth-btn {
     width: 100%;
     justify-content: center;
   }

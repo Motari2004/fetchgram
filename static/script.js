@@ -5,11 +5,12 @@ const errorMsg = document.getElementById("error-msg");
 const results = document.getElementById("results");
 const template = document.getElementById("result-template");
 
-// Session elements
-const sessionIndicator = document.getElementById("session-indicator");
-const sessionText = document.getElementById("session-text");
-const detectSessionBtn = document.getElementById("detect-session-btn");
-const logoutSessionBtn = document.getElementById("logout-session-btn");
+// OAuth elements
+const oauthIndicator = document.getElementById("oauth-indicator");
+const oauthStatusText = document.getElementById("oauth-status-text");
+const oauthLoginBtn = document.getElementById("oauth-login-btn");
+const oauthLogoutBtn = document.getElementById("oauth-logout-btn");
+const oauthUserInfo = document.getElementById("oauth-user-info");
 
 // Direct URL elements
 const directUrlSection = document.getElementById("direct-url-section");
@@ -50,72 +51,49 @@ function formatDuration(seconds) {
   return `${m}:${String(rem).padStart(2, "0")}`;
 }
 
-function updateSessionStatus(hasSession, username) {
-  if (hasSession) {
-    sessionIndicator.textContent = '🟢';
-    sessionIndicator.className = 'session-indicator online';
-    sessionText.textContent = `Logged in as @${username || 'Instagram User'}`;
-    detectSessionBtn.hidden = true;
-    logoutSessionBtn.hidden = false;
+function updateOAuthStatus(loggedIn, username) {
+  if (loggedIn) {
+    oauthIndicator.textContent = '🟢';
+    oauthIndicator.className = 'status-indicator online';
+    oauthStatusText.textContent = `Logged in as @${username || 'Instagram User'}`;
+    oauthLoginBtn.hidden = true;
+    oauthLogoutBtn.hidden = false;
+    oauthUserInfo.hidden = false;
+    oauthUserInfo.innerHTML = `<strong>👤 ${username || 'Instagram User'}</strong> · Session active`;
   } else {
-    sessionIndicator.textContent = '⚪';
-    sessionIndicator.className = 'session-indicator offline';
-    sessionText.textContent = 'Not logged in to Instagram';
-    detectSessionBtn.hidden = false;
-    logoutSessionBtn.hidden = true;
+    oauthIndicator.textContent = '⚪';
+    oauthIndicator.className = 'status-indicator offline';
+    oauthStatusText.textContent = 'Not logged in';
+    oauthLoginBtn.hidden = false;
+    oauthLogoutBtn.hidden = true;
+    oauthUserInfo.hidden = true;
   }
 }
 
-async function checkSessionStatus() {
+async function checkOAuthStatus() {
   try {
-    const response = await fetch('/api/session/status');
+    const response = await fetch('/api/oauth/status');
     const data = await response.json();
-    updateSessionStatus(data.has_session, data.username);
+    updateOAuthStatus(data.logged_in, data.username);
   } catch (error) {
-    console.error('Failed to check session:', error);
-    updateSessionStatus(false);
+    console.error('Failed to check OAuth status:', error);
+    updateOAuthStatus(false);
   }
 }
 
-// Detect session from browser
-detectSessionBtn.addEventListener('click', async function() {
-  this.textContent = '⏳ Detecting...';
-  this.disabled = true;
-  
-  try {
-    const response = await fetch('/api/session/use_browser', {
-      method: 'POST'
-    });
-    const data = await response.json();
-    
-    if (data.status === 'success') {
-      updateSessionStatus(true, data.username);
-      showError(`✅ ${data.message}`);
-      setTimeout(() => clearError(), 3000);
-    } else {
-      showError(`❌ ${data.error}`);
-    }
-  } catch (error) {
-    showError(`❌ Failed to detect session: ${error.message}`);
-  } finally {
-    this.textContent = '🔍 Detect Account';
-    this.disabled = false;
-  }
-});
-
-// Logout session
-logoutSessionBtn.addEventListener('click', async function() {
+// OAuth Logout
+oauthLogoutBtn.addEventListener('click', async function() {
   this.textContent = '⏳ Logging out...';
   this.disabled = true;
   
   try {
-    const response = await fetch('/api/session/logout', {
+    const response = await fetch('/api/oauth/logout', {
       method: 'POST'
     });
     const data = await response.json();
     
     if (data.status === 'success') {
-      updateSessionStatus(false);
+      updateOAuthStatus(false);
       showError('✅ Logged out successfully');
       setTimeout(() => clearError(), 3000);
     }
@@ -374,5 +352,5 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-// Check session status on page load
-checkSessionStatus();
+// Check OAuth status on page load
+checkOAuthStatus();
