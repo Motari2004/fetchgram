@@ -124,8 +124,21 @@
           
           <label for="bluesky-password">Password (App Password recommended):</label>
           <input type="password" id="bluesky-password" placeholder="Your Bluesky app password" />
+          
+          <div class="remember-me">
+            <label>
+              <input type="checkbox" id="bluesky-remember" checked />
+              Remember my credentials (encrypted, 30 days)
+            </label>
+          </div>
+          
           <div class="credential-hint">
             <small>💡 Use an <a href="https://bsky.app/settings/app-passwords" target="_blank">App Password</a> for better security</small>
+          </div>
+          
+          <div id="saved-credentials-info" class="saved-credentials-info" hidden>
+            <span id="saved-credentials-text">✅ Credentials are saved and encrypted</span>
+            <button id="clear-bluesky-creds-btn" class="clear-creds-btn">Clear</button>
           </div>
         </div>
         
@@ -144,7 +157,7 @@
   <footer class="foot">
     <p>Only for content you own or have permission to save. Respect creators' rights and Instagram's terms of service.</p>
     <p style="margin-top: 8px; font-size: 11px; color: var(--text-muted);">
-      🔐 Your cookies are stored locally and never shared.
+      🔐 Your cookies and credentials are stored locally and never shared.
     </p>
   </footer>
 

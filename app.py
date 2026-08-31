@@ -5,14 +5,21 @@ import shutil
 import tempfile
 import json
 import time
-from datetime import datetime
+import base64
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_file, render_template, after_this_request, session
 from flask_cors import CORS
 import yt_dlp
 import requests
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 CORS(app)
 
 IG_URL_RE = re.compile(r"^https?://(www\.)?instagram\.com/", re.IGNORECASE)
@@ -240,6 +247,76 @@ def clean_error(msg: str) -> str:
 
 # ============== BLUESKY AT PROTOCOL INTEGRATION ==============
 
+def get_encryption_key():
+    """Generate or retrieve encryption key for credentials."""
+    key_file = os.path.join('/tmp', 'encryption_key.key')
+    
+    # Try to get from environment first (for Vercel)
+    env_key = os.environ.get('ENCRYPTION_KEY')
+    if env_key:
+        return base64.urlsafe_b64decode(env_key)
+    
+    # Check if key exists in /tmp
+    if os.path.exists(key_file):
+        with open(key_file, 'rb') as f:
+            return f.read()
+    
+    # Generate new key
+    salt = b'fetchgram_salt_2024'
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(app.secret_key.encode()))
+    
+    # Save key
+    with open(key_file, 'wb') as f:
+        f.write(key)
+    
+    return key
+
+
+def encrypt_credentials(identifier, password):
+    """Encrypt Bluesky credentials."""
+    try:
+        key = get_encryption_key()
+        f = Fernet(key)
+        
+        data = json.dumps({
+            'identifier': identifier,
+            'password': password,
+            'timestamp': time.time()
+        }).encode()
+        
+        encrypted = f.encrypt(data)
+        return base64.urlsafe_b64encode(encrypted).decode()
+    except Exception as e:
+        app.logger.error(f"Encryption failed: {e}")
+        return None
+
+
+def decrypt_credentials(encrypted_data):
+    """Decrypt Bluesky credentials."""
+    try:
+        key = get_encryption_key()
+        f = Fernet(key)
+        
+        decoded = base64.urlsafe_b64decode(encrypted_data)
+        decrypted = f.decrypt(decoded)
+        data = json.loads(decrypted)
+        
+        # Check if credentials are still valid (30 days)
+        if time.time() - data.get('timestamp', 0) > 30 * 24 * 60 * 60:
+            return None
+        
+        return data['identifier'], data['password']
+    except Exception as e:
+        app.logger.error(f"Decryption failed: {e}")
+        return None
+
+
 def create_bluesky_session(identifier, password):
     """Create a Bluesky session using AT Protocol"""
     try:
@@ -253,6 +330,7 @@ def create_bluesky_session(identifier, password):
         return response.json()
     except requests.exceptions.RequestException as e:
         raise Exception(f"Failed to authenticate with Bluesky: {str(e)}")
+
 
 def upload_bluesky_blob(session, file_data, mime_type):
     """Upload a blob (image or video) to Bluesky"""
@@ -271,12 +349,13 @@ def upload_bluesky_blob(session, file_data, mime_type):
     except requests.exceptions.RequestException as e:
         raise Exception(f"Failed to upload blob to Bluesky: {str(e)}")
 
+
 def upload_video_to_bluesky(session, video_url, text, thumbnail_url=None):
     """Upload a video to Bluesky using the direct URL"""
     try:
         # Download the video
         app.logger.info(f"Downloading video from: {video_url}")
-        video_response = requests.get(video_url, stream=True, timeout=60)
+        video_response = requests.get(video_url, stream=True, timeout=120)
         video_response.raise_for_status()
         
         content_type = video_response.headers.get("content-type", "video/mp4")
@@ -322,12 +401,26 @@ def upload_video_to_bluesky(session, video_url, text, thumbnail_url=None):
     except Exception as e:
         raise Exception(f"Failed to upload video to Bluesky: {str(e)}")
 
+
 def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, password=None):
     """Main function to post a video to Bluesky"""
     try:
-        # Use provided credentials or fallback to environment variables
-        identifier = identifier or os.environ.get("BLUESKY_IDENTIFIER")
-        password = password or os.environ.get("BLUESKY_PASSWORD")
+        # Use provided credentials or fallback to stored credentials
+        if not identifier or not password:
+            # Try to get from session
+            identifier = session.get('bluesky_identifier')
+            password = session.get('bluesky_password')
+            
+            # If not in session, try encrypted storage
+            if not identifier or not password:
+                encrypted = session.get('bluesky_encrypted')
+                if encrypted:
+                    decrypted = decrypt_credentials(encrypted)
+                    if decrypted:
+                        identifier, password = decrypted
+                        # Store in session for quick access
+                        session['bluesky_identifier'] = identifier
+                        session['bluesky_password'] = password
         
         if not identifier or not password:
             raise Exception("Bluesky credentials not configured. Please enter your Bluesky handle and password.")
@@ -732,6 +825,94 @@ def api_batch_download():
     })
 
 
+@app.route("/api/bluesky/save_credentials", methods=["POST"])
+def save_bluesky_credentials():
+    """Save Bluesky credentials securely."""
+    data = request.get_json(silent=True) or {}
+    identifier = data.get("identifier", "").strip()
+    password = data.get("password", "").strip()
+    remember = data.get("remember", True)
+    
+    if not identifier or not password:
+        return jsonify({"error": "Missing identifier or password"}), 400
+    
+    # Test the credentials
+    try:
+        session_data = create_bluesky_session(identifier, password)
+        
+        # Store credentials
+        if remember:
+            # Encrypt and store in session
+            encrypted = encrypt_credentials(identifier, password)
+            if encrypted:
+                session['bluesky_encrypted'] = encrypted
+                session['bluesky_identifier'] = identifier
+                session['bluesky_password'] = password
+                session['bluesky_handle'] = session_data.get('handle', identifier)
+                session['bluesky_did'] = session_data.get('did')
+                session['bluesky_saved'] = True
+        
+        return jsonify({
+            "status": "success",
+            "message": "Credentials saved successfully!",
+            "handle": session_data.get('handle'),
+            "did": session_data.get('did'),
+            "remembered": remember
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 401
+
+
+@app.route("/api/bluesky/credentials_status", methods=["GET"])
+def bluesky_credentials_status():
+    """Check if Bluesky credentials are saved."""
+    encrypted = session.get('bluesky_encrypted')
+    identifier = session.get('bluesky_identifier')
+    
+    if encrypted:
+        # Verify the encrypted credentials still work
+        decrypted = decrypt_credentials(encrypted)
+        if decrypted:
+            return jsonify({
+                "status": "success",
+                "has_credentials": True,
+                "identifier": identifier or decrypted[0],
+                "handle": session.get('bluesky_handle', identifier or decrypted[0]),
+                "message": "Credentials are saved and valid"
+            })
+    
+    if identifier and session.get('bluesky_password'):
+        return jsonify({
+            "status": "success",
+            "has_credentials": True,
+            "identifier": identifier,
+            "handle": session.get('bluesky_handle', identifier),
+            "message": "Credentials are saved"
+        })
+    
+    return jsonify({
+        "status": "success",
+        "has_credentials": False,
+        "message": "No saved credentials found"
+    })
+
+
+@app.route("/api/bluesky/clear_credentials", methods=["POST"])
+def clear_bluesky_credentials():
+    """Clear saved Bluesky credentials."""
+    session.pop('bluesky_encrypted', None)
+    session.pop('bluesky_identifier', None)
+    session.pop('bluesky_password', None)
+    session.pop('bluesky_handle', None)
+    session.pop('bluesky_did', None)
+    session.pop('bluesky_saved', None)
+    
+    return jsonify({
+        "status": "success",
+        "message": "Credentials cleared successfully"
+    })
+
+
 @app.route("/api/bluesky/post", methods=["POST"])
 def bluesky_post():
     """Post a video to Bluesky."""
@@ -741,6 +922,7 @@ def bluesky_post():
     text = data.get("text", "Check out this video! 🎬").strip()
     identifier = data.get("identifier", "").strip()
     password = data.get("password", "").strip()
+    remember = data.get("remember", True)
     
     # If no URL provided, check session
     if not url and session.get('current_video_url'):
@@ -751,6 +933,23 @@ def bluesky_post():
         return jsonify({"error": "No video URL provided. Please fetch a video first."}), 400
     
     thumbnail_url = session.get('current_video_thumbnail')
+    
+    # If new credentials provided, save them
+    if identifier and password:
+        try:
+            # Test credentials
+            test_session = create_bluesky_session(identifier, password)
+            if remember:
+                encrypted = encrypt_credentials(identifier, password)
+                if encrypted:
+                    session['bluesky_encrypted'] = encrypted
+                    session['bluesky_identifier'] = identifier
+                    session['bluesky_password'] = password
+                    session['bluesky_handle'] = test_session.get('handle', identifier)
+                    session['bluesky_did'] = test_session.get('did')
+                    session['bluesky_saved'] = True
+        except Exception as e:
+            return jsonify({"error": f"Invalid credentials: {str(e)}"}), 401
     
     try:
         result = post_to_bluesky(
@@ -768,7 +967,8 @@ def bluesky_post():
                 "post_cid": result.get("post_cid"),
                 "post_id": result.get("post_id"),
                 "message": result.get("message"),
-                "video_url": url
+                "video_url": url,
+                "saved": bool(session.get('bluesky_saved'))
             })
         else:
             return jsonify({
@@ -806,7 +1006,7 @@ def bluesky_auth():
 @app.route("/api/bluesky/status", methods=["GET"])
 def bluesky_status():
     """Check if Bluesky is configured."""
-    has_credentials = bool(
+    has_credentials = bool(session.get('bluesky_encrypted')) or bool(
         os.environ.get("BLUESKY_IDENTIFIER") and 
         os.environ.get("BLUESKY_PASSWORD")
     )

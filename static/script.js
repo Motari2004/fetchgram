@@ -33,9 +33,13 @@ const blueskyText = document.getElementById('bluesky-text');
 const charCount = document.getElementById('char-count');
 const blueskyIdentifier = document.getElementById('bluesky-identifier');
 const blueskyPassword = document.getElementById('bluesky-password');
+const blueskyRemember = document.getElementById('bluesky-remember');
 const blueskyPostBtn = document.getElementById('bluesky-post-btn');
 const blueskyStatus = document.getElementById('bluesky-status');
 const blueskyPostUrl = document.getElementById('bluesky-post-url');
+const savedCredentialsInfo = document.getElementById('saved-credentials-info');
+const savedCredentialsText = document.getElementById('saved-credentials-text');
+const clearBlueskyCredsBtn = document.getElementById('clear-bluesky-creds-btn');
 
 let currentVideoUrl = null;
 let currentVideoItem = null;
@@ -245,6 +249,71 @@ function showBlueskyStatus(message, type, postUrl) {
   }
 }
 
+// Check for saved Bluesky credentials on load
+async function checkBlueskyCredentials() {
+  try {
+    const response = await fetch('/api/bluesky/credentials_status');
+    const data = await response.json();
+    
+    if (data.has_credentials) {
+      // Fill in the identifier field
+      if (blueskyIdentifier) {
+        blueskyIdentifier.value = data.identifier;
+        blueskyIdentifier.disabled = true;
+      }
+      if (blueskyPassword) {
+        blueskyPassword.disabled = true;
+        blueskyPassword.placeholder = '•••••••• (saved)';
+      }
+      if (blueskyRemember) {
+        blueskyRemember.checked = true;
+      }
+      
+      // Show saved credentials info
+      if (savedCredentialsInfo) {
+        savedCredentialsInfo.hidden = false;
+        if (savedCredentialsText) {
+          savedCredentialsText.textContent = `✅ Credentials saved for @${data.handle || data.identifier}`;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to check Bluesky credentials:', error);
+  }
+}
+
+// Clear saved Bluesky credentials
+async function clearBlueskyCredentials() {
+  try {
+    const response = await fetch('/api/bluesky/clear_credentials', {
+      method: 'POST'
+    });
+    const data = await response.json();
+    
+    if (response.ok) {
+      if (savedCredentialsInfo) {
+        savedCredentialsInfo.hidden = true;
+      }
+      if (blueskyIdentifier) {
+        blueskyIdentifier.disabled = false;
+        blueskyIdentifier.value = '';
+      }
+      if (blueskyPassword) {
+        blueskyPassword.disabled = false;
+        blueskyPassword.value = '';
+        blueskyPassword.placeholder = 'Your Bluesky app password';
+      }
+      if (blueskyRemember) {
+        blueskyRemember.checked = true;
+      }
+      showBlueskyStatus('✅ Credentials cleared', 'success');
+    }
+  } catch (error) {
+    console.error('Failed to clear credentials:', error);
+    showBlueskyStatus('❌ Failed to clear credentials', 'error');
+  }
+}
+
 // Bluesky Post
 blueskyPostBtn.addEventListener('click', async function() {
   const text = blueskyText.value.trim() || 'Check out this video! 🎬';
@@ -259,13 +328,36 @@ blueskyPostBtn.addEventListener('click', async function() {
     return;
   }
   
-  const identifier = blueskyIdentifier.value.trim();
-  const password = blueskyPassword.value.trim();
+  let identifier = blueskyIdentifier.value.trim();
+  let password = blueskyPassword.value.trim();
   
-  if (!identifier || !password) {
-    showBlueskyStatus('Please enter your Bluesky handle and password.', 'error');
+  // If credentials are disabled but we have saved ones, use those
+  if (blueskyIdentifier.disabled && !identifier) {
+    // Get from saved
+    try {
+      const statusResponse = await fetch('/api/bluesky/credentials_status');
+      const statusData = await statusResponse.json();
+      if (statusData.has_credentials) {
+        identifier = statusData.identifier;
+        // Password will be retrieved server-side
+      }
+    } catch (e) {
+      showBlueskyStatus('Error retrieving saved credentials', 'error');
+      return;
+    }
+  }
+  
+  if (!identifier) {
+    showBlueskyStatus('Please enter your Bluesky handle.', 'error');
     return;
   }
+  
+  if (!password && !blueskyPassword.disabled) {
+    showBlueskyStatus('Please enter your Bluesky password.', 'error');
+    return;
+  }
+  
+  const remember = blueskyRemember ? blueskyRemember.checked : true;
   
   this.textContent = '⏳ Posting...';
   this.disabled = true;
@@ -279,7 +371,8 @@ blueskyPostBtn.addEventListener('click', async function() {
         url: currentVideoUrl,
         text: text,
         identifier: identifier,
-        password: password
+        password: password || undefined,
+        remember: remember
       })
     });
     
@@ -292,6 +385,28 @@ blueskyPostBtn.addEventListener('click', async function() {
         'success',
         postUrl
       );
+      
+      // If credentials were saved, update the UI
+      if (data.saved) {
+        if (savedCredentialsInfo) {
+          savedCredentialsInfo.hidden = false;
+          if (savedCredentialsText) {
+            savedCredentialsText.textContent = `✅ Credentials saved for @${identifier}`;
+          }
+        }
+        if (blueskyIdentifier) {
+          blueskyIdentifier.disabled = true;
+          blueskyIdentifier.value = identifier;
+        }
+        if (blueskyPassword) {
+          blueskyPassword.disabled = true;
+          blueskyPassword.value = '';
+          blueskyPassword.placeholder = '•••••••• (saved)';
+        }
+        if (blueskyRemember) {
+          blueskyRemember.checked = true;
+        }
+      }
     } else {
       showBlueskyStatus(`❌ Error: ${data.error || 'Unknown error'}`, 'error');
     }
@@ -302,6 +417,11 @@ blueskyPostBtn.addEventListener('click', async function() {
     this.disabled = false;
   }
 });
+
+// Clear credentials button handler
+if (clearBlueskyCredsBtn) {
+  clearBlueskyCredsBtn.addEventListener('click', clearBlueskyCredentials);
+}
 
 function downloadVideo(url, filename) {
   if (!url) {
@@ -556,3 +676,6 @@ form.addEventListener("submit", async (e) => {
 
 // Check cookie status on page load
 checkCookieStatus();
+
+// Check Bluesky credentials on page load
+checkBlueskyCredentials();

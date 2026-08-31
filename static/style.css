@@ -581,6 +581,61 @@ body {
   border-color: var(--accent);
 }
 
+.remember-me {
+  margin: 6px 0;
+  display: flex;
+  align-items: center;
+}
+
+.remember-me label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.remember-me input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.saved-credentials-info {
+  padding: 8px 12px;
+  background: #E8F5E9;
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--success);
+  border: 1px solid #A5D6A7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.saved-credentials-info span {
+  flex: 1;
+}
+
+.clear-creds-btn {
+  padding: 4px 12px;
+  background: var(--error);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+
+.clear-creds-btn:hover {
+  background: #B71C1C;
+}
+
 .credential-hint {
   font-size: 12px;
   color: var(--text-muted);
@@ -713,5 +768,10 @@ body {
   }
   .bluesky-btn {
     width: 100%;
+  }
+  
+  .saved-credentials-info {
+    flex-direction: column;
+    text-align: center;
   }
 }
