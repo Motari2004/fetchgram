@@ -5,7 +5,7 @@ const errorMsg = document.getElementById("error-msg");
 const results = document.getElementById("results");
 const template = document.getElementById("result-template");
 
-// Direct URL elements
+// New elements for direct URL display
 const directUrlSection = document.getElementById("direct-url-section");
 const directUrlDisplay = document.getElementById("direct-url-display");
 const copyBtn = document.getElementById("copy-url-btn");
@@ -16,16 +16,6 @@ const videoInfo = document.getElementById("video-info");
 const downloadProgress = document.getElementById("download-progress");
 const progressFill = document.getElementById("progress-fill");
 const progressText = document.getElementById("progress-text");
-
-// Bluesky elements
-const blueskySection = document.getElementById("bluesky-section");
-const blueskyText = document.getElementById("bluesky-text");
-const charCount = document.getElementById("char-count");
-const blueskyPostBtn = document.getElementById("bluesky-post-btn");
-const blueskyStatus = document.getElementById("bluesky-status");
-const blueskyIdentifier = document.getElementById("bluesky-identifier");
-const blueskyPassword = document.getElementById("bluesky-password");
-const blueskyCredentials = document.getElementById("bluesky-credentials");
 
 let currentVideoUrl = null;
 let currentVideoItem = null;
@@ -60,14 +50,17 @@ function downloadVideo(url, filename) {
     return;
   }
   
+  // Show progress
   downloadProgress.hidden = false;
   progressFill.style.width = '0%';
   progressText.textContent = 'Starting download...';
   
+  // Sanitize filename
   const safeFilename = (filename || 'instagram_video')
     .replace(/[^a-zA-Z0-9]/g, '_')
     .substring(0, 50) + '.mp4';
   
+  // Method: Using fetch with progress
   fetch(url)
     .then(response => {
       if (!response.ok) throw new Error('Network response was not ok');
@@ -78,6 +71,7 @@ function downloadVideo(url, filename) {
       
       progressText.textContent = 'Downloading...';
       
+      // Create a readable stream to track progress
       const reader = response.body.getReader();
       const stream = new ReadableStream({
         start(controller) {
@@ -125,6 +119,8 @@ function downloadVideo(url, filename) {
     .catch(error => {
       console.error('Download failed:', error);
       progressText.textContent = 'Download failed, opening in new tab...';
+      
+      // Fallback: open in new tab
       setTimeout(() => {
         window.open(url, '_blank');
         downloadProgress.hidden = true;
@@ -138,7 +134,6 @@ function renderResults(items, sourceUrl) {
   directUrlSection.hidden = true;
   videoPreview.hidden = true;
   downloadProgress.hidden = true;
-  blueskySection.hidden = true;
 
   items.forEach((item) => {
     const node = template.content.cloneNode(true);
@@ -165,11 +160,15 @@ function renderResults(items, sourceUrl) {
 
     const dlBtn = node.querySelector(".dl-btn");
     
+    // Download button click handler - ONLY downloads when clicked
     dlBtn.addEventListener('click', function(e) {
       e.preventDefault();
+      
+      // If we have a direct URL, download it
       if (currentVideoUrl) {
         downloadVideo(currentVideoUrl, item.title || 'instagram_video');
       } else {
+        // Fallback: use the API
         const params = new URLSearchParams({ url: sourceUrl, id: item.id || "" });
         window.open(`/api/download?${params.toString()}`, '_blank');
       }
@@ -186,6 +185,7 @@ function showDirectUrl(url, item) {
   directUrlSection.hidden = false;
   directUrlDisplay.value = url;
   
+  // Show video preview
   if (url && (url.endsWith('.mp4') || url.includes('video'))) {
     videoPreview.hidden = false;
     previewVideo.src = url;
@@ -196,49 +196,17 @@ function showDirectUrl(url, item) {
     if (item.title) infoHtml += `<p><strong>Title:</strong> ${item.title}</p>`;
     if (item.duration) infoHtml += `<p><strong>Duration:</strong> ${formatDuration(item.duration)}</p>`;
     
+    // Add download button below video info
+    const existingContent = videoInfo.innerHTML;
     videoInfo.innerHTML = infoHtml + `<button id="video-download-btn" class="copy-btn video-download-btn">⬇ Download Video</button>`;
     
+    // Re-attach video download button event
     document.getElementById('video-download-btn').addEventListener('click', function() {
       if (currentVideoUrl) {
         downloadVideo(currentVideoUrl, item?.title || 'instagram_video');
       }
     });
   }
-  
-  // Show Bluesky section
-  showBlueskySection();
-}
-
-function showBlueskySection() {
-  blueskySection.hidden = false;
-  
-  fetch('/api/bluesky/status')
-    .then(res => res.json())
-    .then(data => {
-      if (!data.configured) {
-        blueskyCredentials.hidden = false;
-      } else {
-        blueskyCredentials.hidden = true;
-      }
-    })
-    .catch(() => {
-      blueskyCredentials.hidden = false;
-    });
-}
-
-function showBlueskyStatus(message, type) {
-  blueskyStatus.hidden = false;
-  blueskyStatus.textContent = message;
-  blueskyStatus.className = 'bluesky-status' + (type ? ' ' + type : '');
-}
-
-// Character counter for Bluesky
-if (blueskyText) {
-  blueskyText.addEventListener('input', function() {
-    const count = this.value.length;
-    charCount.textContent = `${count}/300`;
-    charCount.style.color = count > 300 ? 'red' : 'var(--text-muted)';
-  });
 }
 
 // Copy URL handler
@@ -264,75 +232,18 @@ copyBtn.addEventListener('click', async function() {
   }
 });
 
-// Direct Download button
+// Direct Download button handler
 directDownloadBtn.addEventListener('click', function() {
   if (currentVideoUrl) {
     downloadVideo(currentVideoUrl, currentVideoItem?.title || 'instagram_video');
   }
 });
 
+// Also allow direct download via right-click on the URL display
 directUrlDisplay.addEventListener('click', function() {
   this.select();
 });
 
-// Bluesky Post
-blueskyPostBtn.addEventListener('click', async function() {
-  const text = blueskyText.value.trim() || 'Check out this video! 🎬';
-  
-  if (text.length > 300) {
-    showBlueskyStatus('Caption is too long (max 300 characters)', 'error');
-    return;
-  }
-  
-  if (!currentVideoUrl) {
-    showBlueskyStatus('No video to post. Please fetch a video first.', 'error');
-    return;
-  }
-  
-  this.textContent = '⏳ Posting...';
-  this.disabled = true;
-  showBlueskyStatus('', '');
-  
-  try {
-    const identifier = blueskyIdentifier.value.trim();
-    const password = blueskyPassword.value.trim();
-    
-    const body = {
-      url: currentVideoUrl,
-      text: text
-    };
-    
-    if (identifier && password) {
-      body.identifier = identifier;
-      body.password = password;
-    }
-    
-    const response = await fetch('/api/bluesky/post', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    
-    const data = await response.json();
-    
-    if (response.ok) {
-      const postUrl = `https://bsky.app/profile/${data.post_uri?.split('/').slice(0, -1).join('/')}`;
-      showBlueskyStatus(
-        `✅ Posted successfully! View at: ${postUrl || 'Bluesky'}`,
-        'success'
-      );
-    } else {
-      showBlueskyStatus(`❌ Error: ${data.error || 'Unknown error'}`, 'error');
-    }
-  } catch (error) {
-    showBlueskyStatus(`❌ Error: ${error.message}`, 'error');
-  } finally {
-    this.textContent = '📤 Post to Bluesky';
-    this.disabled = false;
-  }
-});
-
-// Main form submission
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   clearError();
@@ -340,7 +251,6 @@ form.addEventListener("submit", async (e) => {
   directUrlSection.hidden = true;
   videoPreview.hidden = true;
   downloadProgress.hidden = true;
-  blueskySection.hidden = true;
   currentVideoUrl = null;
   currentVideoItem = null;
 
@@ -349,6 +259,7 @@ form.addEventListener("submit", async (e) => {
 
   setLoading(true);
   try {
+    // Try the new API endpoint first for direct URL
     const res = await fetch("/api/commands/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -361,9 +272,13 @@ form.addEventListener("submit", async (e) => {
       return;
     }
 
+    // Check if we got a direct URL
     if (data.download_url) {
+      // Display single video with direct URL
       const item = data.video_info || { title: "Instagram video" };
       renderResults([item], data.url);
+      
+      // Show the direct URL and preview - NO AUTO-DOWNLOAD
       setTimeout(() => {
         showDirectUrl(data.download_url, item);
       }, 100);
@@ -373,6 +288,7 @@ form.addEventListener("submit", async (e) => {
       showError("No video found at that link.");
     }
   } catch (err) {
+    // Fallback to old API
     try {
       const res = await fetch("/api/fetch", {
         method: "POST",
