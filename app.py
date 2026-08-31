@@ -33,36 +33,26 @@ def is_valid_instagram_url(url: str) -> bool:
 
 def get_cookie_file():
     """
-    Get cookies from cookies.json in the root directory.
-    Vercel can read this file (read-only is fine).
+    Get cookies from environment variable (Vercel) or cookies.json (local).
     """
-    # Check for cookies.json in the current directory
-    cookie_json_path = os.path.join(os.getcwd(), 'cookies.json')
-    
-    if os.path.exists(cookie_json_path):
+    # PRIORITY 1: Check environment variable (for Vercel)
+    cookies_json_env = os.environ.get('COOKIES_JSON')
+    if cookies_json_env:
         try:
-            app.logger.info(f"Found cookies.json at: {cookie_json_path}")
+            app.logger.info("Found COOKIES_JSON environment variable")
+            cookies_data = json.loads(cookies_json_env)
             
-            # Read and parse cookies.json
-            with open(cookie_json_path, 'r') as f:
-                cookies_data = json.load(f)
-            
-            # Convert to Netscape format for yt-dlp
-            # Write to /tmp (the only writable directory on Vercel)
+            # Convert to Netscape format
             cookie_file = os.path.join('/tmp', 'cookies_netscape.txt')
-            
             with open(cookie_file, 'w') as f:
                 f.write("# Netscape HTTP Cookie File\n")
-                
                 for cookie in cookies_data:
                     if isinstance(cookie, dict):
-                        # Handle different cookie formats
                         domain = cookie.get('domain', '')
                         flag = 'TRUE' if cookie.get('hostOnly') != True else 'FALSE'
                         path = cookie.get('path', '/')
                         secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
                         
-                        # Handle expiry
                         expiry = cookie.get('expirationDate')
                         if expiry is None:
                             expiry = cookie.get('expiry', 0)
@@ -71,10 +61,44 @@ def get_cookie_file():
                         name = cookie.get('name', '')
                         value = cookie.get('value', '')
                         
-                        # Skip if missing required fields
                         if not name or not domain:
                             continue
                         
+                        f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+            
+            app.logger.info(f"Converted COOKIES_JSON to Netscape format at: {cookie_file}")
+            return cookie_file
+            
+        except Exception as e:
+            app.logger.error(f"Failed to parse COOKIES_JSON: {e}")
+            # Fall through to file-based cookies
+    
+    # PRIORITY 2: Check for cookies.json in the current directory (local development)
+    cookie_json_path = os.path.join(os.getcwd(), 'cookies.json')
+    if os.path.exists(cookie_json_path):
+        try:
+            app.logger.info(f"Found cookies.json at: {cookie_json_path}")
+            
+            with open(cookie_json_path, 'r') as f:
+                cookies_data = json.load(f)
+            
+            cookie_file = os.path.join('/tmp', 'cookies_netscape.txt')
+            with open(cookie_file, 'w') as f:
+                f.write("# Netscape HTTP Cookie File\n")
+                for cookie in cookies_data:
+                    if isinstance(cookie, dict):
+                        domain = cookie.get('domain', '')
+                        flag = 'TRUE' if cookie.get('hostOnly') != True else 'FALSE'
+                        path = cookie.get('path', '/')
+                        secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                        expiry = cookie.get('expirationDate')
+                        if expiry is None:
+                            expiry = cookie.get('expiry', 0)
+                        expiry = str(int(expiry) if expiry else '0')
+                        name = cookie.get('name', '')
+                        value = cookie.get('value', '')
+                        if not name or not domain:
+                            continue
                         f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
             
             app.logger.info(f"Converted cookies.json to Netscape format at: {cookie_file}")
@@ -84,7 +108,7 @@ def get_cookie_file():
             app.logger.error(f"Failed to parse cookies.json: {e}")
             return None
     
-    app.logger.warning("No cookies.json found")
+    app.logger.warning("No cookies found in environment or file")
     return None
 
 
@@ -104,7 +128,7 @@ def base_ydl_opts(extra=None):
         },
     }
     
-    # Try to use cookies.json
+    # Try to use cookies (from env or file)
     cookie_file = get_cookie_file()
     if cookie_file and os.path.exists(cookie_file):
         opts["cookiefile"] = cookie_file
@@ -207,7 +231,7 @@ def clean_error(msg: str) -> str:
     if "rate limited" in msg.lower():
         return "Too many requests. Please wait a moment and try again."
     if "cookies" in msg.lower() or "cookie" in msg.lower():
-        return "Authentication required. Please check your cookies.json file."
+        return "Authentication required. Please check your cookies.json file or COOKIES_JSON environment variable."
     if len(msg) > 160:
         return "Couldn't process that link. Double-check it's a public post and try again."
     return msg
@@ -466,6 +490,27 @@ def api_status():
         "cookies": cookie_status,
         "download_history_count": len(download_history),
         "recent_downloads": download_history[-10:]
+    })
+
+
+@app.route("/api/debug/cookies", methods=["GET"])
+def debug_cookies():
+    """Debug endpoint to check cookie status."""
+    cookie_file = get_cookie_file()
+    if cookie_file and os.path.exists(cookie_file):
+        with open(cookie_file, 'r') as f:
+            first_lines = f.readlines()[:10]
+        return jsonify({
+            "cookie_file_exists": True,
+            "cookie_file_path": cookie_file,
+            "sample_cookies": first_lines,
+            "has_session_cookie": any("sessionid" in line for line in first_lines),
+            "env_cookies_configured": bool(os.environ.get('COOKIES_JSON'))
+        })
+    return jsonify({
+        "cookie_file_exists": False,
+        "message": "No cookie file found",
+        "env_cookies_configured": bool(os.environ.get('COOKIES_JSON'))
     })
 
 
