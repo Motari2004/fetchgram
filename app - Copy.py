@@ -6,7 +6,7 @@ import tempfile
 import json
 import time
 from datetime import datetime
-from flask import Flask, request, jsonify, send_file, render_template, after_this_request, session
+from flask import Flask, request, jsonify, send_file, render_template, after_this_request, redirect, session
 from flask_cors import CORS
 import yt_dlp
 import requests
@@ -35,7 +35,9 @@ def is_valid_instagram_url(url: str) -> bool:
 
 
 def get_cookie_file():
-    """Get cookies from session, environment variable, or file."""
+    """
+    Get cookies from session, environment variable, or file.
+    """
     # PRIORITY 1: Check if we have uploaded cookies
     cookie_file = session.get('cookie_file')
     if cookie_file and os.path.exists(cookie_file):
@@ -238,126 +240,6 @@ def clean_error(msg: str) -> str:
     return msg
 
 
-# ============== BLUESKY AT PROTOCOL INTEGRATION ==============
-
-def create_bluesky_session(identifier, password):
-    """Create a Bluesky session using AT Protocol"""
-    try:
-        response = requests.post(
-            "https://bsky.social/xrpc/com.atproto.server.createSession",
-            json={"identifier": identifier, "password": password},
-            headers={"Content-Type": "application/json"},
-            timeout=30
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"Failed to authenticate with Bluesky: {str(e)}")
-
-def upload_bluesky_blob(session, file_data, mime_type):
-    """Upload a blob (image or video) to Bluesky"""
-    try:
-        response = requests.post(
-            "https://bsky.social/xrpc/com.atproto.repo.uploadBlob",
-            headers={
-                "Authorization": f"Bearer {session['accessJwt']}",
-                "Content-Type": mime_type
-            },
-            data=file_data,
-            timeout=60
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"Failed to upload blob to Bluesky: {str(e)}")
-
-def upload_video_to_bluesky(session, video_url, text, thumbnail_url=None):
-    """Upload a video to Bluesky using the direct URL"""
-    try:
-        # Download the video
-        app.logger.info(f"Downloading video from: {video_url}")
-        video_response = requests.get(video_url, stream=True, timeout=60)
-        video_response.raise_for_status()
-        
-        content_type = video_response.headers.get("content-type", "video/mp4")
-        if not content_type.startswith("video/"):
-            content_type = "video/mp4"
-        
-        # Upload video blob
-        app.logger.info("Uploading video to Bluesky...")
-        blob_response = upload_bluesky_blob(session, video_response.content, content_type)
-        
-        # Get user's DID
-        did = session["did"]
-        
-        # Create post with video embed
-        record = {
-            "$type": "app.bsky.feed.post",
-            "text": text or "Instagram video",
-            "createdAt": datetime.utcnow().isoformat() + "Z",
-            "embed": {
-                "$type": "app.bsky.embed.video",
-                "video": blob_response["blob"],
-                "aspectRatio": {
-                    "width": 720,
-                    "height": 1280
-                }
-            }
-        }
-        
-        app.logger.info("Creating Bluesky post...")
-        response = requests.post(
-            "https://bsky.social/xrpc/com.atproto.repo.createRecord",
-            json={
-                "repo": did,
-                "collection": "app.bsky.feed.post",
-                "record": record
-            },
-            headers={"Authorization": f"Bearer {session['accessJwt']}"},
-            timeout=30
-        )
-        response.raise_for_status()
-        return response.json()
-        
-    except Exception as e:
-        raise Exception(f"Failed to upload video to Bluesky: {str(e)}")
-
-def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, password=None):
-    """Main function to post a video to Bluesky"""
-    try:
-        # Use provided credentials or fallback to environment variables
-        identifier = identifier or os.environ.get("BLUESKY_IDENTIFIER")
-        password = password or os.environ.get("BLUESKY_PASSWORD")
-        
-        if not identifier or not password:
-            raise Exception("Bluesky credentials not configured. Please enter your Bluesky handle and password.")
-        
-        # Create session
-        session_data = create_bluesky_session(identifier, password)
-        
-        # Upload video
-        result = upload_video_to_bluesky(session_data, video_url, text, thumbnail_url)
-        
-        uri_parts = result.get("uri", "").split("/")
-        post_id = uri_parts[-1] if uri_parts else ""
-        
-        return {
-            "success": True,
-            "post_uri": result.get("uri"),
-            "post_cid": result.get("cid"),
-            "post_id": post_id,
-            "message": "Video posted to Bluesky successfully!"
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-# ============== ROUTES ==============
-
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -365,7 +247,9 @@ def index():
 
 @app.route("/api/cookies/upload", methods=["POST"])
 def upload_cookies():
-    """Upload cookies.json file."""
+    """
+    Upload cookies.json file.
+    """
     if 'cookies_file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     
@@ -377,9 +261,11 @@ def upload_cookies():
         return jsonify({"error": "File must be a JSON file"}), 400
     
     try:
+        # Read the uploaded file
         content = file.read().decode('utf-8')
         cookies_data = json.loads(content)
         
+        # Validate the cookies
         if not isinstance(cookies_data, list):
             return jsonify({"error": "Invalid cookie format - expected an array"}), 400
         
@@ -432,6 +318,7 @@ def upload_cookies():
                 username = cookie.get('value')
                 break
             if isinstance(cookie, dict) and cookie.get('name') == 'sessionid':
+                # sessionid format: username%3A...
                 value = cookie.get('value', '')
                 if '%3A' in value:
                     username = value.split('%3A')[0]
@@ -483,6 +370,7 @@ def clear_cookies():
         except:
             pass
     
+    # Also remove the JSON file
     cookie_id = session.get('cookie_id')
     if cookie_id:
         json_file = os.path.join('/tmp', f'uploaded_cookies_{cookie_id}.json')
@@ -550,13 +438,16 @@ def download_video():
     if not is_valid_instagram_url(url):
         return jsonify({"error": "Invalid or missing url."}), 400
 
+    # Try direct URL first
     try:
         direct_url = get_direct_video_url(url, media_id)
         if direct_url:
             return jsonify({"download_url": direct_url})
     except Exception as e:
         app.logger.warning(f"Direct URL failed: {e}")
+        # Fall through to file download
 
+    # Fallback: download and stream
     job_dir = os.path.join(DOWNLOAD_ROOT, uuid.uuid4().hex)
     os.makedirs(job_dir, exist_ok=True)
     outtmpl = os.path.join(job_dir, "%(id)s.%(ext)s")
@@ -628,6 +519,7 @@ def api_download():
             "timestamp": datetime.utcnow().isoformat()
         }
         
+        # Step 1: Get video info
         with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
         
@@ -637,6 +529,7 @@ def api_download():
         if not entries:
             return jsonify({"error": "No videos found"}), 422
         
+        # Find target entry
         target = None
         if media_id:
             target = next((e for e in entries if e.get("id") == media_id), None)
@@ -656,31 +549,34 @@ def api_download():
         }
         response["video_info"] = video_info
         
-        # Store current video in session for Bluesky
-        session['current_video_url'] = get_direct_video_url(url, media_id)
-        session['current_video_title'] = video_info.get('title')
-        session['current_video_thumbnail'] = video_info.get('thumbnail')
-        
+        # Step 2: Handle different actions
         if action == "url_only":
+            # Just return the direct URL
             direct_url = get_direct_video_url(url, media_id)
             if direct_url:
                 response["download_url"] = direct_url
             else:
+                # Fallback to streaming URL
                 response["download_url"] = f"/api/download?url={url}&id={media_id}"
                 response["warning"] = "Direct URL not available, using streaming fallback"
         
         elif action == "download":
+            # Download file and return it
             filepath, job_dir, target = download_video_file(url, media_id)
             download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
+            
+            # Clean up after response
             @after_this_request
             def cleanup(response_obj):
                 shutil.rmtree(job_dir, ignore_errors=True)
                 return response_obj
+            
             return send_file(filepath, as_attachment=True, download_name=download_name)
         
         else:
             return jsonify({"error": f"Unknown action: {action}"}), 400
         
+        # Store in history
         download_history.append(response)
         if len(download_history) > 100:
             download_history.pop(0)
@@ -729,90 +625,6 @@ def api_batch_download():
         "total": len(results),
         "results": results,
         "timestamp": datetime.utcnow().isoformat()
-    })
-
-
-@app.route("/api/bluesky/post", methods=["POST"])
-def bluesky_post():
-    """Post a video to Bluesky."""
-    data = request.get_json(silent=True) or {}
-    
-    url = data.get("url", "").strip()
-    text = data.get("text", "Check out this video! 🎬").strip()
-    identifier = data.get("identifier", "").strip()
-    password = data.get("password", "").strip()
-    
-    # If no URL provided, check session
-    if not url and session.get('current_video_url'):
-        url = session.get('current_video_url')
-        text = text or session.get('current_video_title', 'Instagram video')
-    
-    if not url:
-        return jsonify({"error": "No video URL provided. Please fetch a video first."}), 400
-    
-    thumbnail_url = session.get('current_video_thumbnail')
-    
-    try:
-        result = post_to_bluesky(
-            video_url=url,
-            text=text,
-            thumbnail_url=thumbnail_url,
-            identifier=identifier,
-            password=password
-        )
-        
-        if result["success"]:
-            return jsonify({
-                "status": "success",
-                "post_uri": result.get("post_uri"),
-                "post_cid": result.get("post_cid"),
-                "post_id": result.get("post_id"),
-                "message": result.get("message"),
-                "video_url": url
-            })
-        else:
-            return jsonify({
-                "status": "error",
-                "error": result.get("error")
-            }), 500
-            
-    except Exception as e:
-        return jsonify({"error": clean_error(str(e))}), 500
-
-
-@app.route("/api/bluesky/auth", methods=["POST"])
-def bluesky_auth():
-    """Authenticate with Bluesky and return session info."""
-    data = request.get_json(silent=True) or {}
-    identifier = data.get("identifier", "").strip()
-    password = data.get("password", "").strip()
-    
-    if not identifier or not password:
-        return jsonify({"error": "Missing identifier or password"}), 400
-    
-    try:
-        session_data = create_bluesky_session(identifier, password)
-        return jsonify({
-            "status": "success",
-            "did": session_data.get("did"),
-            "handle": session_data.get("handle"),
-            "email": session_data.get("email"),
-            "message": "Authentication successful!"
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 401
-
-
-@app.route("/api/bluesky/status", methods=["GET"])
-def bluesky_status():
-    """Check if Bluesky is configured."""
-    has_credentials = bool(
-        os.environ.get("BLUESKY_IDENTIFIER") and 
-        os.environ.get("BLUESKY_PASSWORD")
-    )
-    return jsonify({
-        "configured": has_credentials,
-        "message": "Bluesky credentials are configured" if has_credentials else "Bluesky credentials are not configured."
     })
 
 

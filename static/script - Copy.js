@@ -27,16 +27,6 @@ const downloadProgress = document.getElementById("download-progress");
 const progressFill = document.getElementById("progress-fill");
 const progressText = document.getElementById("progress-text");
 
-// Bluesky elements
-const blueskySection = document.getElementById('bluesky-section');
-const blueskyText = document.getElementById('bluesky-text');
-const charCount = document.getElementById('char-count');
-const blueskyIdentifier = document.getElementById('bluesky-identifier');
-const blueskyPassword = document.getElementById('bluesky-password');
-const blueskyPostBtn = document.getElementById('bluesky-post-btn');
-const blueskyStatus = document.getElementById('bluesky-status');
-const blueskyPostUrl = document.getElementById('bluesky-post-url');
-
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
@@ -219,90 +209,6 @@ function showCookieError(message) {
   }, 5000);
 }
 
-// Character counter for Bluesky
-if (blueskyText) {
-  blueskyText.addEventListener('input', function() {
-    const count = this.value.length;
-    charCount.textContent = `${count}/300`;
-    charCount.style.color = count > 300 ? 'var(--error)' : 'var(--text-muted)';
-  });
-}
-
-function showBlueskySection() {
-  blueskySection.hidden = false;
-}
-
-function showBlueskyStatus(message, type, postUrl) {
-  blueskyStatus.hidden = false;
-  blueskyStatus.textContent = message;
-  blueskyStatus.className = 'bluesky-status' + (type ? ' ' + type : '');
-  
-  if (postUrl) {
-    blueskyPostUrl.hidden = false;
-    blueskyPostUrl.innerHTML = `🔗 <a href="${postUrl}" target="_blank">${postUrl}</a>`;
-  } else {
-    blueskyPostUrl.hidden = true;
-  }
-}
-
-// Bluesky Post
-blueskyPostBtn.addEventListener('click', async function() {
-  const text = blueskyText.value.trim() || 'Check out this video! 🎬';
-  
-  if (text.length > 300) {
-    showBlueskyStatus('Caption is too long (max 300 characters)', 'error');
-    return;
-  }
-  
-  if (!currentVideoUrl) {
-    showBlueskyStatus('No video to post. Please fetch a video first.', 'error');
-    return;
-  }
-  
-  const identifier = blueskyIdentifier.value.trim();
-  const password = blueskyPassword.value.trim();
-  
-  if (!identifier || !password) {
-    showBlueskyStatus('Please enter your Bluesky handle and password.', 'error');
-    return;
-  }
-  
-  this.textContent = '⏳ Posting...';
-  this.disabled = true;
-  showBlueskyStatus('⏳ Uploading video to Bluesky... This may take a moment.', 'info');
-  
-  try {
-    const response = await fetch('/api/bluesky/post', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: currentVideoUrl,
-        text: text,
-        identifier: identifier,
-        password: password
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (response.ok) {
-      const postUrl = `https://bsky.app/profile/${identifier}/post/${data.post_id}`;
-      showBlueskyStatus(
-        `✅ ${data.message}`,
-        'success',
-        postUrl
-      );
-    } else {
-      showBlueskyStatus(`❌ Error: ${data.error || 'Unknown error'}`, 'error');
-    }
-  } catch (error) {
-    showBlueskyStatus(`❌ Error: ${error.message}`, 'error');
-  } finally {
-    this.textContent = '📤 Post to Bluesky';
-    this.disabled = false;
-  }
-});
-
 function downloadVideo(url, filename) {
   if (!url) {
     showError("No video URL available to download");
@@ -452,9 +358,6 @@ function showDirectUrl(url, item) {
       }
     });
   }
-  
-  // Show Bluesky section
-  showBlueskySection();
 }
 
 // Copy URL handler
@@ -499,7 +402,6 @@ form.addEventListener("submit", async (e) => {
   directUrlSection.hidden = true;
   videoPreview.hidden = true;
   downloadProgress.hidden = true;
-  blueskySection.hidden = true;
   currentVideoUrl = null;
   currentVideoItem = null;
 
