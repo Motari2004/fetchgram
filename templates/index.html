@@ -39,6 +39,7 @@
   </header>
 
   <main class="hero">
+
     <!-- Hero Section -->
     <div class="hero-content">
       <div class="hero-badge">
@@ -50,26 +51,26 @@
 
     <!-- Status Cards -->
     <div class="status-grid">
-      <!-- Cookie Status -->
-      <div class="status-card" id="cookie-status-card">
+      <!-- Instagram Status -->
+      <div class="status-card" id="instagram-status-card">
         <div class="status-card-header">
-          <span class="status-icon" id="cookie-indicator">⚪</span>
+          <span class="status-icon" id="instagram-indicator">⚪</span>
           <span class="status-label">Instagram Auth</span>
         </div>
         <div class="status-card-body">
-          <span class="status-text" id="cookie-status-text">Not connected</span>
-          <span class="status-sub">Upload your cookies to start</span>
+          <span class="status-text" id="instagram-status-text">Not connected</span>
+          <span class="status-sub" id="instagram-username-display"></span>
         </div>
         <div class="status-card-actions">
-          <label for="cookie-file-input" class="btn btn-sm btn-ghost">
+          <label for="cookie-file-input" class="btn btn-sm btn-ghost" id="upload-cookie-label">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Upload Cookies
           </label>
           <input type="file" id="cookie-file-input" accept=".json" style="display:none" />
           <button id="clear-cookie-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
         </div>
-        <div id="cookie-upload-info" class="status-message success" hidden></div>
-        <div id="cookie-upload-error" class="status-message error" hidden></div>
+        <div id="instagram-upload-info" class="status-message success" hidden></div>
+        <div id="instagram-upload-error" class="status-message error" hidden></div>
       </div>
 
       <!-- Bluesky Status -->
@@ -152,7 +153,7 @@
         <input type="text" id="direct-url-display" class="url-display" readonly />
         <div class="url-actions">
           <button id="copy-url-btn" class="btn btn-sm btn-ghost">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 5V3C5 2.46957 5.21071 1.96086 5.58579 1.58579C5.96086 1.21071 6.46957 1 7 1H13C13.5304 1 14.0391 1.21071 14.4142 1.58579C14.7893 1.96086 15 2.46957 15 3V9C15 9.53043 14.7893 10.0391 14.4142 10.4142C14.0391 10.7893 13.5304 11 13 11H11M3 15H9C9.53043 15 10.0391 14.7893 10.4142 14.4142C10.7893 14.0391 11 13.5304 11 13V7C11 6.46957 10.7893 5.96086 10.4142 5.58579C10.0391 5.21071 9.53043 5 9 5H3C2.46957 5 1.96086 5.21071 1.58579 5.58579C1.21071 5.96086 1 6.46957 1 7V13C1 13.5304 1.21071 14.0391 1.58579 14.4142C1.96086 14.7893 2.46957 15 3 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 5V3C5 2.46957 5.21071 1.96086 5.58579 1.58579C5.96086 1.21071 6.46957 1 7 1H13C13.5304 1 14.0391 1.21071 14.4142 1.58579C14.7893 1.96086 15 2.46957 15 3V9C15 9.53043 14.7893 10.0391 14.4142 10.4142C14.0391 10.7893 13.5304 11 13 11H11M3 15H9C9.53043 15 10.0391 14.7893 10.4142 14.4142C10.7893 14.0391 11 13.5304 11 13V7C11 6.46957 10.7893 5.96086 10.4142 5.58579C10.0391 5.21071 9.53043 5 9 5H3C2.46957 5 1.96086 5.21071 1.58579 5.58579C1.21071 5.96086 1 6.46957 1 7V13C1 13.5304 1.21071 14.0391 1.58579 14.4142C1.21071 14.7893 2.46957 15 3 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Copy
           </button>
           <button id="direct-download-btn" class="btn btn-sm btn-success">
@@ -229,7 +230,6 @@
         <button id="bluesky-post-btn" class="btn btn-primary btn-block">
           <span class="btn-content">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             Post to Bluesky

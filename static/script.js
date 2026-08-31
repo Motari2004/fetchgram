@@ -5,14 +5,15 @@ const errorMsg = document.getElementById("error-msg");
 const results = document.getElementById("results");
 const template = document.getElementById("result-template");
 
-// Cookie elements
-const cookieIndicator = document.getElementById("cookie-indicator");
-const cookieStatusText = document.getElementById("cookie-status-text");
+// Instagram cookie elements
+const instagramIndicator = document.getElementById("instagram-indicator");
+const instagramStatusText = document.getElementById("instagram-status-text");
+const instagramUsernameDisplay = document.getElementById("instagram-username-display");
 const fileInput = document.getElementById("cookie-file-input");
-const uploadBtn = document.querySelector("#cookie-status-card .btn-ghost");
+const uploadCookieLabel = document.getElementById("upload-cookie-label");
 const clearCookieBtn = document.getElementById("clear-cookie-btn");
-const cookieInfo = document.getElementById("cookie-upload-info");
-const cookieError = document.getElementById("cookie-upload-error");
+const instagramUploadInfo = document.getElementById("instagram-upload-info");
+const instagramUploadError = document.getElementById("instagram-upload-error");
 
 // Bluesky elements
 const blueskyIndicator = document.getElementById("bluesky-indicator");
@@ -51,42 +52,52 @@ const progressText = document.getElementById("progress-text");
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
-// ==================== COOKIE FUNCTIONS ====================
+// ==================== INSTAGRAM COOKIE FUNCTIONS ====================
 
-function updateCookieStatus(hasCookies, username) {
+function updateInstagramStatus(hasCookies, username) {
   if (hasCookies) {
-    cookieIndicator.textContent = '🟢';
-    cookieIndicator.className = 'status-icon online';
-    cookieStatusText.textContent = `Connected as @${username || 'Instagram User'}`;
+    instagramIndicator.textContent = '🟢';
+    instagramIndicator.className = 'status-icon online';
+    instagramStatusText.textContent = 'Connected';
+    if (instagramUsernameDisplay) {
+      instagramUsernameDisplay.textContent = `@${username || 'Instagram User'}`;
+    }
     clearCookieBtn.hidden = false;
-    uploadBtn.textContent = '✅ Uploaded';
-    uploadBtn.disabled = true;
+    uploadCookieLabel.textContent = '✅ Uploaded';
+    uploadCookieLabel.style.opacity = '0.7';
     fileInput.disabled = true;
   } else {
-    cookieIndicator.textContent = '⚪';
-    cookieIndicator.className = 'status-icon offline';
-    cookieStatusText.textContent = 'Not connected';
+    instagramIndicator.textContent = '⚪';
+    instagramIndicator.className = 'status-icon offline';
+    instagramStatusText.textContent = 'Not connected';
+    if (instagramUsernameDisplay) {
+      instagramUsernameDisplay.textContent = '';
+    }
     clearCookieBtn.hidden = true;
-    uploadBtn.textContent = '📤 Upload Cookies';
-    uploadBtn.disabled = false;
+    uploadCookieLabel.textContent = '📤 Upload Cookies';
+    uploadCookieLabel.style.opacity = '1';
     fileInput.disabled = false;
+    fileInput.value = '';
   }
 }
 
-async function checkCookieStatus() {
+async function checkInstagramStatus() {
   try {
     const response = await fetch('/api/cookies/status');
     const data = await response.json();
-    updateCookieStatus(data.has_cookies, data.username);
+    updateInstagramStatus(data.has_cookies, data.username);
   } catch (error) {
-    console.error('Failed to check cookie status:', error);
-    updateCookieStatus(false);
+    console.error('Failed to check Instagram status:', error);
+    updateInstagramStatus(false);
   }
 }
 
 // Upload cookies
-uploadBtn.addEventListener('click', function() {
-  fileInput.click();
+uploadCookieLabel.addEventListener('click', function(e) {
+  e.preventDefault();
+  if (!fileInput.disabled) {
+    fileInput.click();
+  }
 });
 
 fileInput.addEventListener('change', async function() {
@@ -94,15 +105,15 @@ fileInput.addEventListener('change', async function() {
   if (!file) return;
   
   if (!file.name.endsWith('.json')) {
-    showCookieError('File must be a JSON file');
+    showInstagramError('File must be a JSON file');
     return;
   }
   
   const formData = new FormData();
   formData.append('cookies_file', file);
   
-  uploadBtn.textContent = '⏳ Uploading...';
-  uploadBtn.disabled = true;
+  uploadCookieLabel.textContent = '⏳ Uploading...';
+  uploadCookieLabel.style.opacity = '0.7';
   
   try {
     const response = await fetch('/api/cookies/upload', {
@@ -113,18 +124,18 @@ fileInput.addEventListener('change', async function() {
     const data = await response.json();
     
     if (response.ok) {
-      updateCookieStatus(true, data.username);
-      showCookieInfo(`✅ ${data.message}`);
+      updateInstagramStatus(true, data.username);
+      showInstagramInfo(`✅ ${data.message}`);
       fileInput.value = '';
     } else {
-      showCookieError(data.error || 'Upload failed');
-      updateCookieStatus(false);
+      showInstagramError(data.error || 'Upload failed');
+      updateInstagramStatus(false);
     }
   } catch (error) {
-    showCookieError('Failed to upload: ' + error.message);
+    showInstagramError('Failed to upload: ' + error.message);
   } finally {
-    uploadBtn.textContent = '📤 Upload Cookies';
-    uploadBtn.disabled = false;
+    uploadCookieLabel.textContent = '📤 Upload Cookies';
+    uploadCookieLabel.style.opacity = '1';
   }
 });
 
@@ -138,36 +149,36 @@ clearCookieBtn.addEventListener('click', async function() {
     const data = await response.json();
     
     if (response.ok) {
-      updateCookieStatus(false);
-      showCookieInfo('✅ Cookies cleared');
+      updateInstagramStatus(false);
+      showInstagramInfo('✅ Cookies cleared');
     } else {
-      showCookieError(data.error || 'Failed to clear cookies');
+      showInstagramError(data.error || 'Failed to clear cookies');
     }
   } catch (error) {
-    showCookieError('Failed to clear: ' + error.message);
+    showInstagramError('Failed to clear: ' + error.message);
   } finally {
     this.textContent = 'Clear';
     this.disabled = false;
   }
 });
 
-function showCookieInfo(message) {
-  cookieInfo.textContent = message;
-  cookieInfo.style.display = 'block';
-  cookieError.style.display = 'none';
-  setTimeout(() => { cookieInfo.style.display = 'none'; }, 5000);
+function showInstagramInfo(message) {
+  instagramUploadInfo.textContent = message;
+  instagramUploadInfo.style.display = 'block';
+  instagramUploadError.style.display = 'none';
+  setTimeout(() => { instagramUploadInfo.style.display = 'none'; }, 5000);
 }
 
-function showCookieError(message) {
-  cookieError.textContent = '❌ ' + message;
-  cookieError.style.display = 'block';
-  cookieInfo.style.display = 'none';
-  setTimeout(() => { cookieError.style.display = 'none'; }, 5000);
+function showInstagramError(message) {
+  instagramUploadError.textContent = '❌ ' + message;
+  instagramUploadError.style.display = 'block';
+  instagramUploadInfo.style.display = 'none';
+  setTimeout(() => { instagramUploadError.style.display = 'none'; }, 5000);
 }
 
 // ==================== BLUESKY FUNCTIONS ====================
 
-async function checkBlueskyCredentials() {
+async function checkBlueskyStatus() {
   try {
     const response = await fetch('/api/bluesky/credentials_status');
     const data = await response.json();
@@ -176,7 +187,9 @@ async function checkBlueskyCredentials() {
       blueskyIndicator.textContent = '🟢';
       blueskyIndicator.className = 'status-icon online';
       blueskyStatusText.textContent = 'Connected';
-      blueskyUsernameDisplay.textContent = `@${data.handle || data.identifier}`;
+      if (blueskyUsernameDisplay) {
+        blueskyUsernameDisplay.textContent = `@${data.handle || data.identifier}`;
+      }
       blueskyConnectedBadge.hidden = false;
       clearBlueskyCredsBtn.hidden = false;
       if (savedCredentialsInfo) {
@@ -187,7 +200,9 @@ async function checkBlueskyCredentials() {
       blueskyIndicator.textContent = '⚪';
       blueskyIndicator.className = 'status-icon offline';
       blueskyStatusText.textContent = 'Not connected';
-      blueskyUsernameDisplay.textContent = '';
+      if (blueskyUsernameDisplay) {
+        blueskyUsernameDisplay.textContent = '';
+      }
       blueskyConnectedBadge.hidden = true;
       clearBlueskyCredsBtn.hidden = true;
       if (savedCredentialsInfo) {
@@ -195,7 +210,7 @@ async function checkBlueskyCredentials() {
       }
     }
   } catch (error) {
-    console.error('Failed to check Bluesky credentials:', error);
+    console.error('Failed to check Bluesky status:', error);
   }
 }
 
@@ -251,7 +266,7 @@ blueskySaveBtn.addEventListener('click', async function() {
       blueskyModalStatus.style.display = 'block';
       setTimeout(() => {
         blueskyModal.hidden = true;
-        checkBlueskyCredentials();
+        checkBlueskyStatus();
       }, 1500);
     } else {
       blueskyModalStatus.textContent = `❌ ${data.error}`;
@@ -278,7 +293,7 @@ clearBlueskyCredsBtn.addEventListener('click', async function() {
     const data = await response.json();
     
     if (response.ok) {
-      checkBlueskyCredentials();
+      checkBlueskyStatus();
       showBlueskyStatus('✅ Credentials cleared', 'success');
     }
   } catch (error) {
@@ -566,7 +581,7 @@ copyBtn.addEventListener('click', async function() {
     await navigator.clipboard.writeText(url);
     this.innerHTML = '✅ Copied!';
     setTimeout(() => {
-      this.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 5V3C5 2.46957 5.21071 1.96086 5.58579 1.58579C5.96086 1.21071 6.46957 1 7 1H13C13.5304 1 14.0391 1.21071 14.4142 1.58579C14.7893 1.96086 15 2.46957 15 3V9C15 9.53043 14.7893 10.0391 14.4142 10.4142C14.0391 10.7893 13.5304 11 13 11H11M3 15H9C9.53043 15 10.0391 14.7893 10.4142 14.4142C10.7893 14.0391 11 13.5304 11 13V7C11 6.46957 10.7893 5.96086 10.4142 5.58579C10.0391 5.21071 9.53043 5 9 5H3C2.46957 5 1.96086 5.21071 1.58579 5.58579C1.21071 5.96086 1 6.46957 1 7V13C1 13.5304 1.21071 14.0391 1.58579 14.4142C1.96086 14.7893 2.46957 15 3 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Copy';
+      this.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 5V3C5 2.46957 5.21071 1.96086 5.58579 1.58579C5.96086 1.21071 6.46957 1 7 1H13C13.5304 1 14.0391 1.21071 14.4142 1.58579C14.7893 1.96086 15 2.46957 15 3V9C15 9.53043 14.7893 10.0391 14.4142 10.4142C14.0391 10.7893 13.5304 11 13 11H11M3 15H9C9.53043 15 10.0391 14.7893 10.4142 14.4142C10.7893 14.0391 11 13.5304 11 13V7C11 6.46957 10.7893 5.96086 10.4142 5.58579C10.0391 5.21071 9.53043 5 9 5H3C2.46957 5 1.96086 5.21071 1.58579 5.58579C1.21071 5.96086 1 6.46957 1 7V13C1 13.5304 1.21071 14.0391 1.58579 14.4142C1.21071 14.7893 2.46957 15 3 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Copy';
     }, 2000);
   } catch {
     directUrlDisplay.select();
@@ -654,5 +669,6 @@ form.addEventListener("submit", async (e) => {
 
 // ==================== INIT ====================
 
-checkCookieStatus();
-checkBlueskyCredentials();
+// Check both statuses on page load
+checkInstagramStatus();
+checkBlueskyStatus();
