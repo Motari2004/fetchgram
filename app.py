@@ -7,7 +7,6 @@ import json
 from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template, after_this_request, redirect
 from flask_cors import CORS
-
 import yt_dlp
 
 app = Flask(__name__)
@@ -24,12 +23,33 @@ if not os.path.exists(DOWNLOAD_ROOT):
     DOWNLOAD_ROOT = os.path.join(tempfile.gettempdir(), "igdl_downloads")
     os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
 
-# Store download history (in memory - use Redis/DB for production)
+# Store download history
 download_history = []
 
 
 def is_valid_instagram_url(url: str) -> bool:
     return bool(url) and bool(IG_URL_RE.match(url.strip()))
+
+
+def get_cookies_from_env():
+    """Get cookies from environment variable or file"""
+    cookies = os.environ.get('INSTAGRAM_COOKIES')
+    if cookies:
+        # Save cookies to a temporary file
+        cookie_file = os.path.join('/tmp', 'cookies.txt')
+        with open(cookie_file, 'w') as f:
+            f.write(cookies)
+        return cookie_file
+    
+    # Check if cookies file exists in project
+    if os.path.exists('cookies.txt'):
+        return 'cookies.txt'
+    
+    # Check if cookies file exists in /tmp
+    if os.path.exists('/tmp/cookies.txt'):
+        return '/tmp/cookies.txt'
+    
+    return None
 
 
 def base_ydl_opts(extra=None):
@@ -39,7 +59,6 @@ def base_ydl_opts(extra=None):
         "noplaylist": True,
         "format": "best",
         "nocheckcertificate": True,
-        "cookiesfrombrowser": ("chrome",),
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -48,6 +67,23 @@ def base_ydl_opts(extra=None):
             )
         },
     }
+    
+    # Try to use cookies from environment
+    cookie_file = get_cookies_from_env()
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
+    else:
+        # Fallback: try browser cookies (works locally)
+        try:
+            # Try Chrome first
+            opts["cookiesfrombrowser"] = ("chrome",)
+        except:
+            # Fallback to Firefox if Chrome not available
+            try:
+                opts["cookiesfrombrowser"] = ("firefox",)
+            except:
+                pass  # No cookies available
+    
     if extra:
         opts.update(extra)
     return opts
@@ -137,6 +173,8 @@ def clean_error(msg: str) -> str:
         return "The video is unavailable. It may have been removed or is restricted."
     if "rate limited" in msg.lower():
         return "Too many requests. Please wait a moment and try again."
+    if "cookies" in msg.lower():
+        return "Authentication required. Please set INSTAGRAM_COOKIES environment variable."
     if len(msg) > 160:
         return "Couldn't process that link. Double-check it's a public post and try again."
     return msg
@@ -162,8 +200,8 @@ def fetch_info():
             info = ydl.extract_info(url, download=False)
     except yt_dlp.utils.DownloadError as e:
         return jsonify({"error": clean_error(str(e))}), 422
-    except Exception:
-        return jsonify({"error": "Couldn't read that post. It may be private or removed."}), 422
+    except Exception as e:
+        return jsonify({"error": clean_error(str(e))}), 422
 
     entries = info.get("entries") if "entries" in info else [info]
     entries = [e for e in entries if e]
@@ -199,9 +237,10 @@ def download_video():
     try:
         direct_url = get_direct_video_url(url, media_id)
         if direct_url:
-            return redirect(direct_url)
-    except Exception:
-        pass  # Fall through to file download
+            return jsonify({"download_url": direct_url})
+    except Exception as e:
+        app.logger.warning(f"Direct URL failed: {e}")
+        # Fall through to file download
 
     # Fallback: download and stream
     job_dir = os.path.join(DOWNLOAD_ROOT, uuid.uuid4().hex)
@@ -218,9 +257,9 @@ def download_video():
     except yt_dlp.utils.DownloadError as e:
         shutil.rmtree(job_dir, ignore_errors=True)
         return jsonify({"error": clean_error(str(e))}), 422
-    except Exception:
+    except Exception as e:
         shutil.rmtree(job_dir, ignore_errors=True)
-        return jsonify({"error": "Download failed. Try again in a moment."}), 500
+        return jsonify({"error": clean_error(str(e))}), 500
 
     entries = info.get("entries") if "entries" in info else [info]
     entries = [e for e in entries if e]
@@ -254,15 +293,7 @@ def download_video():
 
 @app.route("/api/commands/download", methods=["POST"])
 def api_download():
-    """
-    API endpoint to download Instagram video.
-    Accepts JSON with:
-    {
-        "url": "instagram_url",
-        "media_id": "optional_specific_id",
-        "action": "url_only | download"
-    }
-    """
+    """API endpoint to download Instagram video."""
     data = request.get_json(silent=True) or {}
     url = (data.get("url") or "").strip()
     media_id = (data.get("media_id") or "").strip()
@@ -322,6 +353,7 @@ def api_download():
             else:
                 # Fallback to streaming URL
                 response["download_url"] = f"/api/download?url={url}&id={media_id}"
+                response["warning"] = "Direct URL not available, using streaming fallback"
         
         elif action == "download":
             # Download file and return it
@@ -341,13 +373,13 @@ def api_download():
         
         # Store in history
         download_history.append(response)
-        if len(download_history) > 100:  # Limit history
+        if len(download_history) > 100:
             download_history.pop(0)
         
         return jsonify(response)
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": clean_error(str(e))}), 500
 
 
 @app.route("/api/commands/batch", methods=["POST"])
@@ -394,11 +426,13 @@ def api_batch_download():
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     """Get service status and download history."""
+    cookie_status = "configured" if get_cookies_from_env() else "not configured"
     return jsonify({
         "status": "running",
         "version": "1.0.0",
+        "cookies": cookie_status,
         "download_history_count": len(download_history),
-        "recent_downloads": download_history[-10:]  # Last 10 downloads
+        "recent_downloads": download_history[-10:]
     })
 
 
