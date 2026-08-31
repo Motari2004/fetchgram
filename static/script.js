@@ -9,6 +9,7 @@ const template = document.getElementById("result-template");
 const cookieIndicator = document.getElementById("cookie-indicator");
 const cookieStatusText = document.getElementById("cookie-status-text");
 const fileInput = document.getElementById("cookie-file-input");
+const fileLabelText = document.getElementById("file-label-text");
 const uploadBtn = document.getElementById("upload-cookie-btn");
 const clearBtn = document.getElementById("clear-cookie-btn");
 const cookieInfo = document.getElementById("cookie-upload-info");
@@ -62,16 +63,21 @@ function updateCookieStatus(hasCookies, username) {
     uploadBtn.textContent = '✅ Uploaded';
     uploadBtn.disabled = true;
     fileInput.disabled = true;
-    fileInput.parentElement.classList.add('has-file');
+    if (fileLabelText) {
+      fileLabelText.textContent = '📄 cookies.json uploaded';
+    }
   } else {
     cookieIndicator.textContent = '⚪';
     cookieIndicator.className = 'status-indicator offline';
     cookieStatusText.textContent = 'No cookies uploaded';
     clearBtn.hidden = true;
     uploadBtn.textContent = '⬆ Upload';
-    uploadBtn.disabled = false;
+    uploadBtn.disabled = true;
     fileInput.disabled = false;
-    fileInput.parentElement.classList.remove('has-file');
+    if (fileLabelText) {
+      fileLabelText.textContent = '📁 Choose cookies.json';
+    }
+    fileInput.value = '';
   }
 }
 
@@ -86,36 +92,18 @@ async function checkCookieStatus() {
   }
 }
 
-function showCookieInfo(message) {
-  cookieInfo.hidden = false;
-  cookieInfo.textContent = message;
-  cookieError.hidden = true;
-  setTimeout(() => {
-    cookieInfo.hidden = true;
-  }, 5000);
-}
-
-function showCookieError(message) {
-  cookieError.hidden = false;
-  cookieError.textContent = '❌ ' + message;
-  cookieInfo.hidden = true;
-  setTimeout(() => {
-    cookieError.hidden = true;
-  }, 5000);
-}
-
 // File input change handler
 fileInput.addEventListener('change', function() {
   if (this.files.length > 0) {
     const fileName = this.files[0].name;
-    this.parentElement.textContent = `📄 ${fileName}`;
-    this.parentElement.appendChild(this);
-    this.parentElement.classList.add('has-file');
+    if (fileLabelText) {
+      fileLabelText.textContent = `📄 ${fileName}`;
+    }
     uploadBtn.disabled = false;
   } else {
-    this.parentElement.textContent = '📁 Choose cookies.json';
-    this.parentElement.appendChild(this);
-    this.parentElement.classList.remove('has-file');
+    if (fileLabelText) {
+      fileLabelText.textContent = '📁 Choose cookies.json';
+    }
     uploadBtn.disabled = true;
   }
 });
@@ -150,11 +138,10 @@ uploadBtn.addEventListener('click', async function() {
     if (response.ok) {
       updateCookieStatus(true, data.username);
       showCookieInfo(`✅ ${data.message}`);
-      // Reset file input
       fileInput.value = '';
-      fileInput.parentElement.textContent = '📁 Choose cookies.json';
-      fileInput.parentElement.appendChild(fileInput);
-      fileInput.parentElement.classList.remove('has-file');
+      if (fileLabelText) {
+        fileLabelText.textContent = '📁 Choose cookies.json';
+      }
     } else {
       showCookieError(data.error || 'Upload failed');
       updateCookieStatus(false);
@@ -163,7 +150,7 @@ uploadBtn.addEventListener('click', async function() {
     showCookieError('Failed to upload: ' + error.message);
   } finally {
     this.textContent = '⬆ Upload';
-    this.disabled = false;
+    this.disabled = true;
   }
 });
 
@@ -191,6 +178,36 @@ clearBtn.addEventListener('click', async function() {
     this.disabled = false;
   }
 });
+
+function showCookieInfo(message) {
+  if (cookieInfo) {
+    cookieInfo.hidden = false;
+    cookieInfo.textContent = message;
+  }
+  if (cookieError) {
+    cookieError.hidden = true;
+  }
+  setTimeout(() => {
+    if (cookieInfo) {
+      cookieInfo.hidden = true;
+    }
+  }, 5000);
+}
+
+function showCookieError(message) {
+  if (cookieError) {
+    cookieError.hidden = false;
+    cookieError.textContent = '❌ ' + message;
+  }
+  if (cookieInfo) {
+    cookieInfo.hidden = true;
+  }
+  setTimeout(() => {
+    if (cookieError) {
+      cookieError.hidden = true;
+    }
+  }, 5000);
+}
 
 function downloadVideo(url, filename) {
   if (!url) {

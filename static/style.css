@@ -165,11 +165,6 @@ body {
   display: none;
 }
 
-.cookie-upload-label.has-file {
-  border-color: var(--success);
-  color: var(--success);
-}
-
 .cookie-btn {
   padding: 10px 20px;
   border: none;
@@ -186,7 +181,7 @@ body {
   color: #fff;
 }
 
-.upload-btn:hover {
+.upload-btn:hover:not(:disabled) {
   background: var(--accent-ink);
 }
 
