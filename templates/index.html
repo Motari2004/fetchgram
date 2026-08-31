@@ -76,41 +76,14 @@
           <button id="video-download-btn" class="copy-btn video-download-btn">⬇ Download Video</button>
         </div>
       </div>
-    </div>
-
-    <!-- Bluesky Section -->
-    <div id="bluesky-section" class="bluesky-section" hidden>
-      <h3>📤 Post to Bluesky</h3>
       
-      <div class="bluesky-form">
-        <div class="form-group">
-          <label for="bluesky-text">Caption:</label>
-          <textarea id="bluesky-text" class="bluesky-textarea" rows="2" placeholder="What's on your mind?">Check out this video! 🎬</textarea>
-          <span class="char-count" id="char-count">0/300</span>
+      <!-- Download progress -->
+      <div id="download-progress" class="download-progress" hidden>
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
         </div>
-        
-        <div class="form-group" id="bluesky-credentials" hidden>
-          <label for="bluesky-identifier">Bluesky Handle or Email:</label>
-          <input type="text" id="bluesky-identifier" placeholder="username.bsky.social" />
-          
-          <label for="bluesky-password">Password (App Password recommended):</label>
-          <input type="password" id="bluesky-password" placeholder="Your Bluesky app password" />
-        </div>
-        
-        <button id="bluesky-post-btn" class="copy-btn bluesky-btn">
-          📤 Post to Bluesky
-        </button>
-        
-        <div id="bluesky-status" class="bluesky-status" hidden></div>
+        <p id="progress-text" class="progress-text">Downloading...</p>
       </div>
-    </div>
-
-    <!-- Download Progress -->
-    <div id="download-progress" class="download-progress" hidden>
-      <div class="progress-bar">
-        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
-      </div>
-      <p id="progress-text" class="progress-text">Downloading...</p>
     </div>
   </main>
 
