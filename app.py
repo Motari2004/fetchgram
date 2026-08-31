@@ -3,16 +3,29 @@ import re
 import uuid
 import shutil
 import tempfile
-from flask import Flask, request, jsonify, send_file, render_template, after_this_request
+import json
+from datetime import datetime
+from flask import Flask, request, jsonify, send_file, render_template, after_this_request, redirect
+from flask_cors import CORS
 
 import yt_dlp
 
 app = Flask(__name__)
+CORS(app)
 
 IG_URL_RE = re.compile(r"^https?://(www\.)?instagram\.com/", re.IGNORECASE)
 
-DOWNLOAD_ROOT = os.path.join(tempfile.gettempdir(), "igdl_downloads")
+# For Vercel compatibility
+DOWNLOAD_ROOT = os.path.join('/tmp', "igdl_downloads")
 os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
+
+# For local development, also support local temp
+if not os.path.exists(DOWNLOAD_ROOT):
+    DOWNLOAD_ROOT = os.path.join(tempfile.gettempdir(), "igdl_downloads")
+    os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
+
+# Store download history (in memory - use Redis/DB for production)
+download_history = []
 
 
 def is_valid_instagram_url(url: str) -> bool:
@@ -24,10 +37,9 @@ def base_ydl_opts(extra=None):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        # 'best' avoids needing ffmpeg to merge separate video/audio streams,
-        # which keeps this deployable without extra system dependencies.
         "format": "best",
         "nocheckcertificate": True,
+        "cookiesfrombrowser": ("chrome",),
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -39,6 +51,95 @@ def base_ydl_opts(extra=None):
     if extra:
         opts.update(extra)
     return opts
+
+
+def get_direct_video_url(url, media_id=None):
+    """Extract direct video URL without downloading."""
+    opts = base_ydl_opts({
+        "format": "best[ext=mp4]/best",
+    })
+    
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        
+        entries = info.get("entries") if "entries" in info else [info]
+        entries = [e for e in entries if e]
+        
+        if media_id:
+            target = next((e for e in entries if e.get("id") == media_id), None)
+        else:
+            target = entries[0] if entries else None
+            
+        if not target:
+            return None
+            
+        formats = target.get("formats", [])
+        if not formats:
+            return target.get("url") or target.get("webpage_url")
+        
+        # Prefer mp4 with audio
+        for fmt in formats:
+            if fmt.get("ext") == "mp4" and fmt.get("acodec") != "none" and fmt.get("vcodec") != "none":
+                return fmt.get("url")
+        
+        # Fallback to first format
+        return formats[0].get("url") if formats else None
+
+
+def download_video_file(url, media_id=None):
+    """Download video file and return filepath."""
+    job_dir = os.path.join(DOWNLOAD_ROOT, uuid.uuid4().hex)
+    os.makedirs(job_dir, exist_ok=True)
+    outtmpl = os.path.join(job_dir, "%(id)s.%(ext)s")
+
+    opts = base_ydl_opts({"outtmpl": outtmpl})
+    if media_id:
+        opts["playlist_items"] = None
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except yt_dlp.utils.DownloadError as e:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise Exception(clean_error(str(e)))
+    except Exception as e:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise Exception("Download failed: " + str(e))
+
+    entries = info.get("entries") if "entries" in info else [info]
+    entries = [e for e in entries if e]
+    target = None
+    if media_id:
+        target = next((e for e in entries if e.get("id") == media_id), None)
+    if target is None and entries:
+        target = entries[0]
+
+    if target is None:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise Exception("No video found to download.")
+
+    filepath = target.get("requested_downloads", [{}])[0].get("filepath") or os.path.join(
+        job_dir, f"{target.get('id')}.{target.get('ext', 'mp4')}"
+    )
+
+    if not os.path.exists(filepath):
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise Exception("File was fetched but couldn't be located.")
+
+    return filepath, job_dir, target
+
+
+def clean_error(msg: str) -> str:
+    msg = msg.replace("ERROR: ", "").strip()
+    if "Private" in msg or "login" in msg.lower():
+        return "This post is private or requires login — it can't be downloaded."
+    if "Video unavailable" in msg:
+        return "The video is unavailable. It may have been removed or is restricted."
+    if "rate limited" in msg.lower():
+        return "Too many requests. Please wait a moment and try again."
+    if len(msg) > 160:
+        return "Couldn't process that link. Double-check it's a public post and try again."
+    return msg
 
 
 @app.route("/")
@@ -94,13 +195,21 @@ def download_video():
     if not is_valid_instagram_url(url):
         return jsonify({"error": "Invalid or missing url."}), 400
 
+    # Try direct URL first
+    try:
+        direct_url = get_direct_video_url(url, media_id)
+        if direct_url:
+            return redirect(direct_url)
+    except Exception:
+        pass  # Fall through to file download
+
+    # Fallback: download and stream
     job_dir = os.path.join(DOWNLOAD_ROOT, uuid.uuid4().hex)
     os.makedirs(job_dir, exist_ok=True)
     outtmpl = os.path.join(job_dir, "%(id)s.%(ext)s")
 
     opts = base_ydl_opts({"outtmpl": outtmpl})
     if media_id:
-        # Restrict to a single item when the post has multiple videos (carousel).
         opts["playlist_items"] = None
 
     try:
@@ -143,13 +252,154 @@ def download_video():
     return send_file(filepath, as_attachment=True, download_name=download_name)
 
 
-def clean_error(msg: str) -> str:
-    msg = msg.replace("ERROR: ", "").strip()
-    if "Private" in msg or "login" in msg.lower():
-        return "This post is private or requires login — it can't be downloaded."
-    if len(msg) > 160:
-        return "Couldn't process that link. Double-check it's a public post and try again."
-    return msg
+@app.route("/api/commands/download", methods=["POST"])
+def api_download():
+    """
+    API endpoint to download Instagram video.
+    Accepts JSON with:
+    {
+        "url": "instagram_url",
+        "media_id": "optional_specific_id",
+        "action": "url_only | download"
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
+    media_id = (data.get("media_id") or "").strip()
+    action = data.get("action", "url_only")
+    
+    if not url:
+        return jsonify({"error": "Missing 'url' parameter"}), 400
+    
+    if not is_valid_instagram_url(url):
+        return jsonify({"error": "Invalid Instagram URL"}), 400
+    
+    try:
+        response = {
+            "status": "success",
+            "url": url,
+            "media_id": media_id,
+            "action": action,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Step 1: Get video info
+        with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
+            info = ydl.extract_info(url, download=False)
+        
+        entries = info.get("entries") if "entries" in info else [info]
+        entries = [e for e in entries if e]
+        
+        if not entries:
+            return jsonify({"error": "No videos found"}), 422
+        
+        # Find target entry
+        target = None
+        if media_id:
+            target = next((e for e in entries if e.get("id") == media_id), None)
+        if target is None:
+            target = entries[0]
+        
+        if not target:
+            return jsonify({"error": "Video not found"}), 422
+        
+        video_info = {
+            "id": target.get("id"),
+            "title": target.get("title", "Instagram video"),
+            "duration": target.get("duration"),
+            "uploader": target.get("uploader") or target.get("uploader_id"),
+            "thumbnail": target.get("thumbnail"),
+            "ext": target.get("ext", "mp4")
+        }
+        response["video_info"] = video_info
+        
+        # Step 2: Handle different actions
+        if action == "url_only":
+            # Just return the direct URL
+            direct_url = get_direct_video_url(url, media_id)
+            if direct_url:
+                response["download_url"] = direct_url
+            else:
+                # Fallback to streaming URL
+                response["download_url"] = f"/api/download?url={url}&id={media_id}"
+        
+        elif action == "download":
+            # Download file and return it
+            filepath, job_dir, target = download_video_file(url, media_id)
+            download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
+            
+            # Clean up after response
+            @after_this_request
+            def cleanup(response_obj):
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return response_obj
+            
+            return send_file(filepath, as_attachment=True, download_name=download_name)
+        
+        else:
+            return jsonify({"error": f"Unknown action: {action}"}), 400
+        
+        # Store in history
+        download_history.append(response)
+        if len(download_history) > 100:  # Limit history
+            download_history.pop(0)
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/commands/batch", methods=["POST"])
+def api_batch_download():
+    """Batch download multiple videos."""
+    data = request.get_json(silent=True) or {}
+    urls = data.get("urls", [])
+    action = data.get("action", "url_only")
+    
+    if not urls:
+        return jsonify({"error": "No URLs provided"}), 400
+    
+    results = []
+    for url in urls:
+        try:
+            with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
+                info = ydl.extract_info(url, download=False)
+            
+            entries = info.get("entries") if "entries" in info else [info]
+            entries = [e for e in entries if e]
+            
+            for entry in entries:
+                results.append({
+                    "url": url,
+                    "id": entry.get("id"),
+                    "title": entry.get("title", "Instagram video"),
+                    "uploader": entry.get("uploader") or entry.get("uploader_id"),
+                    "download_url": get_direct_video_url(url, entry.get("id"))
+                })
+        except Exception as e:
+            results.append({
+                "url": url,
+                "error": str(e)
+            })
+    
+    return jsonify({
+        "status": "success",
+        "total": len(results),
+        "results": results,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+
+@app.route("/api/commands/status", methods=["GET"])
+def api_status():
+    """Get service status and download history."""
+    return jsonify({
+        "status": "running",
+        "version": "1.0.0",
+        "download_history_count": len(download_history),
+        "recent_downloads": download_history[-10:]  # Last 10 downloads
+    })
 
 
 if __name__ == "__main__":

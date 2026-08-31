@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Fetchgram — save Instagram videos</title>
+<title>Fetchgram — Save Instagram videos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -60,6 +60,19 @@
         </a>
       </article>
     </template>
+    
+    <!-- New: Direct URL Display Section -->
+    <div id="direct-url-section" class="direct-url-section" hidden>
+      <h3>Direct Download URL</h3>
+      <div class="url-container">
+        <input type="text" id="direct-url-display" readonly />
+        <button id="copy-url-btn" class="copy-btn">Copy</button>
+      </div>
+      <div class="video-preview" id="video-preview" hidden>
+        <video controls id="preview-video" class="preview-video"></video>
+        <div class="video-info" id="video-info"></div>
+      </div>
+    </div>
   </main>
 
   <footer class="foot">
