@@ -5,12 +5,14 @@ const errorMsg = document.getElementById("error-msg");
 const results = document.getElementById("results");
 const template = document.getElementById("result-template");
 
-// OAuth elements
-const oauthIndicator = document.getElementById("oauth-indicator");
-const oauthStatusText = document.getElementById("oauth-status-text");
-const oauthLoginBtn = document.getElementById("oauth-login-btn");
-const oauthLogoutBtn = document.getElementById("oauth-logout-btn");
-const oauthUserInfo = document.getElementById("oauth-user-info");
+// Cookie elements
+const cookieIndicator = document.getElementById("cookie-indicator");
+const cookieStatusText = document.getElementById("cookie-status-text");
+const fileInput = document.getElementById("cookie-file-input");
+const uploadBtn = document.getElementById("upload-cookie-btn");
+const clearBtn = document.getElementById("clear-cookie-btn");
+const cookieInfo = document.getElementById("cookie-upload-info");
+const cookieError = document.getElementById("cookie-upload-error");
 
 // Direct URL elements
 const directUrlSection = document.getElementById("direct-url-section");
@@ -51,56 +53,141 @@ function formatDuration(seconds) {
   return `${m}:${String(rem).padStart(2, "0")}`;
 }
 
-function updateOAuthStatus(loggedIn, username) {
-  if (loggedIn) {
-    oauthIndicator.textContent = '🟢';
-    oauthIndicator.className = 'status-indicator online';
-    oauthStatusText.textContent = `Logged in as @${username || 'Instagram User'}`;
-    oauthLoginBtn.hidden = true;
-    oauthLogoutBtn.hidden = false;
-    oauthUserInfo.hidden = false;
-    oauthUserInfo.innerHTML = `<strong>👤 ${username || 'Instagram User'}</strong> · Session active`;
+function updateCookieStatus(hasCookies, username) {
+  if (hasCookies) {
+    cookieIndicator.textContent = '🟢';
+    cookieIndicator.className = 'status-indicator online';
+    cookieStatusText.textContent = `Logged in as @${username || 'Instagram User'}`;
+    clearBtn.hidden = false;
+    uploadBtn.textContent = '✅ Uploaded';
+    uploadBtn.disabled = true;
+    fileInput.disabled = true;
+    fileInput.parentElement.classList.add('has-file');
   } else {
-    oauthIndicator.textContent = '⚪';
-    oauthIndicator.className = 'status-indicator offline';
-    oauthStatusText.textContent = 'Not logged in';
-    oauthLoginBtn.hidden = false;
-    oauthLogoutBtn.hidden = true;
-    oauthUserInfo.hidden = true;
+    cookieIndicator.textContent = '⚪';
+    cookieIndicator.className = 'status-indicator offline';
+    cookieStatusText.textContent = 'No cookies uploaded';
+    clearBtn.hidden = true;
+    uploadBtn.textContent = '⬆ Upload';
+    uploadBtn.disabled = false;
+    fileInput.disabled = false;
+    fileInput.parentElement.classList.remove('has-file');
   }
 }
 
-async function checkOAuthStatus() {
+async function checkCookieStatus() {
   try {
-    const response = await fetch('/api/oauth/status');
+    const response = await fetch('/api/cookies/status');
     const data = await response.json();
-    updateOAuthStatus(data.logged_in, data.username);
+    updateCookieStatus(data.has_cookies, data.username);
   } catch (error) {
-    console.error('Failed to check OAuth status:', error);
-    updateOAuthStatus(false);
+    console.error('Failed to check cookie status:', error);
+    updateCookieStatus(false);
   }
 }
 
-// OAuth Logout
-oauthLogoutBtn.addEventListener('click', async function() {
-  this.textContent = '⏳ Logging out...';
+function showCookieInfo(message) {
+  cookieInfo.hidden = false;
+  cookieInfo.textContent = message;
+  cookieError.hidden = true;
+  setTimeout(() => {
+    cookieInfo.hidden = true;
+  }, 5000);
+}
+
+function showCookieError(message) {
+  cookieError.hidden = false;
+  cookieError.textContent = '❌ ' + message;
+  cookieInfo.hidden = true;
+  setTimeout(() => {
+    cookieError.hidden = true;
+  }, 5000);
+}
+
+// File input change handler
+fileInput.addEventListener('change', function() {
+  if (this.files.length > 0) {
+    const fileName = this.files[0].name;
+    this.parentElement.textContent = `📄 ${fileName}`;
+    this.parentElement.appendChild(this);
+    this.parentElement.classList.add('has-file');
+    uploadBtn.disabled = false;
+  } else {
+    this.parentElement.textContent = '📁 Choose cookies.json';
+    this.parentElement.appendChild(this);
+    this.parentElement.classList.remove('has-file');
+    uploadBtn.disabled = true;
+  }
+});
+
+// Upload cookies
+uploadBtn.addEventListener('click', async function() {
+  const file = fileInput.files[0];
+  if (!file) {
+    showCookieError('Please select a cookies.json file first');
+    return;
+  }
+  
+  if (!file.name.endsWith('.json')) {
+    showCookieError('File must be a JSON file');
+    return;
+  }
+  
+  const formData = new FormData();
+  formData.append('cookies_file', file);
+  
+  this.textContent = '⏳ Uploading...';
   this.disabled = true;
   
   try {
-    const response = await fetch('/api/oauth/logout', {
+    const response = await fetch('/api/cookies/upload', {
+      method: 'POST',
+      body: formData
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      updateCookieStatus(true, data.username);
+      showCookieInfo(`✅ ${data.message}`);
+      // Reset file input
+      fileInput.value = '';
+      fileInput.parentElement.textContent = '📁 Choose cookies.json';
+      fileInput.parentElement.appendChild(fileInput);
+      fileInput.parentElement.classList.remove('has-file');
+    } else {
+      showCookieError(data.error || 'Upload failed');
+      updateCookieStatus(false);
+    }
+  } catch (error) {
+    showCookieError('Failed to upload: ' + error.message);
+  } finally {
+    this.textContent = '⬆ Upload';
+    this.disabled = false;
+  }
+});
+
+// Clear cookies
+clearBtn.addEventListener('click', async function() {
+  this.textContent = '⏳ Clearing...';
+  this.disabled = true;
+  
+  try {
+    const response = await fetch('/api/cookies/clear', {
       method: 'POST'
     });
     const data = await response.json();
     
-    if (data.status === 'success') {
-      updateOAuthStatus(false);
-      showError('✅ Logged out successfully');
-      setTimeout(() => clearError(), 3000);
+    if (response.ok) {
+      updateCookieStatus(false);
+      showCookieInfo('✅ Cookies cleared');
+    } else {
+      showCookieError(data.error || 'Failed to clear cookies');
     }
   } catch (error) {
-    showError(`❌ Failed to logout: ${error.message}`);
+    showCookieError('Failed to clear: ' + error.message);
   } finally {
-    this.textContent = '🚪 Logout';
+    this.textContent = '🗑️ Clear';
     this.disabled = false;
   }
 });
@@ -352,5 +439,5 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-// Check OAuth status on page load
-checkOAuthStatus();
+// Check cookie status on page load
+checkCookieStatus();

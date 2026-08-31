@@ -12,7 +12,6 @@
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
   --success: #2E7D32;
   --error: #C62828;
-  --instagram: #E1306C;
 }
 
 * { box-sizing: border-box; }
@@ -98,24 +97,20 @@ body {
   margin: 0 0 36px;
 }
 
-/* OAuth Section */
-.oauth-section {
+/* Cookie Section */
+.cookie-section {
   margin: 24px 0;
   padding: 16px 20px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
 }
 
-.oauth-status {
+.cookie-status {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
+  margin-bottom: 12px;
 }
 
 .status-indicator {
@@ -135,13 +130,47 @@ body {
   color: var(--text-muted);
 }
 
-.oauth-actions {
+.cookie-upload-area {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.oauth-btn {
+.cookie-upload-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.cookie-upload-label {
+  flex: 1;
+  padding: 10px 16px;
+  background: var(--bg);
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-muted);
+  transition: border-color 0.15s ease;
+  min-width: 200px;
+}
+
+.cookie-upload-label:hover {
+  border-color: var(--accent);
+}
+
+.cookie-upload-label input[type="file"] {
+  display: none;
+}
+
+.cookie-upload-label.has-file {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.cookie-btn {
   padding: 10px 20px;
   border: none;
   border-radius: var(--radius);
@@ -149,46 +178,48 @@ body {
   font-weight: 600;
   font-size: 14px;
   transition: all 0.15s ease;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   white-space: nowrap;
 }
 
-.instagram-btn {
-  background: var(--instagram);
-  color: white;
+.upload-btn {
+  background: var(--accent);
+  color: #fff;
 }
 
-.instagram-btn:hover {
-  background: #C13584;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(225, 48, 108, 0.3);
+.upload-btn:hover {
+  background: var(--accent-ink);
 }
 
-.logout-btn {
+.upload-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.clear-btn {
   background: var(--error);
-  color: white;
+  color: #fff;
 }
 
-.logout-btn:hover {
+.clear-btn:hover {
   background: #B71C1C;
-  color: white;
 }
 
-.user-info {
-  width: 100%;
+.cookie-upload-info {
   padding: 8px 12px;
-  background: var(--bg);
+  background: #E8F5E9;
   border-radius: var(--radius);
   font-size: 13px;
-  color: var(--text-muted);
+  color: var(--success);
+  border: 1px solid #A5D6A7;
 }
 
-.user-info strong {
-  color: var(--text);
+.cookie-upload-error {
+  padding: 8px 12px;
+  background: #FFEBEE;
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--error);
+  border: 1px solid #EF9A9A;
 }
 
 /* URL form */
@@ -530,15 +561,10 @@ body {
     justify-content: center;
   }
   
-  .oauth-section {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .oauth-actions {
+  .cookie-upload-actions {
     flex-direction: column;
   }
-  .oauth-btn {
+  .cookie-upload-label {
     width: 100%;
-    justify-content: center;
   }
 }
