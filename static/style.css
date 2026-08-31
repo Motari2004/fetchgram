@@ -146,8 +146,9 @@ html, body {
   letter-spacing: 0.05em;
   padding: 2px 10px;
   border-radius: 20px;
-  background: linear-gradient(135deg, var(--accent), #7C73FF);
+  background: var(--accent);
   color: white;
+  background: linear-gradient(135deg, var(--accent), #7C73FF);
 }
 
 .topbar-actions {
@@ -335,7 +336,7 @@ html, body {
   color: white;
 }
 
-.btn-primary:hover:not(:disabled) {
+.btn-primary:hover {
   background: var(--accent-hover);
   transform: translateY(-1px);
   box-shadow: 0 4px 20px var(--accent-glow);
@@ -351,7 +352,6 @@ html, body {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-secondary);
   border: 1px solid var(--border-color);
-  cursor: pointer;
 }
 
 .btn-ghost:hover {
@@ -490,7 +490,16 @@ html, body {
   align-items: center;
   gap: 16px;
   padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  transition: var(--transition);
   animation: slideUp 0.4s ease both;
+}
+
+.result-card:hover {
+  border-color: var(--border-light);
+  background: var(--bg-card-hover);
 }
 
 @keyframes slideUp {
