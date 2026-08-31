@@ -5,37 +5,15 @@ const errorMsg = document.getElementById("error-msg");
 const results = document.getElementById("results");
 const template = document.getElementById("result-template");
 
-// Instagram cookie elements
-const instagramIndicator = document.getElementById("instagram-indicator");
-const instagramStatusText = document.getElementById("instagram-status-text");
-const instagramUsernameDisplay = document.getElementById("instagram-username-display");
+// Cookie elements
+const cookieIndicator = document.getElementById("cookie-indicator");
+const cookieStatusText = document.getElementById("cookie-status-text");
 const fileInput = document.getElementById("cookie-file-input");
-const uploadCookieLabel = document.getElementById("upload-cookie-label");
-const clearCookieBtn = document.getElementById("clear-cookie-btn");
-const instagramUploadInfo = document.getElementById("instagram-upload-info");
-const instagramUploadError = document.getElementById("instagram-upload-error");
-
-// Bluesky elements
-const blueskyIndicator = document.getElementById("bluesky-indicator");
-const blueskyStatusText = document.getElementById("bluesky-status-text");
-const blueskyUsernameDisplay = document.getElementById("bluesky-username-display");
-const blueskyToggleBtn = document.getElementById("bluesky-toggle-btn");
-const blueskyModal = document.getElementById("bluesky-modal");
-const blueskyModalClose = document.getElementById("bluesky-modal-close");
-const blueskyIdentifierModal = document.getElementById("bluesky-identifier-modal");
-const blueskyPasswordModal = document.getElementById("bluesky-password-modal");
-const blueskyRememberModal = document.getElementById("bluesky-remember-modal");
-const blueskySaveBtn = document.getElementById("bluesky-save-btn");
-const blueskyModalStatus = document.getElementById("bluesky-modal-status");
-const clearBlueskyCredsBtn = document.getElementById("clear-bluesky-creds-btn");
-const savedCredentialsInfo = document.getElementById("saved-credentials-info");
-const blueskySection = document.getElementById("bluesky-section");
-const blueskyText = document.getElementById("bluesky-text");
-const charCount = document.getElementById("char-count");
-const blueskyPostBtn = document.getElementById("bluesky-post-btn");
-const blueskyStatus = document.getElementById("bluesky-status");
-const blueskyPostUrl = document.getElementById("bluesky-post-url");
-const blueskyConnectedBadge = document.getElementById("bluesky-connected-badge");
+const fileLabelText = document.getElementById("file-label-text");
+const uploadBtn = document.getElementById("upload-cookie-btn");
+const clearBtn = document.getElementById("clear-cookie-btn");
+const cookieInfo = document.getElementById("cookie-upload-info");
+const cookieError = document.getElementById("cookie-upload-error");
 
 // Direct URL elements
 const directUrlSection = document.getElementById("direct-url-section");
@@ -49,88 +27,119 @@ const downloadProgress = document.getElementById("download-progress");
 const progressFill = document.getElementById("progress-fill");
 const progressText = document.getElementById("progress-text");
 
+// Bluesky elements
+const blueskySection = document.getElementById('bluesky-section');
+const blueskyText = document.getElementById('bluesky-text');
+const charCount = document.getElementById('char-count');
+const blueskyIdentifier = document.getElementById('bluesky-identifier');
+const blueskyPassword = document.getElementById('bluesky-password');
+const blueskyRemember = document.getElementById('bluesky-remember');
+const blueskyPostBtn = document.getElementById('bluesky-post-btn');
+const blueskyStatus = document.getElementById('bluesky-status');
+const blueskyPostUrl = document.getElementById('bluesky-post-url');
+const savedCredentialsInfo = document.getElementById('saved-credentials-info');
+const savedCredentialsText = document.getElementById('saved-credentials-text');
+const clearBlueskyCredsBtn = document.getElementById('clear-bluesky-creds-btn');
+
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
+function setLoading(isLoading) {
+  fetchBtn.disabled = isLoading;
+  fetchBtn.querySelector(".btn-label").textContent = isLoading ? "Fetching…" : "Fetch";
+  fetchBtn.querySelector(".btn-spinner").hidden = !isLoading;
+}
 
+function showError(message) {
+  errorMsg.textContent = message;
+  errorMsg.hidden = false;
+}
 
+function clearError() {
+  errorMsg.hidden = true;
+  errorMsg.textContent = "";
+}
 
+function formatDuration(seconds) {
+  if (!seconds && seconds !== 0) return "";
+  const s = Math.round(seconds);
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}:${String(rem).padStart(2, "0")}`;
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ==================== INSTAGRAM COOKIE FUNCTIONS ====================
-
-function updateInstagramStatus(hasCookies, username) {
+function updateCookieStatus(hasCookies, username) {
   if (hasCookies) {
-    instagramIndicator.textContent = '🟢';
-    instagramIndicator.className = 'status-icon online';
-    instagramStatusText.textContent = 'Connected';
-    if (instagramUsernameDisplay) {
-      instagramUsernameDisplay.textContent = `@${username || 'Instagram User'}`;
-    }
-    clearCookieBtn.hidden = false;
-    uploadCookieLabel.textContent = '✅ Uploaded';
-    uploadCookieLabel.style.opacity = '0.7';
+    cookieIndicator.textContent = '🟢';
+    cookieIndicator.className = 'status-indicator online';
+    cookieStatusText.textContent = `Logged in as @${username || 'Instagram User'}`;
+    clearBtn.hidden = false;
+    uploadBtn.textContent = '✅ Uploaded';
+    uploadBtn.disabled = true;
     fileInput.disabled = true;
-  } else {
-    instagramIndicator.textContent = '⚪';
-    instagramIndicator.className = 'status-icon offline';
-    instagramStatusText.textContent = 'Not connected';
-    if (instagramUsernameDisplay) {
-      instagramUsernameDisplay.textContent = '';
+    if (fileLabelText) {
+      fileLabelText.textContent = '📄 cookies.json uploaded';
     }
-    clearCookieBtn.hidden = true;
-    uploadCookieLabel.textContent = '📤 Upload Cookies';
-    uploadCookieLabel.style.opacity = '1';
+  } else {
+    cookieIndicator.textContent = '⚪';
+    cookieIndicator.className = 'status-indicator offline';
+    cookieStatusText.textContent = 'No cookies uploaded';
+    clearBtn.hidden = true;
+    uploadBtn.textContent = '⬆ Upload';
+    uploadBtn.disabled = true;
     fileInput.disabled = false;
+    if (fileLabelText) {
+      fileLabelText.textContent = '📁 Choose cookies.json';
+    }
     fileInput.value = '';
   }
 }
 
-async function checkInstagramStatus() {
+async function checkCookieStatus() {
   try {
     const response = await fetch('/api/cookies/status');
     const data = await response.json();
-    updateInstagramStatus(data.has_cookies, data.username);
+    updateCookieStatus(data.has_cookies, data.username);
   } catch (error) {
-    console.error('Failed to check Instagram status:', error);
-    updateInstagramStatus(false);
+    console.error('Failed to check cookie status:', error);
+    updateCookieStatus(false);
   }
 }
 
-// Upload cookies
-uploadCookieLabel.addEventListener('click', function(e) {
-  e.preventDefault();
-  if (!fileInput.disabled) {
-    fileInput.click();
+// File input change handler
+fileInput.addEventListener('change', function() {
+  if (this.files.length > 0) {
+    const fileName = this.files[0].name;
+    if (fileLabelText) {
+      fileLabelText.textContent = `📄 ${fileName}`;
+    }
+    uploadBtn.disabled = false;
+  } else {
+    if (fileLabelText) {
+      fileLabelText.textContent = '📁 Choose cookies.json';
+    }
+    uploadBtn.disabled = true;
   }
 });
 
-fileInput.addEventListener('change', async function() {
-  const file = this.files[0];
-  if (!file) return;
+// Upload cookies
+uploadBtn.addEventListener('click', async function() {
+  const file = fileInput.files[0];
+  if (!file) {
+    showCookieError('Please select a cookies.json file first');
+    return;
+  }
   
   if (!file.name.endsWith('.json')) {
-    showInstagramError('File must be a JSON file');
+    showCookieError('File must be a JSON file');
     return;
   }
   
   const formData = new FormData();
   formData.append('cookies_file', file);
   
-  uploadCookieLabel.textContent = '⏳ Uploading...';
-  uploadCookieLabel.style.opacity = '0.7';
+  this.textContent = '⏳ Uploading...';
+  this.disabled = true;
   
   try {
     const response = await fetch('/api/cookies/upload', {
@@ -141,199 +150,78 @@ fileInput.addEventListener('change', async function() {
     const data = await response.json();
     
     if (response.ok) {
-      updateInstagramStatus(true, data.username);
-      showInstagramInfo(`✅ ${data.message}`);
+      updateCookieStatus(true, data.username);
+      showCookieInfo(`✅ ${data.message}`);
       fileInput.value = '';
+      if (fileLabelText) {
+        fileLabelText.textContent = '📁 Choose cookies.json';
+      }
     } else {
-      showInstagramError(data.error || 'Upload failed');
-      updateInstagramStatus(false);
+      showCookieError(data.error || 'Upload failed');
+      updateCookieStatus(false);
     }
   } catch (error) {
-    showInstagramError('Failed to upload: ' + error.message);
+    showCookieError('Failed to upload: ' + error.message);
   } finally {
-    uploadCookieLabel.textContent = '📤 Upload Cookies';
-    uploadCookieLabel.style.opacity = '1';
+    this.textContent = '⬆ Upload';
+    this.disabled = true;
   }
 });
 
 // Clear cookies
-clearCookieBtn.addEventListener('click', async function() {
-  this.textContent = '⏳';
+clearBtn.addEventListener('click', async function() {
+  this.textContent = '⏳ Clearing...';
   this.disabled = true;
   
   try {
-    const response = await fetch('/api/cookies/clear', { method: 'POST' });
-    const data = await response.json();
-    
-    if (response.ok) {
-      updateInstagramStatus(false);
-      showInstagramInfo('✅ Cookies cleared');
-    } else {
-      showInstagramError(data.error || 'Failed to clear cookies');
-    }
-  } catch (error) {
-    showInstagramError('Failed to clear: ' + error.message);
-  } finally {
-    this.textContent = 'Clear';
-    this.disabled = false;
-  }
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-function showInstagramInfo(message) {
-  instagramUploadInfo.textContent = message;
-  instagramUploadInfo.style.display = 'block';
-  instagramUploadError.style.display = 'none';
-  setTimeout(() => { instagramUploadInfo.style.display = 'none'; }, 5000);
-}
-
-function showInstagramError(message) {
-  instagramUploadError.textContent = '❌ ' + message;
-  instagramUploadError.style.display = 'block';
-  instagramUploadInfo.style.display = 'none';
-  setTimeout(() => { instagramUploadError.style.display = 'none'; }, 5000);
-}
-
-// ==================== BLUESKY FUNCTIONS ====================
-
-async function checkBlueskyStatus() {
-  try {
-    const response = await fetch('/api/bluesky/credentials_status');
-    const data = await response.json();
-    
-    if (data.has_credentials) {
-      blueskyIndicator.textContent = '🟢';
-      blueskyIndicator.className = 'status-icon online';
-      blueskyStatusText.textContent = 'Connected';
-      if (blueskyUsernameDisplay) {
-        blueskyUsernameDisplay.textContent = `@${data.handle || data.identifier}`;
-      }
-      blueskyConnectedBadge.hidden = false;
-      clearBlueskyCredsBtn.hidden = false;
-      if (savedCredentialsInfo) {
-        savedCredentialsInfo.textContent = `✅ Connected as @${data.handle || data.identifier}`;
-        savedCredentialsInfo.style.display = 'block';
-      }
-    } else {
-      blueskyIndicator.textContent = '⚪';
-      blueskyIndicator.className = 'status-icon offline';
-      blueskyStatusText.textContent = 'Not connected';
-      if (blueskyUsernameDisplay) {
-        blueskyUsernameDisplay.textContent = '';
-      }
-      blueskyConnectedBadge.hidden = true;
-      clearBlueskyCredsBtn.hidden = true;
-      if (savedCredentialsInfo) {
-        savedCredentialsInfo.style.display = 'none';
-      }
-    }
-  } catch (error) {
-    console.error('Failed to check Bluesky status:', error);
-  }
-}
-
-// Show modal
-blueskyToggleBtn.addEventListener('click', function() {
-  blueskyModal.hidden = false;
-  blueskyModalStatus.style.display = 'none';
-  blueskyIdentifierModal.value = '';
-  blueskyPasswordModal.value = '';
-  blueskyRememberModal.checked = true;
-});
-
-// Close modal
-blueskyModalClose.addEventListener('click', function() {
-  blueskyModal.hidden = true;
-});
-
-// Close modal on overlay click
-blueskyModal.addEventListener('click', function(e) {
-  if (e.target === this) {
-    blueskyModal.hidden = true;
-  }
-});
-
-// Save Bluesky credentials
-blueskySaveBtn.addEventListener('click', async function() {
-  const identifier = blueskyIdentifierModal.value.trim();
-  const password = blueskyPasswordModal.value.trim();
-  const remember = blueskyRememberModal.checked;
-  
-  if (!identifier || !password) {
-    blueskyModalStatus.textContent = '❌ Please enter both handle and password';
-    blueskyModalStatus.className = 'status-message error';
-    blueskyModalStatus.style.display = 'block';
-    return;
-  }
-  
-  this.textContent = '⏳ Saving...';
-  this.disabled = true;
-  
-  try {
-    const response = await fetch('/api/bluesky/save_credentials', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier, password, remember })
+    const response = await fetch('/api/cookies/clear', {
+      method: 'POST'
     });
-    
     const data = await response.json();
     
     if (response.ok) {
-      blueskyModalStatus.textContent = `✅ ${data.message}`;
-      blueskyModalStatus.className = 'status-message success';
-      blueskyModalStatus.style.display = 'block';
-      setTimeout(() => {
-        blueskyModal.hidden = true;
-        checkBlueskyStatus();
-      }, 1500);
+      updateCookieStatus(false);
+      showCookieInfo('✅ Cookies cleared');
     } else {
-      blueskyModalStatus.textContent = `❌ ${data.error}`;
-      blueskyModalStatus.className = 'status-message error';
-      blueskyModalStatus.style.display = 'block';
+      showCookieError(data.error || 'Failed to clear cookies');
     }
   } catch (error) {
-    blueskyModalStatus.textContent = `❌ ${error.message}`;
-    blueskyModalStatus.className = 'status-message error';
-    blueskyModalStatus.style.display = 'block';
+    showCookieError('Failed to clear: ' + error.message);
   } finally {
-    this.textContent = 'Save Connection';
+    this.textContent = '🗑️ Clear';
     this.disabled = false;
   }
 });
 
-// Clear Bluesky credentials
-clearBlueskyCredsBtn.addEventListener('click', async function() {
-  this.textContent = '⏳';
-  this.disabled = true;
-  
-  try {
-    const response = await fetch('/api/bluesky/clear_credentials', { method: 'POST' });
-    const data = await response.json();
-    
-    if (response.ok) {
-      checkBlueskyStatus();
-      showBlueskyStatus('✅ Credentials cleared', 'success');
-    }
-  } catch (error) {
-    console.error('Failed to clear credentials:', error);
-  } finally {
-    this.textContent = 'Clear';
-    this.disabled = false;
+function showCookieInfo(message) {
+  if (cookieInfo) {
+    cookieInfo.hidden = false;
+    cookieInfo.textContent = message;
   }
-});
+  if (cookieError) {
+    cookieError.hidden = true;
+  }
+  setTimeout(() => {
+    if (cookieInfo) {
+      cookieInfo.hidden = true;
+    }
+  }, 5000);
+}
+
+function showCookieError(message) {
+  if (cookieError) {
+    cookieError.hidden = false;
+    cookieError.textContent = '❌ ' + message;
+  }
+  if (cookieInfo) {
+    cookieInfo.hidden = true;
+  }
+  setTimeout(() => {
+    if (cookieError) {
+      cookieError.hidden = true;
+    }
+  }, 5000);
+}
 
 // Character counter for Bluesky
 if (blueskyText) {
@@ -349,9 +237,9 @@ function showBlueskySection() {
 }
 
 function showBlueskyStatus(message, type, postUrl) {
+  blueskyStatus.hidden = false;
   blueskyStatus.textContent = message;
-  blueskyStatus.className = 'status-message ' + type;
-  blueskyStatus.style.display = 'block';
+  blueskyStatus.className = 'bluesky-status' + (type ? ' ' + type : '');
   
   if (postUrl) {
     blueskyPostUrl.hidden = false;
@@ -359,13 +247,74 @@ function showBlueskyStatus(message, type, postUrl) {
   } else {
     blueskyPostUrl.hidden = true;
   }
-  
-  setTimeout(() => {
-    blueskyStatus.style.display = 'none';
-  }, 8000);
 }
 
-// Post to Bluesky
+// Check for saved Bluesky credentials on load
+async function checkBlueskyCredentials() {
+  try {
+    const response = await fetch('/api/bluesky/credentials_status');
+    const data = await response.json();
+    
+    if (data.has_credentials) {
+      // Fill in the identifier field
+      if (blueskyIdentifier) {
+        blueskyIdentifier.value = data.identifier;
+        blueskyIdentifier.disabled = true;
+      }
+      if (blueskyPassword) {
+        blueskyPassword.disabled = true;
+        blueskyPassword.placeholder = '•••••••• (saved)';
+      }
+      if (blueskyRemember) {
+        blueskyRemember.checked = true;
+      }
+      
+      // Show saved credentials info
+      if (savedCredentialsInfo) {
+        savedCredentialsInfo.hidden = false;
+        if (savedCredentialsText) {
+          savedCredentialsText.textContent = `✅ Credentials saved for @${data.handle || data.identifier}`;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to check Bluesky credentials:', error);
+  }
+}
+
+// Clear saved Bluesky credentials
+async function clearBlueskyCredentials() {
+  try {
+    const response = await fetch('/api/bluesky/clear_credentials', {
+      method: 'POST'
+    });
+    const data = await response.json();
+    
+    if (response.ok) {
+      if (savedCredentialsInfo) {
+        savedCredentialsInfo.hidden = true;
+      }
+      if (blueskyIdentifier) {
+        blueskyIdentifier.disabled = false;
+        blueskyIdentifier.value = '';
+      }
+      if (blueskyPassword) {
+        blueskyPassword.disabled = false;
+        blueskyPassword.value = '';
+        blueskyPassword.placeholder = 'Your Bluesky app password';
+      }
+      if (blueskyRemember) {
+        blueskyRemember.checked = true;
+      }
+      showBlueskyStatus('✅ Credentials cleared', 'success');
+    }
+  } catch (error) {
+    console.error('Failed to clear credentials:', error);
+    showBlueskyStatus('❌ Failed to clear credentials', 'error');
+  }
+}
+
+// Bluesky Post
 blueskyPostBtn.addEventListener('click', async function() {
   const text = blueskyText.value.trim() || 'Check out this video! 🎬';
   
@@ -379,8 +328,39 @@ blueskyPostBtn.addEventListener('click', async function() {
     return;
   }
   
+  let identifier = blueskyIdentifier.value.trim();
+  let password = blueskyPassword.value.trim();
+  
+  // If credentials are disabled but we have saved ones, use those
+  if (blueskyIdentifier.disabled && !identifier) {
+    // Get from saved
+    try {
+      const statusResponse = await fetch('/api/bluesky/credentials_status');
+      const statusData = await statusResponse.json();
+      if (statusData.has_credentials) {
+        identifier = statusData.identifier;
+        // Password will be retrieved server-side
+      }
+    } catch (e) {
+      showBlueskyStatus('Error retrieving saved credentials', 'error');
+      return;
+    }
+  }
+  
+  if (!identifier) {
+    showBlueskyStatus('Please enter your Bluesky handle.', 'error');
+    return;
+  }
+  
+  if (!password && !blueskyPassword.disabled) {
+    showBlueskyStatus('Please enter your Bluesky password.', 'error');
+    return;
+  }
+  
+  const remember = blueskyRemember ? blueskyRemember.checked : true;
+  
+  this.textContent = '⏳ Posting...';
   this.disabled = true;
-  this.innerHTML = '<span class="btn-spinner"></span> Posting...';
   showBlueskyStatus('⏳ Uploading video to Bluesky... This may take a moment.', 'info');
   
   try {
@@ -390,31 +370,58 @@ blueskyPostBtn.addEventListener('click', async function() {
       body: JSON.stringify({
         url: currentVideoUrl,
         text: text,
-        remember: true
+        identifier: identifier,
+        password: password || undefined,
+        remember: remember
       })
     });
     
     const data = await response.json();
     
     if (response.ok) {
-      const postUrl = `https://bsky.app/profile/${data.post_uri?.split('/').slice(0, -1).join('/') || 'bsky'}/post/${data.post_id}`;
+      const postUrl = `https://bsky.app/profile/${identifier}/post/${data.post_id}`;
       showBlueskyStatus(
         `✅ ${data.message}`,
         'success',
         postUrl
       );
+      
+      // If credentials were saved, update the UI
+      if (data.saved) {
+        if (savedCredentialsInfo) {
+          savedCredentialsInfo.hidden = false;
+          if (savedCredentialsText) {
+            savedCredentialsText.textContent = `✅ Credentials saved for @${identifier}`;
+          }
+        }
+        if (blueskyIdentifier) {
+          blueskyIdentifier.disabled = true;
+          blueskyIdentifier.value = identifier;
+        }
+        if (blueskyPassword) {
+          blueskyPassword.disabled = true;
+          blueskyPassword.value = '';
+          blueskyPassword.placeholder = '•••••••• (saved)';
+        }
+        if (blueskyRemember) {
+          blueskyRemember.checked = true;
+        }
+      }
     } else {
-      showBlueskyStatus(`❌ ${data.error || 'Unknown error'}`, 'error');
+      showBlueskyStatus(`❌ Error: ${data.error || 'Unknown error'}`, 'error');
     }
   } catch (error) {
-    showBlueskyStatus(`❌ ${error.message}`, 'error');
+    showBlueskyStatus(`❌ Error: ${error.message}`, 'error');
   } finally {
-    this.innerHTML = '📤 Post to Bluesky';
+    this.textContent = '📤 Post to Bluesky';
     this.disabled = false;
   }
 });
 
-// ==================== DOWNLOAD FUNCTIONS ====================
+// Clear credentials button handler
+if (clearBlueskyCredsBtn) {
+  clearBlueskyCredsBtn.addEventListener('click', clearBlueskyCredentials);
+}
 
 function downloadVideo(url, filename) {
   if (!url) {
@@ -424,7 +431,7 @@ function downloadVideo(url, filename) {
   
   downloadProgress.hidden = false;
   progressFill.style.width = '0%';
-  progressText.textContent = '0%';
+  progressText.textContent = 'Starting download...';
   
   const safeFilename = (filename || 'instagram_video')
     .replace(/[^a-zA-Z0-9]/g, '_')
@@ -437,6 +444,8 @@ function downloadVideo(url, filename) {
       const contentLength = response.headers.get('content-length');
       const total = parseInt(contentLength, 10);
       let loaded = 0;
+      
+      progressText.textContent = 'Downloading...';
       
       const reader = response.body.getReader();
       const stream = new ReadableStream({
@@ -451,7 +460,7 @@ function downloadVideo(url, filename) {
               if (total) {
                 const percent = Math.round((loaded / total) * 100);
                 progressFill.style.width = percent + '%';
-                progressText.textContent = percent + '%';
+                progressText.textContent = `Downloading... ${percent}%`;
               }
               controller.enqueue(value);
               push();
@@ -466,8 +475,8 @@ function downloadVideo(url, filename) {
       }).blob();
     })
     .then(blob => {
+      progressText.textContent = 'Download complete!';
       progressFill.style.width = '100%';
-      progressText.textContent = '100%';
       
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -484,7 +493,7 @@ function downloadVideo(url, filename) {
     })
     .catch(error => {
       console.error('Download failed:', error);
-      progressText.textContent = 'Failed';
+      progressText.textContent = 'Download failed, opening in new tab...';
       setTimeout(() => {
         window.open(url, '_blank');
         downloadProgress.hidden = true;
@@ -492,25 +501,22 @@ function downloadVideo(url, filename) {
     });
 }
 
-// ==================== RESULTS FUNCTIONS ====================
-
 function renderResults(items, sourceUrl) {
   results.innerHTML = "";
   results.hidden = false;
   directUrlSection.hidden = true;
   videoPreview.hidden = true;
   downloadProgress.hidden = true;
-  blueskySection.hidden = true;
 
   items.forEach((item) => {
     const node = template.content.cloneNode(true);
 
-    const img = node.querySelector(".result-thumb img");
+    const img = node.querySelector(".thumb img");
     if (item.thumbnail) {
       img.src = item.thumbnail;
       img.alt = item.title || "Video thumbnail";
     } else {
-      img.closest(".result-thumb").style.display = "none";
+      img.closest(".thumb").style.display = "none";
     }
 
     node.querySelector(".meta-title").textContent = item.title || "Instagram video";
@@ -558,7 +564,7 @@ function showDirectUrl(url, item) {
     if (item.title) infoHtml += `<p><strong>Title:</strong> ${item.title}</p>`;
     if (item.duration) infoHtml += `<p><strong>Duration:</strong> ${formatDuration(item.duration)}</p>`;
     
-    videoInfo.innerHTML = infoHtml + `<button id="video-download-btn" class="btn btn-success btn-block">⬇ Download Video</button>`;
+    videoInfo.innerHTML = infoHtml + `<button id="video-download-btn" class="copy-btn video-download-btn">⬇ Download Video</button>`;
     
     document.getElementById('video-download-btn').addEventListener('click', function() {
       if (currentVideoUrl) {
@@ -567,64 +573,34 @@ function showDirectUrl(url, item) {
     });
   }
   
+  // Show Bluesky section
   showBlueskySection();
 }
 
-function formatDuration(seconds) {
-  if (!seconds && seconds !== 0) return "";
-  const s = Math.round(seconds);
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
-  return `${m}:${String(rem).padStart(2, "0")}`;
-}
-
-function showError(message) {
-  errorMsg.textContent = message;
-  errorMsg.hidden = false;
-}
-
-function clearError() {
-  errorMsg.hidden = true;
-  errorMsg.textContent = "";
-}
-
-function setLoading(isLoading) {
-  fetchBtn.disabled = isLoading;
-  const label = fetchBtn.querySelector(".btn-label");
-  const spinner = fetchBtn.querySelector(".btn-spinner");
-  if (isLoading) {
-    label.textContent = "Fetching...";
-    spinner.hidden = false;
-  } else {
-    label.textContent = "Fetch";
-    spinner.hidden = true;
-  }
-}
-
-// ==================== EVENT LISTENERS ====================
-
-// Copy URL
+// Copy URL handler
 copyBtn.addEventListener('click', async function() {
   const url = directUrlDisplay.value;
   if (!url) return;
   
   try {
     await navigator.clipboard.writeText(url);
-    this.innerHTML = '✅ Copied!';
+    this.textContent = '✅ Copied!';
+    this.classList.add('copied');
     setTimeout(() => {
-      this.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 5V3C5 2.46957 5.21071 1.96086 5.58579 1.58579C5.96086 1.21071 6.46957 1 7 1H13C13.5304 1 14.0391 1.21071 14.4142 1.58579C14.7893 1.96086 15 2.46957 15 3V9C15 9.53043 14.7893 10.0391 14.4142 10.4142C14.0391 10.7893 13.5304 11 13 11H11M3 15H9C9.53043 15 10.0391 14.7893 10.4142 14.4142C10.7893 14.0391 11 13.5304 11 13V7C11 6.46957 10.7893 5.96086 10.4142 5.58579C10.0391 5.21071 9.53043 5 9 5H3C2.46957 5 1.96086 5.21071 1.58579 5.58579C1.21071 5.96086 1 6.46957 1 7V13C1 13.5304 1.21071 14.0391 1.58579 14.4142C1.21071 14.7893 2.46957 15 3 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Copy';
+      this.textContent = '📋 Copy';
+      this.classList.remove('copied');
     }, 2000);
   } catch {
     directUrlDisplay.select();
     document.execCommand('copy');
-    this.innerHTML = '✅ Copied!';
+    this.textContent = '✅ Copied!';
     setTimeout(() => {
-      this.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 5V3C5 2.46957 5.21071 1.96086 5.58579 1.58579C5.96086 1.21071 6.46957 1 7 1H13C13.5304 1 14.0391 1.21071 14.4142 1.58579C14.7893 1.96086 15 2.46957 15 3V9C15 9.53043 14.7893 10.0391 14.4142 10.4142C14.0391 10.7893 13.5304 11 13 11H11M3 15H9C9.53043 15 10.0391 14.7893 10.4142 14.4142C10.7893 14.0391 11 13.5304 11 13V7C11 6.46957 10.7893 5.96086 10.4142 5.58579C10.0391 5.21071 9.53043 5 9 5H3C2.46957 5 1.96086 5.21071 1.58579 5.58579C1.21071 5.96086 1 6.46957 1 7V13C1 13.5304 1.21071 14.0391 1.58579 14.4142C1.21071 14.7893 2.46957 15 3 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Copy';
+      this.textContent = '📋 Copy';
     }, 2000);
   }
 });
 
-// Direct Download
+// Direct Download button
 directDownloadBtn.addEventListener('click', function() {
   if (currentVideoUrl) {
     downloadVideo(currentVideoUrl, currentVideoItem?.title || 'instagram_video');
@@ -698,8 +674,8 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-// ==================== INIT ====================
+// Check cookie status on page load
+checkCookieStatus();
 
-// Check both statuses on page load
-checkInstagramStatus();
-checkBlueskyStatus();
+// Check Bluesky credentials on page load
+checkBlueskyCredentials();
