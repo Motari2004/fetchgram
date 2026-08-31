@@ -279,13 +279,9 @@ form.addEventListener("submit", async (e) => {
       const item = data.video_info || { title: "Instagram video" };
       renderResults([item], data.url);
       
-      // Show the direct URL and auto-download after a short delay
+      // Show the direct URL and preview (NO AUTO-DOWNLOAD)
       setTimeout(() => {
         showDirectUrl(data.download_url, item);
-        // Auto-download after showing
-        setTimeout(() => {
-          downloadVideo(data.download_url, item.title || 'instagram_video');
-        }, 800);
       }, 100);
     } else if (data.items) {
       renderResults(data.items, data.source_url);
