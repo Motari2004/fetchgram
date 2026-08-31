@@ -52,6 +52,22 @@ const progressText = document.getElementById("progress-text");
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ==================== INSTAGRAM COOKIE FUNCTIONS ====================
 
 function updateInstagramStatus(hasCookies, username) {
@@ -63,8 +79,9 @@ function updateInstagramStatus(hasCookies, username) {
       instagramUsernameDisplay.textContent = `@${username || 'Instagram User'}`;
     }
     clearCookieBtn.hidden = false;
-    uploadCookieLabel.textContent = '✅ Uploaded';
+    uploadCookieLabel.innerHTML = '✅ Connected';
     uploadCookieLabel.style.opacity = '0.7';
+    uploadCookieLabel.style.pointerEvents = 'none';
     fileInput.disabled = true;
   } else {
     instagramIndicator.textContent = '⚪';
@@ -74,8 +91,12 @@ function updateInstagramStatus(hasCookies, username) {
       instagramUsernameDisplay.textContent = '';
     }
     clearCookieBtn.hidden = true;
-    uploadCookieLabel.textContent = '📤 Upload Cookies';
+    uploadCookieLabel.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Upload Cookies
+    `;
     uploadCookieLabel.style.opacity = '1';
+    uploadCookieLabel.style.pointerEvents = 'auto';
     fileInput.disabled = false;
     fileInput.value = '';
   }
@@ -83,6 +104,16 @@ function updateInstagramStatus(hasCookies, username) {
 
 async function checkInstagramStatus() {
   try {
+    // First check saved cookies
+    const savedResponse = await fetch('/api/instagram/cookies_status');
+    const savedData = await savedResponse.json();
+    
+    if (savedData.has_cookies) {
+      updateInstagramStatus(true, savedData.username);
+      return;
+    }
+    
+    // Then check current session
     const response = await fetch('/api/cookies/status');
     const data = await response.json();
     updateInstagramStatus(data.has_cookies, data.username);
@@ -92,14 +123,7 @@ async function checkInstagramStatus() {
   }
 }
 
-// Upload cookies
-uploadCookieLabel.addEventListener('click', function(e) {
-  e.preventDefault();
-  if (!fileInput.disabled) {
-    fileInput.click();
-  }
-});
-
+// Upload cookies - with persistence
 fileInput.addEventListener('change', async function() {
   const file = this.files[0];
   if (!file) return;
@@ -109,43 +133,64 @@ fileInput.addEventListener('change', async function() {
     return;
   }
   
-  const formData = new FormData();
-  formData.append('cookies_file', file);
-  
-  uploadCookieLabel.textContent = '⏳ Uploading...';
-  uploadCookieLabel.style.opacity = '0.7';
-  
   try {
-    const response = await fetch('/api/cookies/upload', {
+    const content = await file.text();
+    const cookiesData = JSON.parse(content);
+    
+    if (!Array.isArray(cookiesData)) {
+      showInstagramError('Invalid cookie format - expected an array');
+      return;
+    }
+    
+    // Check for session cookies
+    const hasSession = cookiesData.some(cookie => 
+      cookie && typeof cookie === 'object' && 
+      (cookie.name === 'sessionid' || cookie.name === 'ds_user_id')
+    );
+    
+    if (!hasSession) {
+      showInstagramError('No session cookies found. Make sure you\'re logged into Instagram.');
+      return;
+    }
+    
+    // Save persistently
+    uploadCookieLabel.innerHTML = '⏳ Saving...';
+    uploadCookieLabel.style.opacity = '0.7';
+    
+    const saveResponse = await fetch('/api/instagram/save_cookies', {
       method: 'POST',
-      body: formData
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cookies: cookiesData, remember: true })
     });
     
-    const data = await response.json();
+    const saveData = await saveResponse.json();
     
-    if (response.ok) {
-      updateInstagramStatus(true, data.username);
-      showInstagramInfo(`✅ ${data.message}`);
+    if (saveResponse.ok) {
+      updateInstagramStatus(true, saveData.username);
+      showInstagramInfo(`✅ ${saveData.message}`);
       fileInput.value = '';
     } else {
-      showInstagramError(data.error || 'Upload failed');
+      showInstagramError(saveData.error || 'Failed to save cookies');
       updateInstagramStatus(false);
     }
   } catch (error) {
-    showInstagramError('Failed to upload: ' + error.message);
+    showInstagramError('Failed to process cookies: ' + error.message);
   } finally {
-    uploadCookieLabel.textContent = '📤 Upload Cookies';
+    uploadCookieLabel.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Upload Cookies
+    `;
     uploadCookieLabel.style.opacity = '1';
   }
 });
 
-// Clear cookies
+// Clear cookies - with persistence
 clearCookieBtn.addEventListener('click', async function() {
   this.textContent = '⏳';
   this.disabled = true;
   
   try {
-    const response = await fetch('/api/cookies/clear', { method: 'POST' });
+    const response = await fetch('/api/instagram/clear_cookies', { method: 'POST' });
     const data = await response.json();
     
     if (response.ok) {
@@ -161,6 +206,25 @@ clearCookieBtn.addEventListener('click', async function() {
     this.disabled = false;
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function showInstagramInfo(message) {
   instagramUploadInfo.textContent = message;

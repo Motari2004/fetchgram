@@ -43,13 +43,55 @@ def is_valid_instagram_url(url: str) -> bool:
 
 def get_cookie_file():
     """Get cookies from session, environment variable, or file."""
-    # PRIORITY 1: Check if we have uploaded cookies
+    # PRIORITY 1: Check if we have encrypted Instagram cookies (persistent)
+    encrypted_instagram = session.get('instagram_encrypted')
+    if encrypted_instagram:
+        try:
+            decrypted = decrypt_credentials(encrypted_instagram)
+            if decrypted:
+                # decrypted returns (data, type) where data is the cookie data
+                cookie_data = decrypted[0]
+                if isinstance(cookie_data, str) and cookie_data.startswith('['):
+                    cookie_data = json.loads(cookie_data)
+                elif isinstance(cookie_data, dict):
+                    cookie_data = cookie_data.get('data', [])
+                
+                # Get username for filename
+                username = session.get('instagram_username', 'default')
+                cookie_file = os.path.join('/tmp', f'instagram_cookies_{username}.txt')
+                
+                # Write cookies to file
+                with open(cookie_file, 'w') as f:
+                    f.write("# Netscape HTTP Cookie File\n")
+                    for cookie in cookie_data:
+                        if isinstance(cookie, dict):
+                            domain = cookie.get('domain', '')
+                            flag = 'TRUE' if cookie.get('hostOnly') != True else 'FALSE'
+                            path = cookie.get('path', '/')
+                            secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                            expiry = cookie.get('expirationDate')
+                            if expiry is None:
+                                expiry = cookie.get('expiry', 0)
+                            expiry = str(int(expiry) if expiry else '0')
+                            name = cookie.get('name', '')
+                            value = cookie.get('value', '')
+                            if not name or not domain:
+                                continue
+                            f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+                
+                session['cookie_file'] = cookie_file
+                app.logger.info(f"Using persistent Instagram cookies from: {cookie_file}")
+                return cookie_file
+        except Exception as e:
+            app.logger.error(f"Failed to decrypt Instagram cookies: {e}")
+    
+    # PRIORITY 2: Check if we have uploaded cookies (session)
     cookie_file = session.get('cookie_file')
     if cookie_file and os.path.exists(cookie_file):
         app.logger.info(f"Using uploaded cookies from: {cookie_file}")
         return cookie_file
     
-    # PRIORITY 2: Check environment variable (Vercel)
+    # PRIORITY 3: Check environment variable (Vercel)
     cookies_json_env = os.environ.get('COOKIES_JSON')
     if cookies_json_env:
         try:
@@ -81,7 +123,7 @@ def get_cookie_file():
         except Exception as e:
             app.logger.error(f"Failed to parse COOKIES_JSON: {e}")
     
-    # PRIORITY 3: Check for cookies.json file
+    # PRIORITY 4: Check for cookies.json file
     cookie_json_path = os.path.join(os.getcwd(), 'cookies.json')
     if os.path.exists(cookie_json_path):
         try:
@@ -279,18 +321,36 @@ def get_encryption_key():
 
 
 def encrypt_credentials(identifier, password):
-    """Encrypt Bluesky credentials."""
+    """Encrypt credentials (can be string or dict)."""
     try:
         key = get_encryption_key()
         f = Fernet(key)
         
-        data = json.dumps({
-            'identifier': identifier,
-            'password': password,
-            'timestamp': time.time()
-        }).encode()
+        # If password is a string that looks like JSON, parse it
+        if isinstance(password, str) and password.startswith('['):
+            try:
+                data = json.loads(password)
+                data_dict = {
+                    'type': 'cookies',
+                    'data': data,
+                    'timestamp': time.time()
+                }
+            except:
+                data_dict = {
+                    'type': 'credentials',
+                    'identifier': identifier,
+                    'password': password,
+                    'timestamp': time.time()
+                }
+        else:
+            data_dict = {
+                'type': 'credentials',
+                'identifier': identifier,
+                'password': password,
+                'timestamp': time.time()
+            }
         
-        encrypted = f.encrypt(data)
+        encrypted = f.encrypt(json.dumps(data_dict).encode())
         return base64.urlsafe_b64encode(encrypted).decode()
     except Exception as e:
         app.logger.error(f"Encryption failed: {e}")
@@ -298,7 +358,7 @@ def encrypt_credentials(identifier, password):
 
 
 def decrypt_credentials(encrypted_data):
-    """Decrypt Bluesky credentials."""
+    """Decrypt credentials."""
     try:
         key = get_encryption_key()
         f = Fernet(key)
@@ -311,7 +371,11 @@ def decrypt_credentials(encrypted_data):
         if time.time() - data.get('timestamp', 0) > 30 * 24 * 60 * 60:
             return None
         
-        return data['identifier'], data['password']
+        # Handle different types
+        if data.get('type') == 'cookies':
+            return json.dumps(data.get('data', [])), 'cookies'
+        else:
+            return data.get('identifier'), data.get('password')
     except Exception as e:
         app.logger.error(f"Decryption failed: {e}")
         return None
@@ -1027,6 +1091,138 @@ def api_status():
         "download_history_count": len(download_history),
         "recent_downloads": download_history[-10:]
     })
+
+
+
+
+
+
+
+
+
+@app.route("/api/instagram/save_cookies", methods=["POST"])
+def save_instagram_cookies():
+    """Save Instagram cookies persistently."""
+    data = request.get_json(silent=True) or {}
+    cookies_data = data.get("cookies", [])
+    remember = data.get("remember", True)
+    
+    if not cookies_data:
+        return jsonify({"error": "No cookies provided"}), 400
+    
+    try:
+        # Encrypt and store cookies
+        if remember:
+            cookies_json = json.dumps(cookies_data)
+            encrypted = encrypt_credentials(cookies_json, "instagram_cookies")
+            if encrypted:
+                session['instagram_encrypted'] = encrypted
+                
+                # Extract username
+                username = None
+                for cookie in cookies_data:
+                    if isinstance(cookie, dict) and cookie.get('name') == 'ds_user':
+                        username = cookie.get('value')
+                        break
+                    if isinstance(cookie, dict) and cookie.get('name') == 'sessionid':
+                        value = cookie.get('value', '')
+                        if '%3A' in value:
+                            username = value.split('%3A')[0]
+                        elif ':' in value:
+                            username = value.split(':')[0]
+                        break
+                
+                session['instagram_username'] = username or 'Instagram User'
+                session['instagram_saved'] = True
+                
+                # Also write to cookie file for immediate use
+                cookie_file = os.path.join('/tmp', f'instagram_cookies_persistent.txt')
+                with open(cookie_file, 'w') as f:
+                    f.write("# Netscape HTTP Cookie File\n")
+                    for cookie in cookies_data:
+                        if isinstance(cookie, dict):
+                            domain = cookie.get('domain', '')
+                            flag = 'TRUE' if cookie.get('hostOnly') != True else 'FALSE'
+                            path = cookie.get('path', '/')
+                            secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                            expiry = cookie.get('expirationDate')
+                            if expiry is None:
+                                expiry = cookie.get('expiry', 0)
+                            expiry = str(int(expiry) if expiry else '0')
+                            name = cookie.get('name', '')
+                            value = cookie.get('value', '')
+                            if not name or not domain:
+                                continue
+                            f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+                
+                session['cookie_file'] = cookie_file
+                
+                return jsonify({
+                    "status": "success",
+                    "message": "Cookies saved successfully!",
+                    "username": username
+                })
+        
+        return jsonify({"status": "error", "error": "Failed to save cookies"}), 500
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/instagram/cookies_status", methods=["GET"])
+def instagram_cookies_status():
+    """Check if Instagram cookies are saved."""
+    encrypted = session.get('instagram_encrypted')
+    
+    if encrypted:
+        try:
+            decrypted = decrypt_credentials(encrypted)
+            if decrypted:
+                return jsonify({
+                    "status": "success",
+                    "has_cookies": True,
+                    "username": session.get('instagram_username', 'Instagram User'),
+                    "message": "Cookies are saved and valid"
+                })
+        except:
+            pass
+    
+    return jsonify({
+        "status": "success",
+        "has_cookies": False,
+        "message": "No saved cookies found"
+    })
+
+
+@app.route("/api/instagram/clear_cookies", methods=["POST"])
+def clear_instagram_cookies():
+    """Clear saved Instagram cookies."""
+    session.pop('instagram_encrypted', None)
+    session.pop('instagram_username', None)
+    session.pop('instagram_saved', None)
+    session.pop('cookie_file', None)
+    
+    # Remove any cookie files
+    for file in ['cookies_netscape.txt', 'instagram_cookies_persistent.txt']:
+        path = os.path.join('/tmp', file)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except:
+                pass
+    
+    return jsonify({
+        "status": "success",
+        "message": "Instagram cookies cleared successfully"
+    })
+
+
+
+
+
+
+
+
 
 
 @app.route("/api/debug/cookies", methods=["GET"])
