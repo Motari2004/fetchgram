@@ -69,11 +69,6 @@ const cookieUploadStatus = document.getElementById('cookie-upload-status');
 const allUsernamesSection = document.getElementById('all-usernames-section');
 const allUsernamesList = document.getElementById('all-usernames-list');
 
-// Delete Profile elements
-const deleteUsernameInput = document.getElementById('delete-username-input');
-const deleteProfileBtn = document.getElementById('delete-profile-btn');
-const deleteProfileStatus = document.getElementById('delete-profile-status');
-
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
@@ -534,57 +529,9 @@ function showScrapedStatus(message, type) {
   }, 8000);
 }
 
-// ==================== UPDATE DELETE PROFILE LIST ====================
-
-function updateDeleteProfileList() {
-  const list = document.getElementById('delete-profile-list');
-  const countBadge = document.getElementById('delete-count-badge');
-  const listCount = document.getElementById('delete-list-count');
-  
-  // Use already loaded data from window.scrapedData
-  const profiles = window.scrapedData || [];
-  
-  if (profiles.length === 0) {
-    if (list) list.innerHTML = `<div class="empty-state">No profiles found in database. Click "Load Results" to fetch data.</div>`;
-    if (countBadge) countBadge.textContent = '0 profiles';
-    if (listCount) listCount.textContent = '0 profiles';
-    return;
-  }
-  
-  // Update badges
-  if (countBadge) countBadge.textContent = `${profiles.length} profiles`;
-  if (listCount) listCount.textContent = `${profiles.length} profiles`;
-  
-  // Build HTML
-  let html = '';
-  
-  profiles.forEach((profile) => {
-    const username = profile.username || 'unknown';
-    const reelCount = (profile.reels || []).length;
-    const status = profile.status || 'ok';
-    const statusClass = status === 'ok' ? 'ok' : 
-                        (status === 'no_reels_found' || status === 'private') ? 'warn' : 'err';
-    
-    html += `
-      <div class="delete-profile-item" id="delete-item-${username}">
-        <div class="delete-profile-item-info">
-          <span class="delete-profile-item-username">👤 @${escapeHtml(username)}</span>
-          <span class="status-badge-sm ${statusClass}">${escapeHtml(status)}</span>
-          <span class="delete-profile-item-reels">📹 ${reelCount}</span>
-        </div>
-        <button class="btn-danger-sm" onclick="event.stopPropagation(); deleteProfile('${escapeHtml(username)}')">
-          🗑️ Delete
-        </button>
-      </div>
-    `;
-  });
-  
-  if (list) list.innerHTML = html;
-}
-
 // ==================== DELETE FUNCTIONS ====================
 
-// Delete profile function (called from both input and list buttons)
+// Delete profile function (called from 🗑️ buttons on profile cards)
 async function deleteProfile(username) {
   if (!confirm(`⚠️ Permanently delete ALL data for @${username} from the database?`)) {
     return;
@@ -612,9 +559,6 @@ async function deleteProfile(username) {
       
       window.allUsernames = window.allUsernames?.filter(u => u !== username) || [];
       
-      // Update the delete list instantly
-      updateDeleteProfileList();
-      
       showScrapedStatus(
         `✅ Permanently deleted @${username} (${data.deleted_count || 0} jobs removed from database)`, 
         'success'
@@ -631,84 +575,6 @@ async function deleteProfile(username) {
   } catch (error) {
     console.error('Delete error:', error);
     showScrapedStatus(`❌ Failed to delete: ${error.message}`, 'error');
-  }
-}
-
-// Delete profile from the dedicated input section
-deleteProfileBtn?.addEventListener('click', async function() {
-  const username = deleteUsernameInput.value.trim();
-  
-  if (!username) {
-    showDeleteStatus('❌ Please enter a username to delete', 'error');
-    return;
-  }
-  
-  if (!confirm(`⚠️ Permanently delete ALL data for @${username} from the database?`)) {
-    return;
-  }
-  
-  showDeleteStatus(`🗑️ Permanently deleting @${username} from database...`, 'info');
-  this.disabled = true;
-  this.innerHTML = '<span class="btn-spinner"></span> Deleting...';
-  
-  try {
-    const response = await fetch('/api/scraped/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ username: username })
-    });
-    
-    const data = await response.json();
-    console.log('Delete response:', data);
-    
-    if (response.ok && data.status === 'success') {
-      showDeleteStatus(`✅ Permanently deleted @${username} (${data.deleted_count || 0} jobs removed)`, 'success');
-      deleteUsernameInput.value = '';
-      
-      // Remove from UI data immediately
-      if (window.scrapedData) {
-        window.scrapedData = window.scrapedData.filter(p => p.username !== username);
-        renderScrapedResults(window.scrapedData);
-      }
-      
-      window.allUsernames = window.allUsernames?.filter(u => u !== username) || [];
-      
-      // Update the delete list instantly
-      updateDeleteProfileList();
-      
-      // Refresh the scraped data to confirm (with delay)
-      setTimeout(() => {
-        autoLoadScrapedResults();
-      }, 1500);
-      
-    } else {
-      showDeleteStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
-    }
-  } catch (error) {
-    console.error('Delete error:', error);
-    showDeleteStatus(`❌ Failed to delete: ${error.message}`, 'error');
-  } finally {
-    this.disabled = false;
-    this.innerHTML = `
-      <span class="btn-content">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-          <path d="M3 5H15M7 5V3C7 2.44772 7.44772 2 8 2H10C10.5523 2 11 2.44772 11 3V5M6 5V15C6 15.5523 6.44772 16 7 16H11C11.5523 16 12 15.5523 12 15V5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        Delete Profile
-      </span>
-    `;
-  }
-});
-
-function showDeleteStatus(message, type) {
-  deleteProfileStatus.textContent = message;
-  deleteProfileStatus.className = 'status-message ' + type;
-  deleteProfileStatus.style.display = 'block';
-  if (type !== 'error') {
-    setTimeout(() => {
-      deleteProfileStatus.style.display = 'none';
-    }, 8000);
   }
 }
 
@@ -734,7 +600,6 @@ deleteAllBtn?.addEventListener('click', async function() {
       window.allUsernames = [];
       renderScrapedResults([]);
       deleteAllBtn.hidden = true;
-      updateDeleteProfileList();
       showScrapedStatus('✅ PERMANENTLY DELETED ALL scraped data from database', 'success');
     } else {
       showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
@@ -1073,15 +938,10 @@ async function fetchScrapedResults() {
       showScrapedStatus('No results found. Start a new scrape job.', 'error');
       renderScrapedResults([]);
     }
-    
-    // Update the delete profile list
-    updateDeleteProfileList();
-    
   } catch (error) {
     console.error('❌ Fetch error:', error);
     showScrapedStatus(`❌ Failed to load results: ${error.message}`, 'error');
     renderScrapedResults([]);
-    updateDeleteProfileList();
   } finally {
     btn.textContent = '📊 Load Results';
     btn.disabled = false;
@@ -1120,7 +980,6 @@ clearScrapedBtn.addEventListener('click', function() {
   window.scrapedData = [];
   this.hidden = true;
   if (deleteAllBtn) deleteAllBtn.hidden = true;
-  updateDeleteProfileList();
   showScrapedStatus('✅ Cleared scraped results', 'success');
   localStorage.removeItem('last_scrape_job_id');
 });
@@ -1431,14 +1290,9 @@ async function autoLoadScrapedResults() {
     } else {
       renderScrapedResults([]);
     }
-    
-    // Update the delete profile list
-    updateDeleteProfileList();
-    
   } catch (error) {
     console.error('❌ Auto-load failed:', error);
     renderScrapedResults([]);
-    updateDeleteProfileList();
   }
 }
 
@@ -1460,26 +1314,14 @@ async function initSession() {
 
 // ==================== INIT WITH AUTO-LOAD ====================
 
-initSession().then(async () => {
+initSession().then(() => {
     checkInstagramStatus();
     checkBlueskyStatus();
-    // Load data after 1 second
-    setTimeout(async () => {
-        await autoLoadScrapedResults();
-        updateDeleteProfileList();
-    }, 1000);
+    setTimeout(autoLoadScrapedResults, 1000);
 });
 
 document.addEventListener('visibilitychange', function() {
   if (!document.hidden) {
     autoLoadScrapedResults();
-  }
-});
-
-// Enter key support for delete input
-deleteUsernameInput?.addEventListener('keypress', function(e) {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    deleteProfileBtn?.click();
   }
 });
