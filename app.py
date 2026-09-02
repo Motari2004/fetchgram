@@ -1286,6 +1286,33 @@ def scrape_proxy():
     """
     data = request.get_json(silent=True) or {}
     
+    # Get the stored Instagram cookies from the session
+    cookies = None
+    encrypted = session.get('instagram_encrypted')
+    if encrypted:
+        try:
+            decrypted = decrypt_credentials(encrypted)
+            if decrypted:
+                cookie_data = decrypted[0]
+                if isinstance(cookie_data, str) and cookie_data.startswith('['):
+                    cookie_data = json.loads(cookie_data)
+                elif isinstance(cookie_data, dict):
+                    cookie_data = cookie_data.get('data', [])
+                cookies = cookie_data
+        except Exception as e:
+            app.logger.error(f"Failed to decrypt cookies: {e}")
+    
+    # Add cookies to the request data
+    if cookies:
+        data['cookies'] = cookies
+        app.logger.info(f"Proxy: Added {len(cookies)} cookies to request")
+    else:
+        app.logger.warning("Proxy: No cookies found in session")
+        return jsonify({
+            "status": "error",
+            "error": "No Instagram cookies found. Please upload your cookies.json file first."
+        }), 400
+    
     # Log the incoming request for debugging
     app.logger.info(f"Proxy: Received scrape request for {len(data.get('usernames', []))} usernames")
     
@@ -1307,7 +1334,6 @@ def scrape_proxy():
             "status": "error",
             "error": f"Failed to connect to Render service: {str(e)}"
         }), 503
-
 
 
 
