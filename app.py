@@ -14,49 +14,161 @@ import requests
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 app = Flask(__name__)
-# Use a stable secret key – set SECRET_KEY in environment for production
 app.secret_key = os.environ.get('SECRET_KEY', 'fetchgram-dev-secret-change-me-in-production-2024')
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
-# Only force Secure cookies when running on HTTPS (Vercel etc.)
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL'))
 CORS(app, supports_credentials=True)
 
+# ============== NEON POSTGRESQL SETUP ==============
 
-IG_URL_RE = re.compile(r"^https?://(www\.)?instagram\.com/", re.IGNORECASE)
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
+def get_db_connection():
+    """Get a connection to the Neon PostgreSQL database."""
+    try:
+        if DATABASE_URL:
+            conn = psycopg2.connect(DATABASE_URL)
+            return conn
+        else:
+            app.logger.error("DATABASE_URL not set")
+            return None
+    except Exception as e:
+        app.logger.error(f"Database connection error: {e}")
+        return None
 
-# For Vercel / serverless – only /tmp is writable
-DOWNLOAD_ROOT = os.path.join('/tmp', "igdl_downloads")
-os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
+def init_db():
+    """Initialize the database table if it doesn't exist."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_cookies (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id TEXT NOT NULL,
+                cookie_data JSONB NOT NULL,
+                username TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(user_id)
+            );
+        """)
+        conn.commit()
+        app.logger.info("Database table 'user_cookies' ready")
+    except Exception as e:
+        app.logger.error(f"Database init error: {e}")
+    finally:
+        cur.close()
+        conn.close()
 
-# Fallback for local development
-if not os.path.exists(DOWNLOAD_ROOT):
-    DOWNLOAD_ROOT = os.path.join(tempfile.gettempdir(), "igdl_downloads")
-    os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
+# Initialize database on startup
+init_db()
 
+# ============== COOKIE STORAGE FUNCTIONS ==============
 
-# In-memory history (ephemeral on serverless)
-download_history = []
+def get_user_id():
+    """Get or create a user ID for this session."""
+    user_id = session.get('user_id')
+    if not user_id:
+        user_id = str(uuid.uuid4())
+        session['user_id'] = user_id
+    return user_id
 
+def save_cookies_to_db(cookies_data, username):
+    """Save cookies to Neon PostgreSQL."""
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO user_cookies (user_id, cookie_data, username, updated_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (user_id) 
+            DO UPDATE SET 
+                cookie_data = EXCLUDED.cookie_data,
+                username = EXCLUDED.username,
+                updated_at = NOW()
+        """, (user_id, json.dumps(cookies_data), username))
+        conn.commit()
+        app.logger.info(f"Cookies saved to Neon DB for user: {user_id}")
+        return True
+    except Exception as e:
+        app.logger.error(f"Database save error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
 
-def is_valid_instagram_url(url: str) -> bool:
-    return bool(url) and bool(IG_URL_RE.match(url.strip()))
+def get_cookies_from_db():
+    """Get cookies from Neon PostgreSQL."""
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT cookie_data, username, updated_at 
+            FROM user_cookies 
+            WHERE user_id = %s
+        """, (user_id,))
+        result = cur.fetchone()
+        
+        if result:
+            return {
+                'cookie_data': result['cookie_data'],
+                'username': result['username'],
+                'updated_at': result['updated_at']
+            }
+        return None
+    except Exception as e:
+        app.logger.error(f"Database get error: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
 
+def clear_cookies_from_db():
+    """Clear cookies from Neon PostgreSQL."""
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM user_cookies WHERE user_id = %s", (user_id,))
+        conn.commit()
+        app.logger.info(f"Cookies cleared from Neon DB for user: {user_id}")
+        return True
+    except Exception as e:
+        app.logger.error(f"Database clear error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+# ============== ENCRYPTION FUNCTIONS ==============
 
 def get_encryption_key():
     """Generate or retrieve a stable encryption key for credentials."""
-    # Prefer environment variable (required for multi-instance / Vercel)
     env_key = os.environ.get('ENCRYPTION_KEY')
     if env_key:
         try:
             return base64.urlsafe_b64decode(env_key)
         except Exception:
-            # If user pasted the raw Fernet key string
             return env_key.encode() if isinstance(env_key, str) else env_key
 
     key_file = os.path.join('/tmp', 'encryption_key.key')
@@ -64,8 +176,6 @@ def get_encryption_key():
         with open(key_file, 'rb') as f:
             return f.read()
 
-    # Derive a deterministic key from secret_key so it survives restarts
-    # (as long as SECRET_KEY stays the same)
     salt = b'fetchgram_salt_2024_v2'
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
@@ -79,10 +189,9 @@ def get_encryption_key():
         with open(key_file, 'wb') as f:
             f.write(key)
     except Exception:
-        pass  # /tmp may be read-only in some environments
+        pass
 
     return key
-
 
 def encrypt_credentials(identifier, password):
     """Encrypt credentials or cookie data. Returns base64 string or None."""
@@ -125,7 +234,6 @@ def encrypt_credentials(identifier, password):
         app.logger.error(f"Encryption failed: {e}")
         return None
 
-
 def decrypt_credentials(encrypted_data):
     """Decrypt credentials. Returns (data, type) or None."""
     try:
@@ -136,7 +244,6 @@ def decrypt_credentials(encrypted_data):
         decrypted = f.decrypt(decoded)
         data = json.loads(decrypted)
 
-        # Expire after 30 days
         if time.time() - data.get('timestamp', 0) > 30 * 24 * 60 * 60:
             return None
 
@@ -147,7 +254,6 @@ def decrypt_credentials(encrypted_data):
     except Exception as e:
         app.logger.error(f"Decryption failed: {e}")
         return None
-
 
 def write_netscape_cookies(cookie_data, filepath):
     """Write a list of cookie dicts to a Netscape cookie file."""
@@ -173,67 +279,48 @@ def write_netscape_cookies(cookie_data, filepath):
                 continue
             f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
 
+# ============== IG URL HELPERS ==============
+
+IG_URL_RE = re.compile(r"^https?://(www\.)?instagram\.com/", re.IGNORECASE)
+
+def is_valid_instagram_url(url: str) -> bool:
+    return bool(url) and bool(IG_URL_RE.match(url.strip()))
+
+# ============== YT-DLP FUNCTIONS ==============
 
 def get_cookie_file():
-    """Get cookies from session (encrypted), env, or file. Always rewrites /tmp file."""
-    # PRIORITY 1: Persistent encrypted Instagram cookies from session
-    encrypted_instagram = session.get('instagram_encrypted')
-    if encrypted_instagram:
-        try:
-            decrypted = decrypt_credentials(encrypted_instagram)
-            if decrypted:
-                cookie_data, dtype = decrypted
-                if dtype == 'cookies':
-                    if isinstance(cookie_data, str) and cookie_data.startswith('['):
-                        cookie_data = json.loads(cookie_data)
-                    elif isinstance(cookie_data, dict):
-                        cookie_data = cookie_data.get('data', [])
-
-                    username = session.get('instagram_username', 'default')
-                    # Sanitise username for filename
-                    safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username))[:40]
-                    cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
-                    write_netscape_cookies(cookie_data, cookie_file)
-                    session['cookie_file'] = cookie_file
-                    app.logger.info(f"Using persistent Instagram cookies from session → {cookie_file}")
-                    return cookie_file
-        except Exception as e:
-            app.logger.error(f"Failed to decrypt Instagram cookies: {e}")
-
-    # PRIORITY 2: Uploaded cookies already written this session
+    """Get cookies from session, database, or file."""
+    # First check database
+    db_cookies = get_cookies_from_db()
+    if db_cookies:
+        cookie_data = db_cookies.get('cookie_data', [])
+        if cookie_data:
+            username = db_cookies.get('username', 'default')
+            safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username))[:40]
+            cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
+            write_netscape_cookies(cookie_data, cookie_file)
+            session['cookie_file'] = cookie_file
+            app.logger.info(f"Using cookies from database → {cookie_file}")
+            return cookie_file
+    
+    # Then check session
     cookie_file = session.get('cookie_file')
     if cookie_file and os.path.exists(cookie_file):
-        app.logger.info(f"Using uploaded cookies from: {cookie_file}")
+        app.logger.info(f"Using cookies from session: {cookie_file}")
         return cookie_file
-
-    # PRIORITY 3: Environment variable (Vercel / production)
+    
+    # Check environment variable
     cookies_json_env = os.environ.get('COOKIES_JSON')
     if cookies_json_env:
         try:
             cookies_data = json.loads(cookies_json_env)
             cookie_file = os.path.join('/tmp', 'cookies_netscape.txt')
             write_netscape_cookies(cookies_data, cookie_file)
-            app.logger.info(f"Converted COOKIES_JSON to Netscape format at: {cookie_file}")
             return cookie_file
         except Exception as e:
             app.logger.error(f"Failed to parse COOKIES_JSON: {e}")
-
-    # PRIORITY 4: Local cookies.json
-    cookie_json_path = os.path.join(os.getcwd(), 'cookies.json')
-    if os.path.exists(cookie_json_path):
-        try:
-            with open(cookie_json_path, 'r') as f:
-                cookies_data = json.load(f)
-            cookie_file = os.path.join('/tmp', 'cookies_netscape.txt')
-            write_netscape_cookies(cookies_data, cookie_file)
-            app.logger.info(f"Converted cookies.json to Netscape format at: {cookie_file}")
-            return cookie_file
-        except Exception as e:
-            app.logger.error(f"Failed to parse cookies.json: {e}")
-
-    app.logger.warning("No cookies found")
+    
     return None
-
 
 def base_ydl_opts(extra=None):
     opts = {
@@ -255,54 +342,35 @@ def base_ydl_opts(extra=None):
     if cookie_file and os.path.exists(cookie_file):
         opts["cookiefile"] = cookie_file
         app.logger.info(f"Using cookies from: {cookie_file}")
-    else:
-        # Local fallback only
-        try:
-            opts["cookiesfrombrowser"] = ("chrome",)
-            app.logger.info("Using browser cookies")
-        except Exception as e:
-            app.logger.warning(f"No cookies available: {e}")
 
     if extra:
         opts.update(extra)
     return opts
 
-
 def get_direct_video_url(url, media_id=None):
-    """Extract direct video URL without downloading."""
-    opts = base_ydl_opts({
-        "format": "best[ext=mp4]/best",
-    })
-
+    opts = base_ydl_opts({"format": "best[ext=mp4]/best"})
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
-
         entries = info.get("entries") if "entries" in info else [info]
         entries = [e for e in entries if e]
-
+        target = None
         if media_id:
             target = next((e for e in entries if e.get("id") == media_id), None)
         else:
             target = entries[0] if entries else None
-
         if not target:
             return None
-
         formats = target.get("formats", [])
         if not formats:
             return target.get("url") or target.get("webpage_url")
-
-        # Prefer mp4 with audio
         for fmt in formats:
             if fmt.get("ext") == "mp4" and fmt.get("acodec") != "none" and fmt.get("vcodec") != "none":
                 return fmt.get("url")
-
         return formats[0].get("url") if formats else None
-
 
 def download_video_file(url, media_id=None):
     """Download video file and return filepath."""
-    job_dir = os.path.join(DOWNLOAD_ROOT, uuid.uuid4().hex)
+    job_dir = os.path.join('/tmp', f"igdl_{uuid.uuid4().hex[:8]}")
     os.makedirs(job_dir, exist_ok=True)
     outtmpl = os.path.join(job_dir, "%(id)s.%(ext)s")
 
@@ -342,7 +410,6 @@ def download_video_file(url, media_id=None):
 
     return filepath, job_dir, target
 
-
 def clean_error(msg: str) -> str:
     msg = msg.replace("ERROR: ", "").strip()
     if "Private" in msg or "login" in msg.lower():
@@ -357,12 +424,9 @@ def clean_error(msg: str) -> str:
         return "Couldn't process that link. Double-check it's a public post and try again."
     return msg
 
-
-# ============== BLUESKY AT PROTOCOL ==============
-
+# ============== BLUESKY FUNCTIONS ==============
 
 def create_bluesky_session(identifier, password):
-    """Create a Bluesky session using AT Protocol"""
     try:
         response = requests.post(
             "https://bsky.social/xrpc/com.atproto.server.createSession",
@@ -375,9 +439,7 @@ def create_bluesky_session(identifier, password):
     except requests.exceptions.RequestException as e:
         raise Exception(f"Failed to authenticate with Bluesky: {str(e)}")
 
-
 def upload_bluesky_blob(session_data, file_data, mime_type):
-    """Upload a blob (image or video) to Bluesky"""
     try:
         response = requests.post(
             "https://bsky.social/xrpc/com.atproto.repo.uploadBlob",
@@ -393,9 +455,7 @@ def upload_bluesky_blob(session_data, file_data, mime_type):
     except requests.exceptions.RequestException as e:
         raise Exception(f"Failed to upload blob to Bluesky: {str(e)}")
 
-
 def upload_video_to_bluesky(session_data, video_url, text, thumbnail_url=None):
-    """Upload a video to Bluesky using the direct URL"""
     try:
         app.logger.info(f"Downloading video from: {video_url}")
         video_response = requests.get(video_url, stream=True, timeout=120)
@@ -441,24 +501,20 @@ def upload_video_to_bluesky(session_data, video_url, text, thumbnail_url=None):
     except Exception as e:
         raise Exception(f"Failed to upload video to Bluesky: {str(e)}")
 
-
 def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, password=None):
-    """Main function to post a video to Bluesky"""
     try:
         if not identifier or not password:
-            # Prefer encrypted storage
             encrypted = session.get('bluesky_encrypted')
             if encrypted:
                 decrypted = decrypt_credentials(encrypted)
                 if decrypted:
                     identifier, password = decrypted
-            # Fallback to plain session (legacy)
             if not identifier or not password:
                 identifier = session.get('bluesky_identifier')
                 password = session.get('bluesky_password')
 
         if not identifier or not password:
-            raise Exception("Bluesky credentials not configured. Please enter your Bluesky handle and password.")
+            raise Exception("Bluesky credentials not configured.")
 
         session_data = create_bluesky_session(identifier, password)
         result = upload_video_to_bluesky(session_data, video_url, text, thumbnail_url)
@@ -480,18 +536,17 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
             "error": str(e)
         }
 
-
 # ============== ROUTES ==============
-
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
+# ============== COOKIE ROUTES ==============
 
 @app.route("/api/cookies/upload", methods=["POST"])
 def upload_cookies():
-    """Upload cookies.json file (one-shot, also saves persistently)."""
+    """Upload cookies.json file (saves to Neon PostgreSQL)."""
     if 'cookies_file' not in request.files:
         return jsonify({"error": "No file uploaded", "status": "error"}), 400
 
@@ -516,7 +571,6 @@ def upload_cookies():
         if not has_session:
             return jsonify({"error": "No session cookies found. Make sure you're logged into Instagram.", "status": "error"}), 400
 
-        # Extract username
         username = None
         for cookie in cookies_data:
             if isinstance(cookie, dict) and cookie.get('name') == 'ds_user':
@@ -530,35 +584,24 @@ def upload_cookies():
                     username = value.split(':')[0]
                 break
 
-        # Save to session - BOTH encrypted and plain for redundancy
-        session.permanent = True
+        success = save_cookies_to_db(cookies_data, username or 'Instagram User')
         
-        # Save encrypted
+        if not success:
+            return jsonify({"error": "Failed to save cookies to database", "status": "error"}), 500
+
         encrypted = encrypt_credentials(json.dumps(cookies_data), "instagram_cookies")
         if encrypted:
             session['instagram_encrypted'] = encrypted
             session['instagram_username'] = username or 'Instagram User'
             session['instagram_saved'] = True
-        
-        # Also save cookies directly in session for easy access
+
         session['cookies_data'] = cookies_data
         session['username'] = username or 'Instagram User'
 
-        # Write file for immediate use
-        cookie_id = uuid.uuid4().hex[:8]
-        cookie_file = os.path.join('/tmp', f'uploaded_cookies_{cookie_id}.txt')
-        write_netscape_cookies(cookies_data, cookie_file)
-        session['cookie_file'] = cookie_file
-        session['cookie_id'] = cookie_id
-
-        app.logger.info(f"Cookies uploaded successfully for user: {username}")
-        app.logger.info(f"Session keys: {list(session.keys())}")
-
         return jsonify({
             "status": "success",
-            "message": f"Cookies uploaded and saved persistently!",
-            "username": session['username'],
-            "cookie_id": cookie_id
+            "message": "Cookies uploaded and saved to database!",
+            "username": username or 'Instagram User'
         })
 
     except json.JSONDecodeError:
@@ -567,56 +610,224 @@ def upload_cookies():
         app.logger.error(f"Cookie upload error: {e}")
         return jsonify({"error": f"Failed to process cookies: {str(e)}", "status": "error"}), 500
 
-
-@app.route("/api/cookies/status", methods=["GET"])
-def cookies_status():
-    """Check if cookies are uploaded and valid."""
-    cookie_file = get_cookie_file()
-    if cookie_file and os.path.exists(cookie_file):
+@app.route("/api/instagram/cookies_status", methods=["GET"])
+def instagram_cookies_status():
+    """Check if Instagram cookies are saved."""
+    db_cookies = get_cookies_from_db()
+    if db_cookies:
         return jsonify({
             "status": "success",
             "has_cookies": True,
-            "username": session.get('instagram_username') or session.get('username', 'Instagram User'),
-            "cookie_file": cookie_file
+            "username": db_cookies.get('username', 'Instagram User'),
+            "message": "Cookies are saved in database"
         })
+    
+    encrypted = session.get('instagram_encrypted')
+    if encrypted:
+        try:
+            decrypted = decrypt_credentials(encrypted)
+            if decrypted:
+                return jsonify({
+                    "status": "success",
+                    "has_cookies": True,
+                    "username": session.get('instagram_username', 'Instagram User'),
+                    "message": "Cookies are saved in session"
+                })
+        except Exception:
+            pass
+    
     return jsonify({
         "status": "success",
         "has_cookies": False,
-        "message": "No cookies uploaded"
+        "message": "No saved cookies found"
     })
 
+@app.route("/api/instagram/get_cookies", methods=["GET"])
+def get_instagram_cookies():
+    """Get the stored Instagram cookies."""
+    db_cookies = get_cookies_from_db()
+    if db_cookies:
+        return jsonify({
+            "status": "success",
+            "cookies": db_cookies.get('cookie_data', [])
+        })
+    
+    encrypted = session.get('instagram_encrypted')
+    if encrypted:
+        try:
+            decrypted = decrypt_credentials(encrypted)
+            if decrypted:
+                cookie_data = decrypted[0]
+                if isinstance(cookie_data, str) and cookie_data.startswith('['):
+                    cookie_data = json.loads(cookie_data)
+                elif isinstance(cookie_data, dict):
+                    cookie_data = cookie_data.get('data', [])
+                return jsonify({
+                    "status": "success",
+                    "cookies": cookie_data
+                })
+        except Exception:
+            pass
+    
+    return jsonify({
+        "status": "error",
+        "cookies": None,
+        "error": "No cookies found"
+    }), 404
 
 @app.route("/api/cookies/clear", methods=["POST"])
 def clear_cookies():
-    """Clear uploaded cookies."""
-    cookie_file = session.get('cookie_file')
-    if cookie_file and os.path.exists(cookie_file):
-        try:
-            os.remove(cookie_file)
-        except Exception:
-            pass
-
-    cookie_id = session.get('cookie_id')
-    if cookie_id:
-        json_file = os.path.join('/tmp', f'uploaded_cookies_{cookie_id}.json')
-        if os.path.exists(json_file):
-            try:
-                os.remove(json_file)
-            except Exception:
-                pass
-
-    session.pop('cookie_file', None)
-    session.pop('cookie_id', None)
-    session.pop('username', None)
+    """Clear uploaded cookies from Neon PostgreSQL and session."""
+    clear_cookies_from_db()
+    
     session.pop('instagram_encrypted', None)
     session.pop('instagram_username', None)
     session.pop('instagram_saved', None)
+    session.pop('cookies_data', None)
+    session.pop('username', None)
+    session.pop('cookie_file', None)
+
+    for file in ['cookies_netscape.txt', 'instagram_cookies_persistent.txt']:
+        path = os.path.join('/tmp', file)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
 
     return jsonify({
         "status": "success",
         "message": "Cookies cleared successfully"
     })
 
+# ============== SCRAPE PROXY ==============
+
+@app.route("/api/scrape/proxy", methods=["POST"])
+def scrape_proxy():
+    """Proxy endpoint that retrieves cookies from Neon PostgreSQL or session."""
+    data = request.get_json(silent=True) or {}
+    
+    cookies = None
+    db_cookies = get_cookies_from_db()
+    if db_cookies:
+        cookies = db_cookies.get('cookie_data', [])
+        app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from Neon DB")
+    
+    if not cookies:
+        encrypted = session.get('instagram_encrypted')
+        if encrypted:
+            try:
+                decrypted = decrypt_credentials(encrypted)
+                if decrypted:
+                    cookie_data = decrypted[0]
+                    if isinstance(cookie_data, str) and cookie_data.startswith('['):
+                        cookie_data = json.loads(cookie_data)
+                    elif isinstance(cookie_data, dict):
+                        cookie_data = cookie_data.get('data', [])
+                    cookies = cookie_data
+                    app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from session")
+            except Exception as e:
+                app.logger.error(f"Failed to decrypt cookies: {e}")
+    
+    if not cookies:
+        cookies = session.get('cookies_data')
+        if cookies:
+            app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from session data")
+    
+    if not cookies:
+        return jsonify({
+            "status": "error",
+            "error": "No Instagram cookies found. Please upload your cookies.json file first."
+        }), 400
+    
+    data['cookies'] = cookies
+    
+    try:
+        response = requests.post(
+            'https://ig-reels-scraper.onrender.com/api/scrape/start',
+            json=data,
+            headers={'Content-Type': 'application/json'},
+            timeout=60
+        )
+        
+        app.logger.info(f"Proxy: Render responded with status {response.status_code}")
+        return jsonify(response.json()), response.status_code
+        
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "status": "error",
+            "error": "Render service timed out. Please try again."
+        }), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            "status": "error",
+            "error": "Could not connect to Render service. Please try again later."
+        }), 503
+    except Exception as e:
+        app.logger.error(f"Proxy error: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+# ============== SCRAPED DATA STORAGE ==============
+
+scraped_data_store = {}
+
+@app.route("/api/scraped/store", methods=["POST"])
+def store_scraped_data():
+    """Store scraped data from Render."""
+    data = request.get_json(silent=True) or {}
+    results = data.get("results", [])
+    job_id = data.get("job_id")
+    
+    if not results:
+        return jsonify({"error": "No results provided"}), 400
+    
+    scraped_data_store['latest'] = {
+        'results': results,
+        'job_id': job_id,
+        'timestamp': datetime.utcnow().isoformat(),
+        'count': len(results)
+    }
+    
+    app.logger.info(f"Stored {len(results)} profiles from job {job_id}")
+    
+    return jsonify({
+        "status": "success",
+        "message": f"Stored {len(results)} profiles",
+        "count": len(results)
+    })
+
+@app.route("/api/scraped/latest", methods=["GET"])
+def get_scraped_data():
+    """Get the latest scraped data."""
+    latest = scraped_data_store.get('latest')
+    if not latest:
+        return jsonify({
+            "status": "success",
+            "results": [],
+            "message": "No scraped data available"
+        })
+    
+    return jsonify({
+        "status": "success",
+        "results": latest.get('results', []),
+        "job_id": latest.get('job_id'),
+        "timestamp": latest.get('timestamp'),
+        "count": latest.get('count', 0)
+    })
+
+@app.route("/api/scraped/clear", methods=["POST"])
+def clear_scraped_data():
+    """Clear stored scraped data."""
+    scraped_data_store.clear()
+    return jsonify({
+        "status": "success",
+        "message": "Scraped data cleared"
+    })
+
+# ============== VIDEO DOWNLOAD ROUTES ==============
 
 @app.route("/api/fetch", methods=["POST"])
 def fetch_info():
@@ -655,7 +866,6 @@ def fetch_info():
 
     return jsonify({"items": items, "source_url": url})
 
-
 @app.route("/api/download", methods=["GET"])
 def download_video():
     url = (request.args.get("url") or "").strip()
@@ -671,65 +881,28 @@ def download_video():
     except Exception as e:
         app.logger.warning(f"Direct URL failed: {e}")
 
-    job_dir = os.path.join(DOWNLOAD_ROOT, uuid.uuid4().hex)
-    os.makedirs(job_dir, exist_ok=True)
-    outtmpl = os.path.join(job_dir, "%(id)s.%(ext)s")
-
-    opts = base_ydl_opts({"outtmpl": outtmpl})
-    if media_id:
-        opts["playlist_items"] = None
-
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except yt_dlp.utils.DownloadError as e:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        return jsonify({"error": clean_error(str(e))}), 422
+        filepath, job_dir, target = download_video_file(url, media_id)
+        download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
+
+        @after_this_request
+        def cleanup(response):
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return response
+
+        return send_file(filepath, as_attachment=True, download_name=download_name)
     except Exception as e:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        return jsonify({"error": clean_error(str(e))}), 500
-
-    entries = info.get("entries") if "entries" in info else [info]
-    entries = [e for e in entries if e]
-    target = None
-    if media_id:
-        target = next((e for e in entries if e.get("id") == media_id), None)
-    if target is None and entries:
-        target = entries[0]
-
-    if target is None:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        return jsonify({"error": "No video found to download."}), 422
-
-    filepath = target.get("requested_downloads", [{}])[0].get("filepath") or os.path.join(
-        job_dir, f"{target.get('id')}.{target.get('ext', 'mp4')}"
-    )
-
-    if not os.path.exists(filepath):
-        shutil.rmtree(job_dir, ignore_errors=True)
-        return jsonify({"error": "File was fetched but couldn't be located."}), 500
-
-    download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
-
-    @after_this_request
-    def cleanup(response):
-        shutil.rmtree(job_dir, ignore_errors=True)
-        return response
-
-    return send_file(filepath, as_attachment=True, download_name=download_name)
-
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/commands/download", methods=["POST"])
 def api_download():
-    """API endpoint to download Instagram video."""
     data = request.get_json(silent=True) or {}
-    url = (data.get("url") or "").strip()
-    media_id = (data.get("media_id") or "").strip()
+    url = data.get("url", "").strip()
+    media_id = data.get("media_id", "").strip()
     action = data.get("action", "url_only")
 
     if not url:
         return jsonify({"error": "Missing 'url' parameter"}), 400
-
     if not is_valid_instagram_url(url):
         return jsonify({"error": "Invalid Instagram URL"}), 400
 
@@ -751,14 +924,9 @@ def api_download():
         if not entries:
             return jsonify({"error": "No videos found"}), 422
 
-        target = None
+        target = entries[0]
         if media_id:
-            target = next((e for e in entries if e.get("id") == media_id), None)
-        if target is None:
-            target = entries[0]
-
-        if not target:
-            return jsonify({"error": "Video not found"}), 422
+            target = next((e for e in entries if e.get("id") == media_id), None) or target
 
         video_info = {
             "id": target.get("id"),
@@ -770,7 +938,6 @@ def api_download():
         }
         response["video_info"] = video_info
 
-        # Store current video in session for Bluesky
         session['current_video_url'] = get_direct_video_url(url, media_id)
         session['current_video_title'] = video_info.get('title')
         session['current_video_thumbnail'] = video_info.get('thumbnail')
@@ -797,60 +964,15 @@ def api_download():
         else:
             return jsonify({"error": f"Unknown action: {action}"}), 400
 
-        download_history.append(response)
-        if len(download_history) > 100:
-            download_history.pop(0)
-
         return jsonify(response)
 
     except Exception as e:
         return jsonify({"error": clean_error(str(e))}), 500
 
-
-@app.route("/api/commands/batch", methods=["POST"])
-def api_batch_download():
-    """Batch download multiple videos."""
-    data = request.get_json(silent=True) or {}
-    urls = data.get("urls", [])
-    action = data.get("action", "url_only")
-
-    if not urls:
-        return jsonify({"error": "No URLs provided"}), 400
-
-    results = []
-    for url in urls:
-        try:
-            with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
-                info = ydl.extract_info(url, download=False)
-
-            entries = info.get("entries") if "entries" in info else [info]
-            entries = [e for e in entries if e]
-
-            for entry in entries:
-                results.append({
-                    "url": url,
-                    "id": entry.get("id"),
-                    "title": entry.get("title", "Instagram video"),
-                    "uploader": entry.get("uploader") or entry.get("uploader_id"),
-                    "download_url": get_direct_video_url(url, entry.get("id"))
-                })
-        except Exception as e:
-            results.append({
-                "url": url,
-                "error": str(e)
-            })
-
-    return jsonify({
-        "status": "success",
-        "total": len(results),
-        "results": results,
-        "timestamp": datetime.utcnow().isoformat()
-    })
-
+# ============== BLUESKY ROUTES ==============
 
 @app.route("/api/bluesky/save_credentials", methods=["POST"])
 def save_bluesky_credentials():
-    """Save Bluesky credentials securely and persistently."""
     data = request.get_json(silent=True) or {}
     identifier = data.get("identifier", "").strip()
     password = data.get("password", "").strip()
@@ -865,10 +987,9 @@ def save_bluesky_credentials():
         if remember:
             encrypted = encrypt_credentials(identifier, password)
             if encrypted:
-                session.permanent = True          # ← critical for 30-day persistence
+                session.permanent = True
                 session['bluesky_encrypted'] = encrypted
                 session['bluesky_identifier'] = identifier
-                # Do NOT store plaintext password any more
                 session.pop('bluesky_password', None)
                 session['bluesky_handle'] = session_data.get('handle', identifier)
                 session['bluesky_did'] = session_data.get('did')
@@ -876,7 +997,7 @@ def save_bluesky_credentials():
 
         return jsonify({
             "status": "success",
-            "message": "Credentials saved successfully! They will persist for 30 days.",
+            "message": "Credentials saved successfully!",
             "handle": session_data.get('handle'),
             "did": session_data.get('did'),
             "remembered": remember
@@ -884,10 +1005,8 @@ def save_bluesky_credentials():
     except Exception as e:
         return jsonify({"error": str(e)}), 401
 
-
 @app.route("/api/bluesky/credentials_status", methods=["GET"])
 def bluesky_credentials_status():
-    """Check if Bluesky credentials are saved."""
     encrypted = session.get('bluesky_encrypted')
     identifier = session.get('bluesky_identifier')
 
@@ -902,43 +1021,28 @@ def bluesky_credentials_status():
                 "message": "Credentials are saved and valid"
             })
 
-    if identifier and session.get('bluesky_password'):
-        return jsonify({
-            "status": "success",
-            "has_credentials": True,
-            "identifier": identifier,
-            "handle": session.get('bluesky_handle', identifier),
-            "message": "Credentials are saved"
-        })
-
     return jsonify({
         "status": "success",
         "has_credentials": False,
         "message": "No saved credentials found"
     })
 
-
 @app.route("/api/bluesky/clear_credentials", methods=["POST"])
 def clear_bluesky_credentials():
-    """Clear saved Bluesky credentials."""
     session.pop('bluesky_encrypted', None)
     session.pop('bluesky_identifier', None)
     session.pop('bluesky_password', None)
     session.pop('bluesky_handle', None)
     session.pop('bluesky_did', None)
     session.pop('bluesky_saved', None)
-
     return jsonify({
         "status": "success",
         "message": "Credentials cleared successfully"
     })
 
-
 @app.route("/api/bluesky/post", methods=["POST"])
 def bluesky_post():
-    """Post a video to Bluesky."""
     data = request.get_json(silent=True) or {}
-
     url = data.get("url", "").strip()
     text = data.get("text", "Check out this video! 🎬").strip()
     identifier = data.get("identifier", "").strip()
@@ -998,10 +1102,8 @@ def bluesky_post():
     except Exception as e:
         return jsonify({"error": clean_error(str(e))}), 500
 
-
 @app.route("/api/bluesky/auth", methods=["POST"])
 def bluesky_auth():
-    """Authenticate with Bluesky and return session info."""
     data = request.get_json(silent=True) or {}
     identifier = data.get("identifier", "").strip()
     password = data.get("password", "").strip()
@@ -1021,10 +1123,8 @@ def bluesky_auth():
     except Exception as e:
         return jsonify({"error": str(e)}), 401
 
-
 @app.route("/api/bluesky/status", methods=["GET"])
 def bluesky_status():
-    """Check if Bluesky is configured."""
     has_credentials = bool(session.get('bluesky_encrypted')) or bool(
         os.environ.get("BLUESKY_IDENTIFIER") and
         os.environ.get("BLUESKY_PASSWORD")
@@ -1034,147 +1134,10 @@ def bluesky_status():
         "message": "Bluesky credentials are configured" if has_credentials else "Bluesky credentials are not configured."
     })
 
-
-@app.route("/api/commands/status", methods=["GET"])
-def api_status():
-    """Get service status and download history."""
-    cookie_status = "configured" if get_cookie_file() else "not configured"
-    return jsonify({
-        "status": "running",
-        "version": "1.1.0",
-        "cookies": cookie_status,
-        "download_history_count": len(download_history),
-        "recent_downloads": download_history[-10:]
-    })
-
-
-@app.route("/api/instagram/save_cookies", methods=["POST"])
-def save_instagram_cookies():
-    """Save Instagram cookies persistently (encrypted in session cookie)."""
-    data = request.get_json(silent=True) or {}
-    cookies_data = data.get("cookies", [])
-    remember = data.get("remember", True)
-
-    if not cookies_data:
-        return jsonify({"error": "No cookies provided"}), 400
-
-    try:
-        if remember:
-            cookies_json = json.dumps(cookies_data)
-            encrypted = encrypt_credentials(cookies_json, "instagram_cookies")
-            if encrypted:
-                session.permanent = True          # ← critical for 30-day persistence
-                session['instagram_encrypted'] = encrypted
-
-                username = None
-                for cookie in cookies_data:
-                    if isinstance(cookie, dict) and cookie.get('name') == 'ds_user':
-                        username = cookie.get('value')
-                        break
-                    if isinstance(cookie, dict) and cookie.get('name') == 'sessionid':
-                        value = cookie.get('value', '')
-                        if '%3A' in value:
-                            username = value.split('%3A')[0]
-                        elif ':' in value:
-                            username = value.split(':')[0]
-                        break
-
-                session['instagram_username'] = username or 'Instagram User'
-                session['instagram_saved'] = True
-
-                # Write file for immediate use this request
-                cookie_file = os.path.join('/tmp', 'instagram_cookies_persistent.txt')
-                write_netscape_cookies(cookies_data, cookie_file)
-                session['cookie_file'] = cookie_file
-
-                return jsonify({
-                    "status": "success",
-                    "message": "Cookies saved successfully! They will persist for 30 days.",
-                    "username": username
-                })
-
-        return jsonify({"status": "error", "error": "Failed to save cookies"}), 500
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/instagram/cookies_status", methods=["GET"])
-def instagram_cookies_status():
-    """Check if Instagram cookies are saved."""
-    # Check encrypted cookies first
-    encrypted = session.get('instagram_encrypted')
-    if encrypted:
-        try:
-            decrypted = decrypt_credentials(encrypted)
-            if decrypted:
-                return jsonify({
-                    "status": "success",
-                    "has_cookies": True,
-                    "username": session.get('instagram_username', 'Instagram User'),
-                    "message": "Cookies are saved and valid"
-                })
-        except Exception as e:
-            app.logger.error(f"Status check decrypt error: {e}")
-    
-    # Check direct cookies_data
-    cookies_data = session.get('cookies_data')
-    if cookies_data:
-        return jsonify({
-            "status": "success",
-            "has_cookies": True,
-            "username": session.get('username', 'Instagram User'),
-            "message": "Cookies are saved"
-        })
-    
-    # Check cookie file
-    cookie_file = session.get('cookie_file')
-    if cookie_file and os.path.exists(cookie_file):
-        return jsonify({
-            "status": "success",
-            "has_cookies": True,
-            "username": session.get('username', 'Instagram User'),
-            "message": "Cookies file exists"
-        })
-    
-    return jsonify({
-        "status": "success",
-        "has_cookies": False,
-        "message": "No saved cookies found"
-    })
-
-@app.route("/api/instagram/clear_cookies", methods=["POST"])
-def clear_instagram_cookies():
-    """Clear saved Instagram cookies."""
-    session.pop('instagram_encrypted', None)
-    session.pop('instagram_username', None)
-    session.pop('instagram_saved', None)
-    session.pop('cookie_file', None)
-
-    for file in ['cookies_netscape.txt', 'instagram_cookies_persistent.txt']:
-        path = os.path.join('/tmp', file)
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-            except Exception:
-                pass
-
-    return jsonify({
-        "status": "success",
-        "message": "Instagram cookies cleared successfully"
-    })
-
-
-
-
+# ============== PROCESS REELS ==============
 
 @app.route("/api/process-reels", methods=["POST"])
 def process_reels():
-    """
-    Receives a list of Instagram Reel URLs, processes each to get a direct download URL,
-    and returns the results.
-    Expects JSON: {"reels": ["url1", "url2", ...]}
-    """
     data = request.get_json(silent=True)
     if not data or not isinstance(data, dict):
         return jsonify({"error": "Invalid request body"}), 400
@@ -1186,7 +1149,6 @@ def process_reels():
     processed_results = []
     for reel_url in reel_urls:
         try:
-            # Use your existing function to get the direct download URL
             direct_url = get_direct_video_url(reel_url)
             if direct_url:
                 processed_results.append({
@@ -1215,39 +1177,10 @@ def process_reels():
         "results": processed_results
     })
 
-
-@app.route("/api/instagram/get_cookies", methods=["GET"])
-def get_instagram_cookies():
-    """Get the stored Instagram cookies."""
-    encrypted = session.get('instagram_encrypted')
-    if encrypted:
-        try:
-            decrypted = decrypt_credentials(encrypted)
-            if decrypted:
-                cookie_data = decrypted[0]
-                if isinstance(cookie_data, str) and cookie_data.startswith('['):
-                    cookie_data = json.loads(cookie_data)
-                elif isinstance(cookie_data, dict):
-                    cookie_data = cookie_data.get('data', [])
-                return jsonify({
-                    "status": "success",
-                    "cookies": cookie_data
-                })
-        except Exception as e:
-            app.logger.error(f"Failed to get cookies: {e}")
-    
-    return jsonify({
-        "status": "error",
-        "cookies": None,
-        "error": "No cookies found"
-    }), 404
-
-
-
+# ============== DEBUG ROUTES ==============
 
 @app.route("/api/debug/cookies", methods=["GET"])
 def debug_cookies():
-    """Debug endpoint to check cookie status."""
     cookie_file = get_cookie_file()
     if cookie_file and os.path.exists(cookie_file):
         with open(cookie_file, 'r') as f:
@@ -1269,157 +1202,31 @@ def debug_cookies():
         "session_permanent": session.permanent
     })
 
-
-
-
-# ============== SCRAPED DATA STORAGE (for Render integration) ==============
-
-# In-memory store for scraped data (ephemeral on serverless)
-scraped_data_store = {}
-
-@app.route("/api/scraped/store", methods=["POST"])
-def store_scraped_data():
-    """Store scraped data from Render."""
-    data = request.get_json(silent=True) or {}
-    results = data.get("results", [])
-    job_id = data.get("job_id")
-    
-    if not results:
-        return jsonify({"error": "No results provided"}), 400
-    
-    # Store in memory with timestamp
-    scraped_data_store['latest'] = {
-        'results': results,
-        'job_id': job_id,
-        'timestamp': datetime.utcnow().isoformat(),
-        'count': len(results)
-    }
-    
-    app.logger.info(f"Stored {len(results)} profiles from job {job_id}")
-    
+@app.route("/api/debug/session", methods=["GET"])
+def debug_session():
+    db_cookies = get_cookies_from_db()
     return jsonify({
-        "status": "success",
-        "message": f"Stored {len(results)} profiles",
-        "count": len(results)
+        "session_keys": list(session.keys()),
+        "has_instagram_encrypted": bool(session.get('instagram_encrypted')),
+        "has_cookies_data": bool(session.get('cookies_data')),
+        "instagram_username": session.get('instagram_username'),
+        "username": session.get('username'),
+        "session_permanent": session.permanent,
+        "cookie_file": session.get('cookie_file'),
+        "db_cookies": db_cookies is not None,
+        "db_username": db_cookies.get('username') if db_cookies else None
     })
 
-
-
-
-@app.route("/api/scrape/proxy", methods=["POST"])
-def scrape_proxy():
-    """
-    Proxy endpoint: Frontend calls this (same domain).
-    This retrieves cookies from session and forwards to Render.
-    """
-    data = request.get_json(silent=True) or {}
-    
-    # Get cookies from session (already uploaded and encrypted)
-    cookies = None
-    encrypted = session.get('instagram_encrypted')
-    if encrypted:
-        try:
-            decrypted = decrypt_credentials(encrypted)
-            if decrypted:
-                cookie_data = decrypted[0]
-                if isinstance(cookie_data, str) and cookie_data.startswith('['):
-                    cookie_data = json.loads(cookie_data)
-                elif isinstance(cookie_data, dict):
-                    cookie_data = cookie_data.get('data', [])
-                cookies = cookie_data
-        except Exception as e:
-            app.logger.error(f"Failed to decrypt cookies: {e}")
-    
-    # If no cookies in session, check if we have a cookie file
-    if not cookies:
-        cookie_file = get_cookie_file()
-        if cookie_file and os.path.exists(cookie_file):
-            try:
-                with open(cookie_file, 'r') as f:
-                    content = f.read()
-                    # Parse Netscape format if needed
-                    # For now, try to get from session cookie_file
-                    pass
-            except:
-                pass
-    
-    if not cookies:
-        return jsonify({
-            "status": "error",
-            "error": "No Instagram cookies found. Please upload your cookies.json file first."
-        }), 400
-    
-    # Add cookies to the request data
-    data['cookies'] = cookies
-    app.logger.info(f"Proxy: Forwarding request with {len(cookies)} cookies for {len(data.get('usernames', []))} users")
-    
-    try:
-        # Forward to Render (server-to-server, no CORS)
-        response = requests.post(
-            'https://ig-reels-scraper.onrender.com/api/scrape/start',
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=60
-        )
-        
-        app.logger.info(f"Proxy: Render responded with status {response.status_code}")
-        return jsonify(response.json()), response.status_code
-        
-    except requests.exceptions.Timeout:
-        return jsonify({
-            "status": "error",
-            "error": "Render service timed out. Please try again."
-        }), 504
-    except requests.exceptions.ConnectionError:
-        return jsonify({
-            "status": "error",
-            "error": "Could not connect to Render service. Please try again later."
-        }), 503
-    except Exception as e:
-        app.logger.error(f"Proxy error: {e}")
-        return jsonify({
-            "status": "error",
-            "error": str(e)
-        }), 500
-
-
-
-
-
-
-@app.route("/api/scraped/latest", methods=["GET"])
-def get_scraped_data():
-    """Get the latest scraped data."""
-    latest = scraped_data_store.get('latest')
-    if not latest:
-        return jsonify({
-            "status": "success",
-            "results": [],
-            "message": "No scraped data available"
-        })
-    
+@app.route("/api/commands/status", methods=["GET"])
+def api_status():
+    cookie_status = "configured" if get_cookie_file() else "not configured"
     return jsonify({
-        "status": "success",
-        "results": latest.get('results', []),
-        "job_id": latest.get('job_id'),
-        "timestamp": latest.get('timestamp'),
-        "count": latest.get('count', 0)
+        "status": "running",
+        "version": "1.1.0",
+        "cookies": cookie_status,
+        "download_history_count": 0,
+        "recent_downloads": []
     })
-
-
-@app.route("/api/scraped/clear", methods=["POST"])
-def clear_scraped_data():
-    """Clear stored scraped data."""
-    scraped_data_store.clear()
-    return jsonify({
-        "status": "success",
-        "message": "Scraped data cleared"
-    })
-
-
-
-
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
