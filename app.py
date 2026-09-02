@@ -774,6 +774,9 @@ def scrape_proxy():
     data = request.get_json(silent=True) or {}
     usernames = data.get("usernames", [])
     
+    # Log the usernames being scraped
+    app.logger.info(f"📝 Scraping usernames: {usernames}")
+    
     cookies = None
     db_cookies = get_cookies_from_db()
     if db_cookies:
@@ -819,17 +822,31 @@ def scrape_proxy():
         
         app.logger.info(f"Proxy: Render responded with status {response.status_code}")
         
-        # If successful and we have results, store them in database
+        # If successful, store the results in database
         if response.status_code == 200:
             result_data = response.json()
             if result_data.get('job_id') and result_data.get('results'):
-                store_scraped_data_internal(
-                    job_id=result_data.get('job_id'),
-                    results=result_data.get('results', []),
-                    usernames=usernames,
-                    status='completed'
-                )
-                app.logger.info(f"Auto-stored scraped data for job {result_data.get('job_id')}")
+                # Extract usernames from results if not already in response
+                results = result_data.get('results', [])
+                extracted_usernames = []
+                for profile in results:
+                    if isinstance(profile, dict):
+                        username = profile.get('username')
+                        if username:
+                            extracted_usernames.append(username)
+                
+                # Store with usernames
+                store_url = f"{request.host_url}api/scraped/store"
+                store_payload = {
+                    "job_id": result_data.get('job_id'),
+                    "results": results,
+                    "usernames": extracted_usernames or usernames
+                }
+                
+                # Make internal request to store data
+                with app.test_request_context():
+                    store_response = store_scraped_data()
+                    app.logger.info(f"✅ Auto-stored scraped data for job {result_data.get('job_id')} with usernames: {extracted_usernames or usernames}")
         
         return jsonify(response.json()), response.status_code
         
@@ -904,7 +921,7 @@ def store_scraped_data_internal(job_id, results, usernames, status='completed'):
 
 @app.route("/api/scraped/store", methods=["POST"])
 def store_scraped_data():
-    """Store scraped data from Render into PostgreSQL."""
+    """Store scraped data from Render into PostgreSQL with usernames."""
     data = request.get_json(silent=True) or {}
     results = data.get("results", [])
     job_id = data.get("job_id")
@@ -918,6 +935,15 @@ def store_scraped_data():
         return jsonify({"error": "Database connection failed"}), 500
     
     try:
+        # Extract usernames from results if not provided
+        if not usernames:
+            usernames = []
+            for profile in results:
+                if isinstance(profile, dict):
+                    username = profile.get('username')
+                    if username:
+                        usernames.append(username)
+        
         # Calculate stats
         total_profiles = len(results)
         total_reels = 0
@@ -925,10 +951,13 @@ def store_scraped_data():
             if profile.get('reels'):
                 total_reels += len(profile.get('reels', []))
         
+        # Get user_id
+        user_id = get_user_id()
+        
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO scraped_reels (user_id, job_id, usernames, results, status, total_profiles, total_reels, updated_at)
-            VALUES ('single-user', %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (user_id, job_id) 
             DO UPDATE SET 
                 results = EXCLUDED.results,
@@ -938,6 +967,7 @@ def store_scraped_data():
                 total_reels = EXCLUDED.total_reels,
                 updated_at = NOW()
         """, (
+            user_id,
             job_id or f"job_{datetime.utcnow().isoformat()}", 
             usernames,
             json.dumps(results),
@@ -947,13 +977,14 @@ def store_scraped_data():
         ))
         conn.commit()
         
-        app.logger.info(f"Stored {total_profiles} profiles with {total_reels} total reels")
+        app.logger.info(f"✅ Stored {total_profiles} profiles with usernames: {usernames}")
         
         return jsonify({
             "status": "success",
             "message": f"Stored {total_profiles} profiles with {total_reels} total reels",
             "count": total_profiles,
             "reels_count": total_reels,
+            "usernames": usernames,
             "job_id": job_id
         })
         
