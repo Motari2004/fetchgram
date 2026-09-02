@@ -439,6 +439,23 @@ function showScrapeStatus(message, type) {
   scrapeJobStatus.hidden = false;
 }
 
+function showScrapeProgress(percent, text) {
+  const progressBar = document.getElementById('scrape-job-progress');
+  const fill = document.getElementById('scrape-progress-fill');
+  const label = document.getElementById('scrape-progress-text');
+  
+  if (progressBar) {
+    progressBar.hidden = false;
+    if (fill) fill.style.width = percent + '%';
+    if (label) label.textContent = text || percent + '%';
+  }
+}
+
+function hideScrapeProgress() {
+  const progressBar = document.getElementById('scrape-job-progress');
+  if (progressBar) progressBar.hidden = true;
+}
+
 function showScrapedStatus(message, type) {
   scrapedReelsStatus.textContent = message;
   scrapedReelsStatus.className = 'status-message ' + type;
@@ -494,7 +511,7 @@ function renderScrapedResults(results) {
   clearScrapedBtn.hidden = false;
 }
 
-// ==================== START SCRAPING - SIMPLIFIED ====================
+// ==================== START SCRAPING ====================
 
 startScrapeBtn.addEventListener('click', async function() {
   const usernames = scrapeUsernames.value
@@ -514,6 +531,7 @@ startScrapeBtn.addEventListener('click', async function() {
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
   showScrapeStatus('⏳ Sending request to Render...', 'running');
+  showScrapeProgress(10, 'Connecting to Render...');
   
   try {
     const response = await fetch(`${RENDER_SCRAPER_URL}/api/scrape/start`, {
@@ -531,15 +549,40 @@ startScrapeBtn.addEventListener('click', async function() {
     const data = await response.json();
     
     if (response.ok) {
-      showScrapeStatus(`✅ Job started! Job ID: ${data.jobId} - Render will post results to Vercel when done.`, 'success');
+      showScrapeProgress(100, '✅ Job started!');
+      showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
+      
       // Store the job ID for reference
       localStorage.setItem('last_scrape_job_id', data.jobId);
-      // Clear any old results
-      scrapedReelsContent.innerHTML = `<div class="empty-state">Job started! Render will process and send results back. Click "Load Results" when done.</div>`;
+      
+      // Show a message with instructions
+      scrapedReelsContent.innerHTML = `
+        <div class="empty-state" style="border-color: var(--success);">
+          <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
+          <strong>Job sent to Render!</strong>
+          <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+            Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${data.jobId}</code>
+          </p>
+          <p style="margin-top: 4px; font-size: 13px; color: var(--text-secondary);">
+            Render is scraping the profiles. Results will be sent back automatically.
+          </p>
+          <p style="margin-top: 8px; font-size: 13px; color: var(--text-muted);">
+            ⏱️ This may take a minute or two. Click <strong>"Load Results"</strong> after the job completes.
+          </p>
+        </div>
+      `;
+      
+      // Hide progress after 3 seconds
+      setTimeout(() => {
+        hideScrapeProgress();
+      }, 3000);
+      
     } else {
+      showScrapeProgress(0, '❌ Failed');
       showScrapeStatus(`❌ Failed to start job: ${data.error || 'Unknown error'}`, 'error');
     }
   } catch (error) {
+    showScrapeProgress(0, '❌ Error');
     showScrapeStatus(`❌ Failed to connect to Render: ${error.message}`, 'error');
   } finally {
     this.innerHTML = `
@@ -568,9 +611,41 @@ async function fetchScrapedResults() {
     if (response.ok && data.results && data.results.length > 0) {
       renderScrapedResults(data.results);
       showScrapedStatus(`✅ Loaded ${data.results.length} profiles from Vercel storage`, 'success');
+      
+      // Show job info if available
+      if (data.job_id) {
+        const header = document.querySelector('.scraped-reels-header');
+        const existingCount = header.querySelector('.count');
+        if (existingCount) existingCount.remove();
+        const countSpan = document.createElement('span');
+        countSpan.className = 'count';
+        countSpan.textContent = `Job: ${data.job_id.slice(0, 8)}...`;
+        header.appendChild(countSpan);
+      }
     } else {
-      showScrapedStatus('No results found. Start a new scrape job and wait for Render to complete.', 'error');
-      scrapedReelsContent.innerHTML = `<div class="empty-state">No results found. Click "Start Scraping" to begin a new job.</div>`;
+      // Check if there's a pending job
+      const jobId = localStorage.getItem('last_scrape_job_id');
+      if (jobId) {
+        showScrapedStatus(`⏳ Job ${jobId.slice(0, 8)}... is still processing or no results yet. Try again in a minute.`, 'info');
+        scrapedReelsContent.innerHTML = `
+          <div class="empty-state">
+            <div style="font-size: 24px; margin-bottom: 8px;">⏳</div>
+            <strong>Waiting for results...</strong>
+            <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+              Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${jobId}</code>
+            </p>
+            <p style="margin-top: 4px; font-size: 13px; color: var(--text-muted);">
+              Render is still processing. Results will appear here automatically.
+            </p>
+            <button onclick="fetchScrapedResults()" class="btn btn-sm btn-primary" style="margin-top: 12px;">
+              🔄 Try Again
+            </button>
+          </div>
+        `;
+      } else {
+        showScrapedStatus('No results found. Start a new scrape job.', 'error');
+        scrapedReelsContent.innerHTML = `<div class="empty-state">No results found. Click "Start Scraping" to begin a new job.</div>`;
+      }
     }
   } catch (error) {
     showScrapedStatus(`❌ Failed to load results: ${error.message}`, 'error');
@@ -588,6 +663,7 @@ clearScrapedBtn.addEventListener('click', function() {
   scrapedReelsContent.innerHTML = `<div class="empty-state">No scraped data. Start a scrape job below or load existing results.</div>`;
   this.hidden = true;
   showScrapedStatus('✅ Cleared scraped results', 'success');
+  localStorage.removeItem('last_scrape_job_id');
 });
 
 // ==================== DOWNLOAD FUNCTIONS ====================
@@ -881,5 +957,18 @@ checkBlueskyStatus();
 // Check if there's a recent scrape job on load
 const savedJobId = localStorage.getItem('last_scrape_job_id');
 if (savedJobId) {
-  showScrapeStatus(`ℹ️ Last job ID: ${savedJobId} - Click "Load Results" to check for completed jobs.`, 'running');
+  // Just show a notification that there's a pending job
+  showScrapeStatus(`ℹ️ Last job ID: ${savedJobId.slice(0, 8)}... - Click "Load Results" to check for completed jobs.`, 'running');
+  scrapedReelsContent.innerHTML = `
+    <div class="empty-state">
+      <div style="font-size: 24px; margin-bottom: 8px;">📋</div>
+      <strong>Previous job found</strong>
+      <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+        Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${savedJobId}</code>
+      </p>
+      <p style="margin-top: 4px; font-size: 13px; color: var(--text-muted);">
+        Click "Load Results" to check if the job has completed.
+      </p>
+    </div>
+  `;
 }
