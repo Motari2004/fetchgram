@@ -43,13 +43,15 @@ def get_db_connection():
         return None
 
 def init_db():
-    """Initialize the database table if it doesn't exist."""
+    """Initialize the database tables if they don't exist."""
     conn = get_db_connection()
     if not conn:
         return
     
     try:
         cur = conn.cursor()
+        
+        # User cookies table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS user_cookies (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -61,8 +63,40 @@ def init_db():
                 UNIQUE(user_id)
             );
         """)
+        
+        # Scraped reels table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scraped_reels (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                usernames TEXT[] NOT NULL,
+                results JSONB NOT NULL,
+                status TEXT DEFAULT 'completed',
+                total_profiles INTEGER DEFAULT 0,
+                total_reels INTEGER DEFAULT 0,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(user_id, job_id)
+            );
+        """)
+        
+        # Create indexes for faster queries
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id 
+            ON scraped_reels(user_id);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at 
+            ON scraped_reels(created_at DESC);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id 
+            ON user_cookies(user_id);
+        """)
+        
         conn.commit()
-        app.logger.info("Database table 'user_cookies' ready")
+        app.logger.info("Database tables ready")
     except Exception as e:
         app.logger.error(f"Database init error: {e}")
     finally:
@@ -738,6 +772,7 @@ def clear_cookies():
 def scrape_proxy():
     """Proxy endpoint that retrieves cookies from Neon PostgreSQL or session."""
     data = request.get_json(silent=True) or {}
+    usernames = data.get("usernames", [])
     
     cookies = None
     db_cookies = get_cookies_from_db()
@@ -783,6 +818,19 @@ def scrape_proxy():
         )
         
         app.logger.info(f"Proxy: Render responded with status {response.status_code}")
+        
+        # If successful and we have results, store them in database
+        if response.status_code == 200:
+            result_data = response.json()
+            if result_data.get('job_id') and result_data.get('results'):
+                store_scraped_data_internal(
+                    job_id=result_data.get('job_id'),
+                    results=result_data.get('results', []),
+                    usernames=usernames,
+                    status='completed'
+                )
+                app.logger.info(f"Auto-stored scraped data for job {result_data.get('job_id')}")
+        
         return jsonify(response.json()), response.status_code
         
     except requests.exceptions.Timeout:
@@ -802,62 +850,282 @@ def scrape_proxy():
             "error": str(e)
         }), 500
 
-# ============== SCRAPED DATA STORAGE ==============
+# ============== SCRAPED DATA STORAGE (DATABASE) ==============
 
-scraped_data_store = {}
+def store_scraped_data_internal(job_id, results, usernames, status='completed'):
+    """Internal function to store scraped data in database."""
+    if not results:
+        return False
+    
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        # Calculate stats
+        total_profiles = len(results)
+        total_reels = 0
+        for profile in results:
+            if profile.get('reels'):
+                total_reels += len(profile.get('reels', []))
+        
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO scraped_reels (user_id, job_id, usernames, results, status, total_profiles, total_reels, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (user_id, job_id) 
+            DO UPDATE SET 
+                results = EXCLUDED.results,
+                usernames = EXCLUDED.usernames,
+                status = EXCLUDED.status,
+                total_profiles = EXCLUDED.total_profiles,
+                total_reels = EXCLUDED.total_reels,
+                updated_at = NOW()
+        """, (
+            user_id, 
+            job_id or f"job_{datetime.utcnow().isoformat()}", 
+            usernames,
+            json.dumps(results),
+            status,
+            total_profiles,
+            total_reels
+        ))
+        conn.commit()
+        app.logger.info(f"Stored {total_profiles} profiles from job {job_id}")
+        return True
+        
+    except Exception as e:
+        app.logger.error(f"Database store error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
 
 @app.route("/api/scraped/store", methods=["POST"])
 def store_scraped_data():
-    """Store scraped data from Render."""
+    """Store scraped data from Render into PostgreSQL."""
     data = request.get_json(silent=True) or {}
     results = data.get("results", [])
     job_id = data.get("job_id")
+    usernames = data.get("usernames", [])
+    status = data.get("status", 'completed')
     
     if not results:
         return jsonify({"error": "No results provided"}), 400
     
-    scraped_data_store['latest'] = {
-        'results': results,
-        'job_id': job_id,
-        'timestamp': datetime.utcnow().isoformat(),
-        'count': len(results)
-    }
+    success = store_scraped_data_internal(job_id, results, usernames, status)
     
-    app.logger.info(f"Stored {len(results)} profiles from job {job_id}")
-    
-    return jsonify({
-        "status": "success",
-        "message": f"Stored {len(results)} profiles",
-        "count": len(results)
-    })
+    if success:
+        return jsonify({
+            "status": "success",
+            "message": f"Stored {len(results)} profiles",
+            "count": len(results)
+        })
+    else:
+        return jsonify({"error": "Failed to store data"}), 500
 
 @app.route("/api/scraped/latest", methods=["GET"])
 def get_scraped_data():
-    """Get the latest scraped data."""
-    latest = scraped_data_store.get('latest')
-    if not latest:
+    """Get the latest scraped data from PostgreSQL."""
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                id,
+                job_id,
+                usernames,
+                results,
+                status,
+                total_profiles,
+                total_reels,
+                created_at,
+                updated_at
+            FROM scraped_reels 
+            WHERE user_id = %s 
+            ORDER BY created_at DESC 
+            LIMIT 1
+        """, (user_id,))
+        
+        result = cur.fetchone()
+        
+        if result:
+            return jsonify({
+                "status": "success",
+                "results": result['results'],
+                "job_id": result['job_id'],
+                "usernames": result['usernames'],
+                "status": result['status'],
+                "total_profiles": result['total_profiles'],
+                "total_reels": result['total_reels'],
+                "created_at": result['created_at'].isoformat() if result['created_at'] else None,
+                "updated_at": result['updated_at'].isoformat() if result['updated_at'] else None,
+                "message": f"Loaded {result['total_profiles']} profiles from database"
+            })
+        else:
+            return jsonify({
+                "status": "success",
+                "results": [],
+                "message": "No scraped data found in database"
+            })
+            
+    except Exception as e:
+        app.logger.error(f"Database get error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route("/api/scraped/history", methods=["GET"])
+def get_scraped_history():
+    """Get all scraped data history for the user."""
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                id,
+                job_id,
+                usernames,
+                status,
+                total_profiles,
+                total_reels,
+                created_at,
+                updated_at
+            FROM scraped_reels 
+            WHERE user_id = %s 
+            ORDER BY created_at DESC 
+            LIMIT 50
+        """, (user_id,))
+        
+        results = cur.fetchall()
+        
         return jsonify({
             "status": "success",
-            "results": [],
-            "message": "No scraped data available"
+            "history": results,
+            "count": len(results)
         })
+        
+    except Exception as e:
+        app.logger.error(f"Database history error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route("/api/scraped/get/<job_id>", methods=["GET"])
+def get_scraped_by_job_id(job_id):
+    """Get specific scraped data by job ID."""
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
     
-    return jsonify({
-        "status": "success",
-        "results": latest.get('results', []),
-        "job_id": latest.get('job_id'),
-        "timestamp": latest.get('timestamp'),
-        "count": latest.get('count', 0)
-    })
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                id,
+                job_id,
+                usernames,
+                results,
+                status,
+                total_profiles,
+                total_reels,
+                created_at,
+                updated_at
+            FROM scraped_reels 
+            WHERE user_id = %s AND job_id = %s
+        """, (user_id, job_id))
+        
+        result = cur.fetchone()
+        
+        if result:
+            return jsonify({
+                "status": "success",
+                "results": result['results'],
+                "job_id": result['job_id'],
+                "usernames": result['usernames'],
+                "status": result['status'],
+                "total_profiles": result['total_profiles'],
+                "total_reels": result['total_reels'],
+                "created_at": result['created_at'].isoformat() if result['created_at'] else None,
+                "updated_at": result['updated_at'].isoformat() if result['updated_at'] else None
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "error": "Job not found"
+            }), 404
+            
+    except Exception as e:
+        app.logger.error(f"Database get by job error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
 
 @app.route("/api/scraped/clear", methods=["POST"])
 def clear_scraped_data():
-    """Clear stored scraped data."""
-    scraped_data_store.clear()
-    return jsonify({
-        "status": "success",
-        "message": "Scraped data cleared"
-    })
+    """Clear all scraped data for the user."""
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM scraped_reels WHERE user_id = %s", (user_id,))
+        conn.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Scraped data cleared from database"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Database clear error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route("/api/scraped/clear/<job_id>", methods=["POST"])
+def clear_scraped_by_job_id(job_id):
+    """Clear specific scraped data by job ID."""
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM scraped_reels WHERE user_id = %s AND job_id = %s", 
+            (user_id, job_id)
+        )
+        conn.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Scraped data for job {job_id} cleared from database"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Database clear by job error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
 
 # ============== VIDEO DOWNLOAD ROUTES ==============
 
