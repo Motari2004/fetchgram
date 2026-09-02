@@ -1276,6 +1276,45 @@ def store_scraped_data():
     })
 
 
+
+
+@app.route("/api/scrape/proxy", methods=["POST"])
+def scrape_proxy():
+    """
+    Proxy endpoint to forward scrape requests to Render.
+    This bypasses CORS issues since the request comes from your own server.
+    """
+    data = request.get_json(silent=True) or {}
+    
+    # Log the incoming request for debugging
+    app.logger.info(f"Proxy: Received scrape request for {len(data.get('usernames', []))} usernames")
+    
+    try:
+        # Forward the request to Render
+        response = requests.post(
+            'https://ig-reels-scraper.onrender.com/api/scrape/start',
+            json=data,
+            headers={'Content-Type': 'application/json'},
+            timeout=30
+        )
+        
+        app.logger.info(f"Proxy: Render responded with status {response.status_code}")
+        return jsonify(response.json()), response.status_code
+        
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Proxy: Failed to connect to Render: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "error": f"Failed to connect to Render service: {str(e)}"
+        }), 503
+
+
+
+
+
+
+
+
 @app.route("/api/scraped/latest", methods=["GET"])
 def get_scraped_data():
     """Get the latest scraped data."""

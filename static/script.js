@@ -530,11 +530,12 @@ startScrapeBtn.addEventListener('click', async function() {
   
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
-  showScrapeStatus('⏳ Sending request to Render...', 'running');
-  showScrapeProgress(10, 'Connecting to Render...');
+  showScrapeStatus('⏳ Sending request to Render via Vercel proxy...', 'running');
+  showScrapeProgress(10, 'Connecting to Vercel proxy...');
   
   try {
-    const response = await fetch(`${RENDER_SCRAPER_URL}/api/scrape/start`, {
+    // Call your Vercel proxy endpoint instead of Render directly
+    const response = await fetch('/api/scrape/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -552,10 +553,8 @@ startScrapeBtn.addEventListener('click', async function() {
       showScrapeProgress(100, '✅ Job started!');
       showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
       
-      // Store the job ID for reference
       localStorage.setItem('last_scrape_job_id', data.jobId);
       
-      // Show a message with instructions
       scrapedReelsContent.innerHTML = `
         <div class="empty-state" style="border-color: var(--success);">
           <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
@@ -572,7 +571,6 @@ startScrapeBtn.addEventListener('click', async function() {
         </div>
       `;
       
-      // Hide progress after 3 seconds
       setTimeout(() => {
         hideScrapeProgress();
       }, 3000);
@@ -582,8 +580,9 @@ startScrapeBtn.addEventListener('click', async function() {
       showScrapeStatus(`❌ Failed to start job: ${data.error || 'Unknown error'}`, 'error');
     }
   } catch (error) {
+    console.error('Scrape error:', error);
     showScrapeProgress(0, '❌ Error');
-    showScrapeStatus(`❌ Failed to connect to Render: ${error.message}`, 'error');
+    showScrapeStatus(`❌ Failed to start job: ${error.message}`, 'error');
   } finally {
     this.innerHTML = `
       <span class="btn-content">
