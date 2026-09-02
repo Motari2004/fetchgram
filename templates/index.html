@@ -207,7 +207,7 @@
           <span class="delete-icon">🗑️</span>
           <h3>Delete Profile from Database</h3>
         </div>
-        <span class="badge" id="delete-count-badge">0 profiles</span>
+        <span class="badge" id="delete-count-badge">Loading...</span>
       </div>
       
       <div class="delete-profile-body">
@@ -239,13 +239,15 @@
         
         <div id="delete-profile-status" class="status-message" hidden></div>
         
-        <div class="delete-profile-help">
-          <details>
-            <summary>📋 Available profiles to delete</summary>
-            <div class="help-content" id="delete-profile-list">
-              <p style="color: var(--text-muted);">Loading profiles...</p>
-            </div>
-          </details>
+        <!-- Available Profiles List -->
+        <div class="delete-profiles-container">
+          <div class="delete-profiles-header">
+            <span>📋 Available Profiles in Database</span>
+            <span class="badge" id="delete-list-count">0 profiles</span>
+          </div>
+          <div id="delete-profile-list" class="delete-profiles-list">
+            <div class="empty-state">No profiles found in database.</div>
+          </div>
         </div>
       </div>
     </div>
