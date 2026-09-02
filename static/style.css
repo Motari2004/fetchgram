@@ -2512,3 +2512,346 @@ html, body {
     background: var(--border-color-dark, #2d2d2d);
   }
 }
+
+
+
+/* ==================== ZERNIO (FACEBOOK) SECTION ==================== */
+
+.zernio-section {
+  margin-top: 24px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  transition: var(--transition);
+}
+
+.zernio-section:hover {
+  border-color: var(--border-light);
+}
+
+.zernio-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.zernio-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.zernio-header-left h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.zernio-icon {
+  font-size: 22px;
+}
+
+#zernio-status-badge {
+  background: var(--success-bg);
+  color: var(--success);
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-weight: 500;
+}
+
+.zernio-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Account Select */
+.zernio-body .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.zernio-body .form-group label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+#zernio-account-select {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  transition: var(--transition);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  cursor: pointer;
+}
+
+#zernio-account-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+#zernio-account-select:hover {
+  border-color: var(--border-light);
+}
+
+/* Textarea */
+.zernio-textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+  max-height: 200px;
+  transition: var(--transition);
+  line-height: 1.6;
+}
+
+.zernio-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.zernio-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Schedule Input */
+#zernio-schedule {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  transition: var(--transition);
+}
+
+#zernio-schedule:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+/* Actions Buttons */
+.zernio-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.zernio-actions .btn {
+  flex: 1;
+  min-width: 140px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+#zernio-publish-btn {
+  background: var(--accent);
+  color: white;
+}
+
+#zernio-publish-btn:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+#zernio-publish-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+#zernio-publish-btn .btn-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+#zernio-schedule-btn {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+#zernio-schedule-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+/* Status Message */
+#zernio-status {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-top: 4px;
+  display: none;
+}
+
+#zernio-status.success {
+  display: block;
+  background: var(--success-bg);
+  color: var(--success);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+#zernio-status.error {
+  display: block;
+  background: var(--error-bg);
+  color: var(--error);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+#zernio-status.info {
+  display: block;
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .zernio-section {
+    padding: 16px;
+    margin-top: 16px;
+  }
+  
+  .zernio-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  
+  .zernio-header-left h3 {
+    font-size: 15px;
+  }
+  
+  .zernio-actions {
+    flex-direction: column;
+  }
+  
+  .zernio-actions .btn {
+    min-width: unset;
+    width: 100%;
+    justify-content: center;
+  }
+  
+  #zernio-account-select {
+    font-size: 13px;
+    padding: 8px 12px;
+  }
+  
+  .zernio-textarea {
+    font-size: 13px;
+    min-height: 60px;
+  }
+  
+  #zernio-schedule {
+    font-size: 13px;
+    padding: 8px 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .zernio-section {
+    padding: 12px;
+  }
+  
+  .zernio-header-left {
+    gap: 6px;
+  }
+  
+  .zernio-header-left h3 {
+    font-size: 14px;
+  }
+  
+  .zernio-icon {
+    font-size: 18px;
+  }
+  
+  #zernio-status-badge {
+    font-size: 10px;
+    padding: 3px 10px;
+  }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+  .zernio-section {
+    background: var(--bg-secondary-dark, #1a1a1a);
+    border-color: var(--border-color-dark, #2d2d2d);
+  }
+  
+  .zernio-section:hover {
+    border-color: var(--border-light-dark, #3d3d3d);
+  }
+  
+  #zernio-account-select {
+    background-color: var(--bg-primary-dark, #0d0d0d);
+    border-color: var(--border-color-dark, #2d2d2d);
+  }
+  
+  .zernio-textarea {
+    background-color: var(--bg-primary-dark, #0d0d0d);
+    border-color: var(--border-color-dark, #2d2d2d);
+  }
+  
+  #zernio-schedule {
+    background-color: var(--bg-primary-dark, #0d0d0d);
+    border-color: var(--border-color-dark, #2d2d2d);
+  }
+  
+  #zernio-schedule-btn {
+    background: var(--bg-secondary-dark, #1a1a1a);
+    border-color: var(--border-color-dark, #2d2d2d);
+  }
+}
+
+/* Animations */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
