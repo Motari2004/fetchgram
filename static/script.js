@@ -1215,19 +1215,3 @@ document.addEventListener('visibilitychange', function() {
   }
 });
 
-const savedJobId = localStorage.getItem('last_scrape_job_id');
-if (savedJobId) {
-  showScrapeStatus(`ℹ️ Last job ID: ${savedJobId.slice(0, 8)}... - Click "Load Results" to check for completed jobs.`, 'running');
-  scrapedReelsContent.innerHTML = `
-    <div class="empty-state">
-      <div style="font-size: 24px; margin-bottom: 8px;">📋</div>
-      <strong>Previous job found</strong>
-      <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-        Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${savedJobId}</code>
-      </p>
-      <p style="margin-top: 4px; font-size: 13px; color: var(--text-muted);">
-        Click "Load Results" to check if the job has completed.
-      </p>
-    </div>
-  `;
-}
