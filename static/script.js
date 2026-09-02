@@ -528,27 +528,13 @@ startScrapeBtn.addEventListener('click', async function() {
   const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
   const headless = scrapeHeadless.checked;
   
-  // Check if cookies are available first
-  try {
-    const cookieStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
-    const cookieData = await cookieStatus.json();
-    
-    if (!cookieData.has_cookies) {
-      showScrapeStatus('❌ Please upload your Instagram cookies.json file first!', 'error');
-      return;
-    }
-  } catch (error) {
-    showScrapeStatus('❌ Failed to check cookie status', 'error');
-    return;
-  }
-  
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
-  showScrapeStatus('⏳ Sending request to Render via Vercel proxy...', 'running');
-  showScrapeProgress(10, 'Connecting to Vercel proxy...');
+  showScrapeStatus('⏳ Sending request...', 'running');
+  showScrapeProgress(10, 'Checking cookies...');
   
   try {
-    // Call your Vercel proxy endpoint
+    // Call the proxy endpoint (same domain)
     const response = await fetch('/api/scrape/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -596,7 +582,7 @@ startScrapeBtn.addEventListener('click', async function() {
   } catch (error) {
     console.error('Scrape error:', error);
     showScrapeProgress(0, '❌ Error');
-    showScrapeStatus(`❌ Failed to start job: ${error.message}`, 'error');
+    showScrapeStatus(`❌ ${error.message}`, 'error');
   } finally {
     this.innerHTML = `
       <span class="btn-content">

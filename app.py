@@ -1281,12 +1281,12 @@ def store_scraped_data():
 @app.route("/api/scrape/proxy", methods=["POST"])
 def scrape_proxy():
     """
-    Proxy endpoint to forward scrape requests to Render.
-    This bypasses CORS issues since the request comes from your own server.
+    Proxy endpoint: Frontend calls this (same domain).
+    This retrieves cookies from session and forwards to Render.
     """
     data = request.get_json(silent=True) or {}
     
-    # Get the stored Instagram cookies from the session
+    # Get cookies from session (already uploaded and encrypted)
     cookies = None
     encrypted = session.get('instagram_encrypted')
     if encrypted:
@@ -1302,39 +1302,57 @@ def scrape_proxy():
         except Exception as e:
             app.logger.error(f"Failed to decrypt cookies: {e}")
     
-    # Add cookies to the request data
-    if cookies:
-        data['cookies'] = cookies
-        app.logger.info(f"Proxy: Added {len(cookies)} cookies to request")
-    else:
-        app.logger.warning("Proxy: No cookies found in session")
+    # If no cookies in session, check if we have a cookie file
+    if not cookies:
+        cookie_file = get_cookie_file()
+        if cookie_file and os.path.exists(cookie_file):
+            try:
+                with open(cookie_file, 'r') as f:
+                    content = f.read()
+                    # Parse Netscape format if needed
+                    # For now, try to get from session cookie_file
+                    pass
+            except:
+                pass
+    
+    if not cookies:
         return jsonify({
             "status": "error",
             "error": "No Instagram cookies found. Please upload your cookies.json file first."
         }), 400
     
-    # Log the incoming request for debugging
-    app.logger.info(f"Proxy: Received scrape request for {len(data.get('usernames', []))} usernames")
+    # Add cookies to the request data
+    data['cookies'] = cookies
+    app.logger.info(f"Proxy: Forwarding request with {len(cookies)} cookies for {len(data.get('usernames', []))} users")
     
     try:
-        # Forward the request to Render
+        # Forward to Render (server-to-server, no CORS)
         response = requests.post(
             'https://ig-reels-scraper.onrender.com/api/scrape/start',
             json=data,
             headers={'Content-Type': 'application/json'},
-            timeout=30
+            timeout=60
         )
         
         app.logger.info(f"Proxy: Render responded with status {response.status_code}")
         return jsonify(response.json()), response.status_code
         
-    except requests.exceptions.RequestException as e:
-        app.logger.error(f"Proxy: Failed to connect to Render: {str(e)}")
+    except requests.exceptions.Timeout:
         return jsonify({
             "status": "error",
-            "error": f"Failed to connect to Render service: {str(e)}"
+            "error": "Render service timed out. Please try again."
+        }), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            "status": "error",
+            "error": "Could not connect to Render service. Please try again later."
         }), 503
-
+    except Exception as e:
+        app.logger.error(f"Proxy error: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
 
 
