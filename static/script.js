@@ -49,9 +49,25 @@ const downloadProgress = document.getElementById("download-progress");
 const progressFill = document.getElementById("progress-fill");
 const progressText = document.getElementById("progress-text");
 
+// Scrape elements
+const scrapeUsernames = document.getElementById("scrape-usernames");
+const scrapeMaxReels = document.getElementById("scrape-max-reels");
+const scrapeMaxScrolls = document.getElementById("scrape-max-scrolls");
+const scrapeHeadless = document.getElementById("scrape-headless");
+const startScrapeBtn = document.getElementById("start-scrape-btn");
+const scrapeJobStatus = document.getElementById("scrape-job-status");
+const fetchScrapedBtn = document.getElementById("fetch-scraped-btn");
+const clearScrapedBtn = document.getElementById("clear-scraped-btn");
+const scrapedReelsContent = document.getElementById("scraped-reels-content");
+const scrapedReelsStatus = document.getElementById("scraped-reels-status");
+
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
+// Render scraper URL
+const RENDER_SCRAPER_URL = 'https://ig-reels-scraper.onrender.com';
+let scrapePollingInterval = null;
+let currentScrapeJobId = null;
 
 // ==================== INSTAGRAM COOKIE FUNCTIONS ====================
 
@@ -89,7 +105,6 @@ function updateInstagramStatus(hasCookies, username) {
 
 async function checkInstagramStatus() {
   try {
-    // First check saved (encrypted) cookies – these survive refresh / close
     const savedResponse = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
     const savedData = await savedResponse.json();
     
@@ -98,7 +113,6 @@ async function checkInstagramStatus() {
       return;
     }
     
-    // Fallback: current session cookie file
     const response = await fetch('/api/cookies/status', { credentials: 'same-origin' });
     const data = await response.json();
     updateInstagramStatus(data.has_cookies, data.username);
@@ -108,7 +122,6 @@ async function checkInstagramStatus() {
   }
 }
 
-// Upload cookies - with persistence
 fileInput.addEventListener('change', async function() {
   const file = this.files[0];
   if (!file) return;
@@ -127,7 +140,6 @@ fileInput.addEventListener('change', async function() {
       return;
     }
     
-    // Check for session cookies
     const hasSession = cookiesData.some(cookie => 
       cookie && typeof cookie === 'object' && 
       (cookie.name === 'sessionid' || cookie.name === 'ds_user_id')
@@ -138,7 +150,6 @@ fileInput.addEventListener('change', async function() {
       return;
     }
     
-    // Save persistently
     uploadCookieLabel.innerHTML = '⏳ Saving...';
     uploadCookieLabel.style.opacity = '0.7';
     
@@ -170,7 +181,6 @@ fileInput.addEventListener('change', async function() {
   }
 });
 
-// Clear cookies - with persistence
 clearCookieBtn.addEventListener('click', async function() {
   this.textContent = '⏳';
   this.disabled = true;
@@ -210,7 +220,6 @@ function showInstagramError(message) {
   setTimeout(() => { instagramUploadError.style.display = 'none'; }, 5000);
 }
 
-
 // ==================== BLUESKY FUNCTIONS ====================
 
 async function checkBlueskyStatus() {
@@ -249,7 +258,6 @@ async function checkBlueskyStatus() {
   }
 }
 
-// Show modal
 blueskyToggleBtn.addEventListener('click', function() {
   blueskyModal.hidden = false;
   blueskyModalStatus.style.display = 'none';
@@ -258,19 +266,16 @@ blueskyToggleBtn.addEventListener('click', function() {
   blueskyRememberModal.checked = true;
 });
 
-// Close modal
 blueskyModalClose.addEventListener('click', function() {
   blueskyModal.hidden = true;
 });
 
-// Close modal on overlay click
 blueskyModal.addEventListener('click', function(e) {
   if (e.target === this) {
     blueskyModal.hidden = true;
   }
 });
 
-// Save Bluesky credentials
 blueskySaveBtn.addEventListener('click', async function() {
   const identifier = blueskyIdentifierModal.value.trim();
   const password = blueskyPasswordModal.value.trim();
@@ -319,7 +324,6 @@ blueskySaveBtn.addEventListener('click', async function() {
   }
 });
 
-// Clear Bluesky credentials
 clearBlueskyCredsBtn.addEventListener('click', async function() {
   this.textContent = '⏳';
   this.disabled = true;
@@ -343,7 +347,6 @@ clearBlueskyCredsBtn.addEventListener('click', async function() {
   }
 });
 
-// Character counter for Bluesky
 if (blueskyText) {
   blueskyText.addEventListener('input', function() {
     const count = this.value.length;
@@ -373,7 +376,6 @@ function showBlueskyStatus(message, type, postUrl) {
   }, 8000);
 }
 
-// Post to Bluesky
 blueskyPostBtn.addEventListener('click', async function() {
   const text = blueskyText.value.trim() || 'Check out this video! 🎬';
   
@@ -406,11 +408,11 @@ blueskyPostBtn.addEventListener('click', async function() {
     const data = await response.json();
     
     if (response.ok) {
-      // Build a usable Bluesky post URL
       let postUrl = null;
       if (data.post_uri && data.post_id) {
-        // uri looks like at://did:plc:.../app.bsky.feed.post/xxx
-        const handle = (await (await fetch('/api/bluesky/credentials_status', {credentials:'same-origin'})).json()).handle;
+        const handleResponse = await fetch('/api/bluesky/credentials_status', { credentials: 'same-origin' });
+        const handleData = await handleResponse.json();
+        const handle = handleData.handle || handleData.identifier;
         if (handle) {
           postUrl = `https://bsky.app/profile/${handle}/post/${data.post_id}`;
         }
@@ -431,6 +433,227 @@ blueskyPostBtn.addEventListener('click', async function() {
   }
 });
 
+// ==================== SCRAPE FUNCTIONS ====================
+
+function showScrapeStatus(message, type) {
+  scrapeJobStatus.textContent = message;
+  scrapeJobStatus.className = 'scrape-status ' + (type || '');
+  scrapeJobStatus.hidden = false;
+}
+
+function showScrapedStatus(message, type) {
+  scrapedReelsStatus.textContent = message;
+  scrapedReelsStatus.className = 'status-message ' + type;
+  scrapedReelsStatus.style.display = 'block';
+  setTimeout(() => {
+    scrapedReelsStatus.style.display = 'none';
+  }, 8000);
+}
+
+function renderScrapedResults(results) {
+  if (!results || results.length === 0) {
+    scrapedReelsContent.innerHTML = `<div class="empty-state">No profiles found in the scraped data.</div>`;
+    return;
+  }
+  
+  let html = `<div class="scraped-reels-grid">`;
+  
+  results.forEach(profile => {
+    const statusClass = profile.status === 'ok' ? 'ok' : 
+                        (profile.status === 'no_reels_found' || profile.status === 'private') ? 'warn' : 'err';
+    const statusLabel = profile.status || 'unknown';
+    const reelCount = (profile.reels || []).length;
+    
+    html += `
+      <div class="scraped-profile-card">
+        <div class="scraped-profile-name">
+          @${profile.username || 'unknown'}
+          <span class="status-badge ${statusClass}">${statusLabel}</span>
+        </div>
+        <div class="scraped-profile-count">📹 ${reelCount} reels</div>
+        <div class="scraped-profile-urls">
+    `;
+    
+    if (reelCount > 0) {
+      profile.reels.slice(0, 10).forEach(url => {
+        html += `<a href="${url}" target="_blank">${url}</a>`;
+      });
+      if (reelCount > 10) {
+        html += `<div style="color:var(--text-muted);font-size:11px;padding-top:4px;">+${reelCount - 10} more</div>`;
+      }
+    } else {
+      html += `<span style="color:var(--text-muted);font-size:12px;">No reels found</span>`;
+    }
+    
+    html += `
+        </div>
+      </div>
+    `;
+  });
+  
+  html += `</div>`;
+  scrapedReelsContent.innerHTML = html;
+  clearScrapedBtn.hidden = false;
+}
+
+async function fetchScrapedResults() {
+  const jobId = localStorage.getItem('last_scrape_job_id');
+  
+  if (!jobId) {
+    showScrapedStatus('No recent scrape job found. Start a new scrape.', 'error');
+    return;
+  }
+  
+  fetchScrapedBtn.textContent = '⏳ Loading...';
+  fetchScrapedBtn.disabled = true;
+  
+  try {
+    const response = await fetch(`${RENDER_SCRAPER_URL}/api/scrape/status/${jobId}`);
+    const data = await response.json();
+    
+    if (response.ok && data.results) {
+      renderScrapedResults(data.results);
+      showScrapedStatus(`✅ Loaded ${data.results.length} profiles from job ${jobId}`, 'success');
+    } else {
+      showScrapedStatus(`❌ Failed to load results: ${data.error || 'Job not found'}`, 'error');
+      scrapedReelsContent.innerHTML = `<div class="empty-state">No results found for job ${jobId}. Start a new scrape.</div>`;
+    }
+  } catch (error) {
+    showScrapedStatus(`❌ Failed to connect to Render: ${error.message}`, 'error');
+  } finally {
+    fetchScrapedBtn.textContent = '📊 Load Results';
+    fetchScrapedBtn.disabled = false;
+  }
+}
+
+function startPollingJob(jobId) {
+  if (scrapePollingInterval) clearInterval(scrapePollingInterval);
+  
+  currentScrapeJobId = jobId;
+  let attempts = 0;
+  const maxAttempts = 120;
+  
+  scrapePollingInterval = setInterval(async () => {
+    attempts++;
+    
+    try {
+      const response = await fetch(`${RENDER_SCRAPER_URL}/api/scrape/status/${jobId}`);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        showScrapeStatus(`❌ Job failed: ${data.error || 'Unknown error'}`, 'error');
+        clearInterval(scrapePollingInterval);
+        return;
+      }
+      
+      if (data.status === 'running') {
+        const logCount = data.log ? data.log.length : 0;
+        showScrapeStatus(`⏳ Scraping in progress... (${logCount} entries)`, 'running');
+      } else if (data.status === 'done') {
+        showScrapeStatus(`✅ Scraping complete! Found ${data.results ? data.results.length : 0} profiles`, 'success');
+        clearInterval(scrapePollingInterval);
+        localStorage.setItem('last_scrape_job_id', jobId);
+        setTimeout(() => {
+          fetchScrapedResults();
+        }, 1000);
+      } else if (data.status === 'error') {
+        showScrapeStatus(`❌ Job failed: ${data.error || 'Unknown error'}`, 'error');
+        clearInterval(scrapePollingInterval);
+      }
+    } catch (error) {
+      console.error('Polling error:', error);
+      if (attempts > maxAttempts) {
+        showScrapeStatus('⚠️ Timed out waiting for job to complete', 'error');
+        clearInterval(scrapePollingInterval);
+      }
+    }
+  }, 2000);
+}
+
+// Start scraping job
+startScrapeBtn.addEventListener('click', async function() {
+  const usernames = scrapeUsernames.value
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+  
+  if (usernames.length === 0) {
+    showScrapeStatus('Please enter at least one username', 'error');
+    return;
+  }
+  
+  const maxReels = parseInt(scrapeMaxReels.value) || 50;
+  const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
+  const headless = scrapeHeadless.checked;
+  
+  // Check if we have cookies
+  const cookiesStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
+  const cookiesData = await cookiesStatus.json();
+  
+  if (!cookiesData.has_cookies) {
+    showScrapeStatus('Please upload Instagram cookies first', 'error');
+    return;
+  }
+  
+  // Get full cookies
+  const cookiesResponse = await fetch('/api/instagram/get_cookies', { credentials: 'same-origin' });
+  const cookiesResult = await cookiesResponse.json();
+  
+  if (!cookiesResult.cookies) {
+    showScrapeStatus('Failed to get cookies data', 'error');
+    return;
+  }
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
+  showScrapeStatus('⏳ Starting scrape job on Render...', 'running');
+  
+  try {
+    const response = await fetch(`${RENDER_SCRAPER_URL}/api/scrape/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cookies: cookiesResult.cookies,
+        usernames: usernames,
+        maxReels: maxReels,
+        maxScrolls: maxScrolls,
+        headless: headless,
+        sendToVercel: true
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
+      startPollingJob(data.jobId);
+    } else {
+      showScrapeStatus(`❌ Failed to start job: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (error) {
+    showScrapeStatus(`❌ Failed to connect to Render: ${error.message}`, 'error');
+  } finally {
+    this.innerHTML = `
+      <span class="btn-content">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Start Scraping
+      </span>
+    `;
+    this.disabled = false;
+  }
+});
+
+// Fetch scraped results button
+fetchScrapedBtn.addEventListener('click', fetchScrapedResults);
+
+// Clear scraped results
+clearScrapedBtn.addEventListener('click', function() {
+  scrapedReelsContent.innerHTML = `<div class="empty-state">No scraped data. Start a scrape job below or load existing results.</div>`;
+  this.hidden = true;
+  showScrapedStatus('✅ Cleared scraped results', 'success');
+});
 
 // ==================== DOWNLOAD FUNCTIONS ====================
 
@@ -509,7 +732,6 @@ function downloadVideo(url, filename) {
       }, 1000);
     });
 }
-
 
 // ==================== RESULTS FUNCTIONS ====================
 
@@ -620,10 +842,8 @@ function setLoading(isLoading) {
   }
 }
 
-
 // ==================== EVENT LISTENERS ====================
 
-// Copy URL
 copyBtn.addEventListener('click', async function() {
   const url = directUrlDisplay.value;
   if (!url) return;
@@ -644,7 +864,6 @@ copyBtn.addEventListener('click', async function() {
   }
 });
 
-// Direct Download
 directDownloadBtn.addEventListener('click', function() {
   if (currentVideoUrl) {
     downloadVideo(currentVideoUrl, currentVideoItem?.title || 'instagram_video');
@@ -655,7 +874,6 @@ directUrlDisplay.addEventListener('click', function() {
   this.select();
 });
 
-// Main form submission
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   clearError();
@@ -720,9 +938,29 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-
 // ==================== INIT ====================
 
-// Check both statuses on page load – this is what makes the green "Connected" stick after refresh
 checkInstagramStatus();
 checkBlueskyStatus();
+
+// Check if there's a recent scrape job on load
+const savedJobId = localStorage.getItem('last_scrape_job_id');
+if (savedJobId) {
+  // Check if the job is still running or complete
+  fetch(`${RENDER_SCRAPER_URL}/api/scrape/status/${savedJobId}`)
+    .then(res => res.json())
+    .then(data => {
+      if (data.status === 'running') {
+        showScrapeStatus(`⏳ Job ${savedJobId} is still running...`, 'running');
+        startPollingJob(savedJobId);
+      } else if (data.status === 'done') {
+        showScrapeStatus(`✅ Job ${savedJobId} completed`, 'success');
+        fetchScrapedResults();
+      } else if (data.status === 'error') {
+        showScrapeStatus(`❌ Job ${savedJobId} failed`, 'error');
+      }
+    })
+    .catch(() => {
+      // Render might be sleeping, ignore
+    });
+}

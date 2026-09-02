@@ -1,0 +1,1038 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ThemeDocument>
+  <ThemeDescription>
+    <Name>Sports	
+</Name>
+    <GUID>{B1C7621F-F83B-4f6f-B3AF-5E5CEDE6C98E}</GUID>
+    <Version>1</Version>
+    <Type>Sports</Type>
+  </ThemeDescription>
+  <SceneList>
+    <SceneDescription Type="0">
+      <!-- 0-Text 1-UserContent -->
+      <CaptionFileName>Intro.xml</CaptionFileName>
+      <Duration>5000</Duration>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>3F68EC3C-4003-488c-8BD4-4D6CA41E85C5</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>Sport21</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>4000,6000,0.3333</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>925C36FB-9EE1-4fca-899F-549D8328F2DC</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>4000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>3F68EC3C-4003-488c-8BD4-4D6CA41E85C5</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>4000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>154FD34E-0DF8-481f-A99C-4913DDC4938A</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>3000,5000,0.5</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>BF94B014-EFD7-4303-8243-76C0A29B20E7</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,1-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>4000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>6DE84CB8-C186-4419-8E88-6EE3B2967660</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>B7C3FD3D-836E-47a4-B861-AA42063F27D3</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>0</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,1-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>6DE84CB8-C186-4419-8E88-6EE3B2967660</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>B7C3FD3D-836E-47a4-B861-AA42063F27D3</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>0</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>FD4A4891-4E1C-4e05-B290-8195CC55E8C5</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>08ECFF4C-CD36-4c89-9D4D-F515451BB2DB</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>Sport3</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>6000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>Sport3</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>4000,6000,0.5</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>4000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>23ED6584-3EB2-4451-80CE-89D3529DE5C8</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>Sport6</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>925C36FB-9EE1-4fca-899F-549D8328F2DC</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>4000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>3F68EC3C-4003-488c-8BD4-4D6CA41E85C5</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>82F287D2-AE22-43ca-A04F-C3289E77FEE6</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>1</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>40B96872-E6B9-4f73-9B78-4D88339AE56B</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3500</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>22FF6337-C812-4181-8741-7723D2075F0F</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>3</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>40B96872-E6B9-4f73-9B78-4D88339AE56B</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>154FD34E-0DF8-481f-A99C-4913DDC4938A</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>A4107856-2A30-4c79-8AF8-8F98D7E9937D</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>6</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>FD4A4891-4E1C-4e05-B290-8195CC55E8C5</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>3000,5000,0.5</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>0CAA397E-6EB2-4e51-9DF7-B7DDB338EB22</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>4000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>1A09570B-8B15-444b-A074-33685EE7E086</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>0CAA397E-6EB2-4e51-9DF7-B7DDB338EB22</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>1A09570B-8B15-444b-A074-33685EE7E086</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>0CAA397E-6EB2-4e51-9DF7-B7DDB338EB22</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>3000,5000,0.5</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>FD4A4891-4E1C-4e05-B290-8195CC55E8C5</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>23ED6584-3EB2-4451-80CE-89D3529DE5C8</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>A8680AAC-7EAF-49c4-97E0-B50F94A327E</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>5</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>2981D185-D52E-44f4-ABD5-3CE83890E32E</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>2000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>23ED6584-3EB2-4451-80CE-89D3529DE5C8</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>A6264A3F-20DF-415c-A5A3-CD046674A0C0</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>7</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>925C36FB-9EE1-4fca-899F-549D8328F2DC</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>Sport24</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>3000,5000,0.5</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>2981D185-D52E-44f4-ABD5-3CE83890E32E</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,1-Audio,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>4000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>3F68EC3C-4003-488c-8BD4-4D6CA41E85C5</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>2981D185-D52E-44f4-ABD5-3CE83890E32E</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>Slow1.5</GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>2981D185-D52E-44f4-ABD5-3CE83890E32E</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>154FD34E-0DF8-481f-A99C-4913DDC4938A</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>2981D185-D52E-44f4-ABD5-3CE83890E32E</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,1-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>154FD34E-0DF8-481f-A99C-4913DDC4938A</GUID>
+            <UseForFeature />
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>3000,5000,0.5</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>6000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>23ED6584-3EB2-4451-80CE-89D3529DE5C8</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>Sport26</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>74876B99-7AD0-49b3-91D4-D3136E9A850A</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>4000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>3F68EC3C-4003-488c-8BD4-4D6CA41E85C5</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>3344163B-A8F7-409a-B01B-67545EA8552A</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>A8680AAC-7EAF-49c4-97E0-B50F94A327E</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>5</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>3F68EC3C-4003-488c-8BD4-4D6CA41E85C5</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>A6264A3F-20DF-415c-A5A3-CD046674A0C0</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>6</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>8B086E1E-BB01-4f3e-934B-5DB4ADA2567F</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>5343E73E-3D5A-44a4-AA64-1EA32B292A83</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>0</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>32B08589-D9BB-486a-A9D7-E78D29099EEE</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>154FD34E-0DF8-481f-A99C-4913DDC4938A</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <speedParam>3000,5000,0.5</speedParam>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>0CAA397E-6EB2-4e51-9DF7-B7DDB338EB22</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>EFFE7C7D-AA0F-4cb0-8C1C-CDE05D04BC97</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>5343E73E-3D5A-44a4-AA64-1EA32B292A83</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>0</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+      <Transition>
+        <Random>0</Random>
+        <GUID>0CAA397E-6EB2-4e51-9DF7-B7DDB338EB22</GUID>
+        <Duration>1000</Duration>
+      </Transition>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>0</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>1</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>2000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>EFFE7C7D-AA0F-4cb0-8C1C-CDE05D04BC97</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <FaceMotion>
+          <GUID>5343E73E-3D5A-44a4-AA64-1EA32B292A83</GUID>
+          <UseForFeature>1</UseForFeature>
+          <UseForShotType>0</UseForShotType>
+        </FaceMotion>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>3000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>6DE84CB8-C186-4419-8E88-6EE3B2967660</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>Sport3</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,2-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>6000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>3F68EC3C-4003-488c-8BD4-4D6CA41E85C5</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>Sport28</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>4000,6000,0.5</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,1-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>56F86BED-AA95-4fb1-8DC8-49A5C15A7111</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>3344163B-A8F7-409a-B01B-67545EA8552A</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID></GUID>
+          <UseForFeature>0</UseForFeature>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="1">
+      <SourceRule>
+        <SourceType>2</SourceType>
+        <!--  0-Image,1-Video  -->
+        <SourceFeatureID>2</SourceFeatureID>
+        <!--  1-Face,2-Animation,...  -->
+        <SourceDuration>5000</SourceDuration>
+      </SourceRule>
+      <SceneAfterEffect>
+        <FilterList>
+          <Filter>
+            <GUID>9E2DC6CF-BDC2-4368-99DD-DBB8A42A8298</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>3344163B-A8F7-409a-B01B-67545EA8552A</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+          <Filter>
+            <GUID>Sport2</GUID>
+            <UseForFeature>0</UseForFeature>
+            <!--  Use this Only when Source has the SourceFeature  -->
+          </Filter>
+        </FilterList>
+        <Effect>
+          <GUID>0</GUID>
+          <UseForFeature>0</UseForFeature>
+          <SpeedParam>3000,5000,0.5</SpeedParam>
+        </Effect>
+      </SceneAfterEffect>
+    </SceneDescription>
+    <SceneDescription Type="0">
+      <!-- 0-Text 1-UserContent -->
+      <CaptionFileName>Credit.xml</CaptionFileName>
+      <Duration>5000</Duration>
+    </SceneDescription>
+  </SceneList>
+  <TransitionList>
+    <Transition>
+      <GUID>BF94B014-EFD7-4303-8243-76C0A29B20E7</GUID>
+      <Duration>1000</Duration>
+    </Transition>
+    <Transition>
+      <GUID>2981D185-D52E-44f4-ABD5-3CE83890E32E</GUID>
+      <Duration>500</Duration>
+    </Transition>
+    <Transition>
+      <GUID>0CAA397E-6EB2-4e51-9DF7-B7DDB338EB22</GUID>
+      <Duration>500</Duration>
+    </Transition>
+  </TransitionList>
+  <MotionList>
+    <Motion>
+      <GUID>{31488BAD-0934-4645-AB65-4B425EF8A48B}</GUID>
+    </Motion>
+    <Motion>
+      <GUID>{EF48A680-608D-46F3-BA9F-59B58CC97998}</GUID>
+    </Motion>
+    <Motion>
+      <GUID>{81D7BACF-A58D-4930-9F78-994D89B23279}</GUID>
+    </Motion>
+    <Motion>
+      <GUID>{8B29CD96-44BA-4563-BDE1-9B824FBCA40A}</GUID>
+    </Motion>
+    <Motion>
+      <GUID>{76171E8C-FEDD-4E76-BAF0-99D78316FA2C}</GUID>
+    </Motion>
+  </MotionList>
+</ThemeDocument>

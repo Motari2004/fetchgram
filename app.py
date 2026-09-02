@@ -1137,6 +1137,86 @@ def clear_instagram_cookies():
     })
 
 
+
+
+
+@app.route("/api/process-reels", methods=["POST"])
+def process_reels():
+    """
+    Receives a list of Instagram Reel URLs, processes each to get a direct download URL,
+    and returns the results.
+    Expects JSON: {"reels": ["url1", "url2", ...]}
+    """
+    data = request.get_json(silent=True)
+    if not data or not isinstance(data, dict):
+        return jsonify({"error": "Invalid request body"}), 400
+
+    reel_urls = data.get("reels")
+    if not reel_urls or not isinstance(reel_urls, list):
+        return jsonify({"error": "Missing or invalid 'reels' list"}), 400
+
+    processed_results = []
+    for reel_url in reel_urls:
+        try:
+            # Use your existing function to get the direct download URL
+            direct_url = get_direct_video_url(reel_url)
+            if direct_url:
+                processed_results.append({
+                    "original_url": reel_url,
+                    "download_url": direct_url,
+                    "status": "success"
+                })
+            else:
+                processed_results.append({
+                    "original_url": reel_url,
+                    "download_url": None,
+                    "status": "failed",
+                    "error": "Could not fetch direct URL"
+                })
+        except Exception as e:
+            processed_results.append({
+                "original_url": reel_url,
+                "download_url": None,
+                "status": "error",
+                "error": str(e)
+            })
+
+    return jsonify({
+        "status": "success",
+        "processed_count": len(processed_results),
+        "results": processed_results
+    })
+
+
+@app.route("/api/instagram/get_cookies", methods=["GET"])
+def get_instagram_cookies():
+    """Get the stored Instagram cookies."""
+    encrypted = session.get('instagram_encrypted')
+    if encrypted:
+        try:
+            decrypted = decrypt_credentials(encrypted)
+            if decrypted:
+                cookie_data = decrypted[0]
+                if isinstance(cookie_data, str) and cookie_data.startswith('['):
+                    cookie_data = json.loads(cookie_data)
+                elif isinstance(cookie_data, dict):
+                    cookie_data = cookie_data.get('data', [])
+                return jsonify({
+                    "status": "success",
+                    "cookies": cookie_data
+                })
+        except Exception as e:
+            app.logger.error(f"Failed to get cookies: {e}")
+    
+    return jsonify({
+        "status": "error",
+        "cookies": None,
+        "error": "No cookies found"
+    }), 404
+
+
+
+
 @app.route("/api/debug/cookies", methods=["GET"])
 def debug_cookies():
     """Debug endpoint to check cookie status."""

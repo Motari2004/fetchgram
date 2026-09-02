@@ -1,0 +1,70 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ThemeDescription>
+  <Name>Love</Name>
+  <GUID>{E7FB102F-D05E-4EC5-86C6-CD38BA7B9382}</GUID>
+  <Version>1</Version>
+  <Type>Love</Type>
+  <Download>http://api.wondershare.com/interface.php?m=online_res&amp;mode=download&amp;id=1524</Download>
+  <Sample></Sample>
+  <DefaultAudio>Farewell Kiss</DefaultAudio>
+  <Description LangID="ENG">
+    <Name>Love</Name>
+    <About>Hearts and stars give your video a romantic&#10;touch,perfect for showing that special someone&#10;how much you care.</About>
+  </Description>
+  <Description LangID="FRA">
+    <Name>Amour</Name>
+    <About>Des cœurs et des étoiles donneront à votre&#10;vidéo une touche romantique, parfait pour montrer&#10;à la personne qui vous est chère à quel point vous&#10;tenez à elle.</About>
+  </Description>
+  <Description LangID="DEU">
+    <Name>Liebe</Name>
+    <About>Herzen und Sterne geben Ihrem Video den&#10;romantischen Touch, ideal wenn Sie jemanden&#10;zeigen wollen, wie sehr Sie die Person lieb haben.</About>
+  </Description>
+  <Description LangID="ITA">
+    <Name>Voler bene</Name>
+    <About>Cuori e stelle conferiscono al tuo video&#10;un tocco romantico, perfetto per mostrare che&#10;hai nel cuore qualcuno di speciale.</About>
+  </Description>
+  <Description LangID="JPN">
+    <Name>ラブ</Name>
+    <About>ハートや星をビデオ内に散りばめると作っ&#10;たビデオは素敵な感じになります。お気に&#10;入りの誰かにみせるために最適な効果です。</About>
+  </Description>
+  <Description LangID="PTG">
+    <Name>Amor</Name>
+    <About>Corações e estrelas dão ao seu vídeo um&#10;toque romântico, perfeito para mostrar o seu&#10;amor pela sua cara-metade.</About>
+  </Description>
+  <Description LangID="ESP">
+    <Name>Amor</Name>
+    <About>Los corazones y estrellas le dan a tu video&#10;un toque romántico, perfecto para mostrarle&#10;a alguien cuánto te importa.</About>
+  </Description>
+  <Description LangID="ESM">
+    <Name>Amor</Name>
+    <About>Los corazones y estrellas le dan a tu video&#10;un toque romántico, perfecto para mostrarle&#10;a alguien cuánto te importa.</About>
+  </Description>
+  <Description LangID="ZHH">
+    <Name>愛情</Name>
+    <About>心和星星給你的視頻浪漫色彩，&#10;凸顯出你是有多麼在乎你愛的人。</About>
+  </Description>
+  <Description LangID="CHT">
+    <Name>愛情</Name>
+    <About>心和星星給你的視頻浪漫色彩，&#10;凸顯出你是有多麼在乎你愛的人。</About>
+  </Description>
+  <Description LangID="NLD">
+    <Name>Liefde</Name>
+    <About>Hartjes en sterren geven je video een romantische touch.&#10;Perfect om die speciale persoon in je leven te tonen&#10;hoe belangrijk hij/zij voor je is.</About>
+  </Description>
+  <Description LangID="RUS">
+    <Name>любовь</Name>
+    <About>Сердечки и звездочки придадут вашему видео романтический&#10;оттенок, незаменимый, если вам надо кому-то дать понять,&#10;что вы к нему неравнодушны.</About>
+  </Description>
+  <Audios>
+    <Audio>Farewell Kiss</Audio>
+    <Audio>Love And Peace To All</Audio>
+    <Audio>Romantic Strings</Audio>
+    <Audio>Romantic</Audio>
+    <Audio>Valentine Love Romantic</Audio>
+    <Audio>Happy Smiling Family</Audio>
+    <Audio>Mare Serenitatis</Audio>
+    <Audio>Piano by the Sea</Audio>
+    <Audio>Romantic snow</Audio>
+    <Audio>Summer Days (Driving Remix)</Audio>
+  </Audios>
+</ThemeDescription>

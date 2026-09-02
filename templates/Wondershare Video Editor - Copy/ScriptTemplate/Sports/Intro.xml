@@ -1,0 +1,211 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<CaptionResource>
+  <Alias>Sports_Intro</Alias>
+  <BackImage></BackImage>
+  <BackVideo>$CaptionTemplatePath$Sports_Intro.mov</BackVideo>
+  <GUID>{69F30B11-B143-496C-813B-02C64EFA6013}</GUID>
+  <ResourceType>0</ResourceType>
+  <TemplateStyle>0</TemplateStyle>
+  <CanMoveTextPosition>1</CanMoveTextPosition>
+  <CanChangeFaceColor>1</CanChangeFaceColor>
+  <CanChangeBorderColor>1</CanChangeBorderColor>
+  <NLETitleArray>
+    <NLETitleItem>
+      <EffectID>Right Insert</EffectID>
+      <MotionParam>
+        <MotionGUID>{058172BC-14F2-487F-AA7C-2F26A99E6EF7}</MotionGUID>
+        <MotionPositionList>
+          <Point XPos="0.530000" YPos="0.340000" />
+          <Point XPos="0.530000" YPos="0.340000" />
+          <Point XPos="0.530000" YPos="0.340000" />
+          <Point XPos="0.530000" YPos="0.340000" />
+          <Point XPos="0.530000" YPos="0.340000" />
+          <Point XPos="0.530000" YPos="0.340000" />
+          <Point XPos="0.530000" YPos="0.340000" />
+          <Point XPos="0.527917" YPos="0.405185" />
+          <Point XPos="0.527917" YPos="0.405185" />
+          <Point XPos="0.530000" YPos="0.445926" />
+          <Point XPos="0.530000" YPos="0.453333" />
+          <Point XPos="0.530000" YPos="0.453333" />
+          <Point XPos="0.532083" YPos="0.442222" />
+        </MotionPositionList>
+        <MotionEffectList>
+          <MotionEffect KeyFrame="0.000000" ScaleX="8.000000" ScaleY="8.000000" Rotate="0" Alpha="0" />
+          <MotionEffect KeyFrame="0.121667" ScaleX="1.000000" ScaleY="1.000000" Rotate="0" Alpha="100" />
+          <MotionEffect KeyFrame="0.838333" ScaleX="1.000000" ScaleY="1.000000" Rotate="0" Alpha="100" />
+          <MotionEffect KeyFrame="0.896667" ScaleX="0.010000" ScaleY="0.010000" Rotate="0" Alpha="0" />
+          <MotionEffect KeyFrame="1.000000" ScaleX="0.010000" ScaleY="0.010000" Rotate="0" Alpha="0" />
+        </MotionEffectList>
+      </MotionParam>
+      <TextParam>
+        <Title>Extreme Sports</Title>
+        <Font>
+          <Size>90</Size>
+          <Bold>1</Bold>
+          <Italic>0</Italic>
+          <FontName>Alegreya Sans SC</FontName>
+        </Font>
+        <Face>
+          <Enable>1</Enable>
+          <Color1>-16777216</Color1>
+          <Color2>-16777216</Color2>
+          <GradType>0</GradType>
+          <Alpha>255</Alpha>
+          <BlurRadius>0</BlurRadius>
+          <Effect>6</Effect>
+        </Face>
+        <Shadow>
+          <Enable>0</Enable>
+          <Color>0</Color>
+          <Alpha>100</Alpha>
+          <BlurRadius>5</BlurRadius>
+          <Distance>2</Distance>
+          <Direction>0</Direction>
+        </Shadow>
+        <Border>
+          <Enable>1</Enable>
+          <Size>10</Size>
+          <Color1>-16711936</Color1>
+          <Color2>-16711936</Color2>
+          <GradType>0</GradType>
+          <Alpha>255</Alpha>
+          <BlurRadius>0</BlurRadius>
+        </Border>
+        <RowSpace>0</RowSpace>
+        <LineSpace>0</LineSpace>
+        <Align>2</Align>
+        <BackgroundColor>
+          <Enable>0</Enable>
+          <BackgroundColor>16777215</BackgroundColor>
+          <Alpha>255</Alpha>
+          <BackgroundColor2>16777215</BackgroundColor2>
+          <GradType>0</GradType>
+        </BackgroundColor>
+        <BackgroundImage>
+          <Enable>0</Enable>
+          <ImagePath />
+          <TextOffsetX>0</TextOffsetX>
+          <TextOffsetY>0</TextOffsetY>
+          <TextRegionWidth>0</TextRegionWidth>
+          <TextRegionHeight>0</TextRegionHeight>
+        </BackgroundImage>
+        <Texture>
+          <Enable>0</Enable>
+          <TextureImagePath />
+        </Texture>
+      </TextParam>
+      <EffectParam>
+        <ImagePosX>52</ImagePosX>
+        <ImagePosY>35</ImagePosY>
+        <ImageAngle>0</ImageAngle>
+        <Ratio>5000</Ratio>
+        <EffectIn>3000</EffectIn>
+        <EffectOut>3000</EffectOut>
+        <OrigPosX>52</OrigPosX>
+        <OrigPosY>47</OrigPosY>
+      </EffectParam>
+    </NLETitleItem>
+    <NLETitleItem>
+      <MotionParam>
+        <MotionGUID>{058172BC-14F2-487F-AA7C-2F26A99E6EF7}</MotionGUID>
+        <MotionPositionList>
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.681094" YPos="0.561875" />
+          <Point XPos="0.681094" YPos="0.561875" />
+          <Point XPos="0.681094" YPos="0.561875" />
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.681094" YPos="0.561875" />
+          <Point XPos="0.681094" YPos="0.561875" />
+          <Point XPos="0.681094" YPos="0.561875" />
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.680000" YPos="0.560000" />
+          <Point XPos="0.680833" YPos="0.461111" />
+          <Point XPos="0.670417" YPos="0.475926" />
+          <Point XPos="0.670417" YPos="0.475926" />
+          <Point XPos="0.680833" YPos="0.461111" />
+        </MotionPositionList>
+        <MotionEffectList>
+          <MotionEffect KeyFrame="0.000000" ScaleX="1.000000" ScaleY="1.000000" Rotate="0" Alpha="0" />
+          <MotionEffect KeyFrame="0.098333" ScaleX="8.000000" ScaleY="8.000000" Rotate="0" Alpha="0" />
+          <MotionEffect KeyFrame="0.166667" ScaleX="1.100000" ScaleY="1.100000" Rotate="0" Alpha="100" />
+          <MotionEffect KeyFrame="0.240000" ScaleX="1.000000" ScaleY="1.000000" Rotate="0" Alpha="100" />
+          <MotionEffect KeyFrame="0.843333" ScaleX="1.000000" ScaleY="1.000000" Rotate="0" Alpha="100" />
+          <MotionEffect KeyFrame="0.903333" ScaleX="0.010000" ScaleY="0.010000" Rotate="0" Alpha="0" />
+          <MotionEffect KeyFrame="1.000000" ScaleX="0.010000" ScaleY="0.010000" Rotate="0" Alpha="0" />
+        </MotionEffectList>
+      </MotionParam>
+      <TextParam>
+        <Title>Text Here</Title>
+        <Font>
+          <Size>72</Size>
+          <Bold>1</Bold>
+          <Italic>0</Italic>
+          <FontName>Alegreya Sans SC</FontName>
+        </Font>
+        <Face>
+          <Enable>1</Enable>
+          <Color1>-5197648</Color1>
+          <Color2>-2565928</Color2>
+          <GradType>6</GradType>
+          <Alpha>255</Alpha>
+          <BlurRadius>0</BlurRadius>
+          <Effect>0</Effect>
+        </Face>
+        <Shadow>
+          <Enable>0</Enable>
+          <Color>0</Color>
+          <Alpha>100</Alpha>
+          <BlurRadius>5</BlurRadius>
+          <Distance>2</Distance>
+          <Direction>0</Direction>
+        </Shadow>
+        <Border>
+          <Enable>0</Enable>
+          <Size>2</Size>
+          <Color1>-16777128</Color1>
+          <Color2>-14407784</Color2>
+          <GradType>0</GradType>
+          <Alpha>255</Alpha>
+          <BlurRadius>0</BlurRadius>
+        </Border>
+        <RowSpace>0</RowSpace>
+        <LineSpace>0</LineSpace>
+        <Align>0</Align>
+        <BackgroundColor>
+          <Enable>0</Enable>
+          <BackgroundColor>16777215</BackgroundColor>
+          <Alpha>255</Alpha>
+          <BackgroundColor2>16777215</BackgroundColor2>
+          <GradType>0</GradType>
+        </BackgroundColor>
+        <BackgroundImage>
+          <Enable>0</Enable>
+          <ImagePath />
+          <TextOffsetX>0</TextOffsetX>
+          <TextOffsetY>0</TextOffsetY>
+          <TextRegionWidth>0</TextRegionWidth>
+          <TextRegionHeight>0</TextRegionHeight>
+        </BackgroundImage>
+        <Texture>
+          <Enable>0</Enable>
+          <TextureImagePath />
+        </Texture>
+      </TextParam>
+      <EffectParam>
+        <ImagePosX>69</ImagePosX>
+        <ImagePosY>57</ImagePosY>
+        <ImageAngle>0</ImageAngle>
+        <Ratio>50000000</Ratio>
+        <EffectIn>3000</EffectIn>
+        <EffectOut>3000</EffectOut>
+        <OrigPosX>0</OrigPosX>
+        <OrigPosY>0</OrigPosY>
+      </EffectParam>
+    </NLETitleItem>
+  </NLETitleArray>
+</CaptionResource>

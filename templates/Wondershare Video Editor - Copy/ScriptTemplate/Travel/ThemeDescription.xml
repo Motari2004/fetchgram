@@ -1,0 +1,70 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ThemeDescription>
+  <Name>Travel</Name>
+  <GUID>{FD4AE44E-E678-4c0d-A143-FF61647FB36D}</GUID>
+  <Version>1</Version>
+  <Type>Travel</Type>
+  <Download>http://api.wondershare.com/interface.php?m=online_res&amp;mode=download&amp;id=1483</Download>
+  <Sample></Sample>
+  <DefaultAudio>This Is My Day</DefaultAudio>
+  <Description LangID="ENG">
+    <Name>Travel</Name>
+    <About>The perfect theme for sharing your travel&#10;adventures,whether exploring abroad or&#10;road tripping with friends.</About>
+  </Description>
+  <Description LangID="FRA">
+    <Name>Voyage</Name>
+    <About>Le thème parfait pour partager vos aventures&#10;de voyage, que vous exploriez un pays étranger&#10;ou que vous partiez en road trip avec des amis.</About>
+  </Description>
+  <Description LangID="DEU">
+    <Name>Reise</Name>
+    <About>Das perfekte Thema für Reiseabenteuer,&#10;Wettererkundungen oder Road Trips mit&#10;Ihren Freunden.</About>
+  </Description>
+  <Description LangID="ITA">
+    <Name>Viaggiare</Name>
+    <About>Il tema perfetto per condividere le tue avventure&#10;di viaggio, sia se esplori Paesi esteri sia se&#10;sei in viaggio con gli amici.</About>
+  </Description>
+  <Description LangID="JPN">
+    <Name>旅行</Name>
+    <About>友達との車の旅、海外旅行などを共有す&#10;るために最適なテーマです。</About>
+  </Description>
+  <Description LangID="PTG">
+    <Name>Viagens</Name>
+    <About>O tema perfeita para partilhar suas aventuras&#10;e viagens, quer seja explorando o Mundo sozinho&#10;ou fazendo uma viagem com seus amigos.</About>
+  </Description>
+  <Description LangID="ESP">
+    <Name>Viaje</Name>
+    <About>El tema perfecto para compartir tus aventuras&#10;de viaje, tanto en  el extranjero como si estás&#10;de escapada con amigos.</About>
+  </Description>
+  <Description LangID="ESM">
+    <Name>Viaje</Name>
+    <About>El tema perfecto para compartir tus aventuras&#10;de viaje, tanto en  el extranjero como si estás&#10;de escapada con amigos.</About>
+  </Description>
+  <Description LangID="ZHH">
+    <Name>旅行</Name>
+    <About>完美的主題能分享你的冒險旅行，&#10;無論是你是在國外或路上與朋友旅行。</About>
+  </Description>
+  <Description LangID="CHT">
+    <Name>旅行</Name>
+    <About>完美的主題能分享你的冒險旅行，&#10;無論是你是在國外或路上與朋友旅行。</About>
+  </Description>
+  <Description LangID="NLD">
+    <Name>Reizen</Name>
+    <About>Het perfecte thema voor het delen van je reizen,&#10;avonturen of je nu op een rondtrip bent of op&#10;reis in het buitenland.</About>
+  </Description>
+  <Description LangID="RUS">
+    <Name>путешествие</Name>
+    <About>Идеальная тема для размещения своих путешествий и&#10;приключений, будь то ознакомление с заграницей&#10;или поездка с друзьями.</About>
+  </Description>
+  <Audios>
+    <Audio>This Is My Day</Audio>
+    <Audio>8 March</Audio>
+    <Audio>Background Life</Audio>
+    <Audio>Cheerful Clapping Whistler</Audio>
+    <Audio>Colors of the Rainbow</Audio>
+    <Audio>Corporate Mood Main</Audio>
+    <Audio>Country Stroll</Audio>
+    <Audio>Happy Do Do Doot</Audio>
+    <Audio>Summer Days</Audio>
+    <Audio>Summer Days (Driving Remix)</Audio>
+  </Audios>
+</ThemeDescription>

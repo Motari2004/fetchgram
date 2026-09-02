@@ -34,6 +34,7 @@
       <span class="mark-badge">PRO</span>
     </div>
     <div class="topbar-actions">
+      <a href="/instaloader" class="topbar-link">📸 Reels</a>
       <span class="topbar-note">⚡ Premium</span>
     </div>
   </header>
@@ -88,6 +89,76 @@
           <button id="clear-bluesky-creds-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
         </div>
         <div id="saved-credentials-info" class="status-message success" hidden></div>
+      </div>
+    </div>
+
+    <!-- Scraped Reels Section -->
+    <div class="scraped-reels-section premium-card" id="scraped-reels-section">
+      <div class="scraped-reels-header">
+        <div class="scraped-reels-title">
+          <span class="scraped-icon">📊</span>
+          <h3>Scraped Reels from Profiles</h3>
+        </div>
+        <div class="scraped-reels-actions">
+          <button id="fetch-scraped-btn" class="btn btn-sm btn-primary">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Load Results
+          </button>
+          <button id="clear-scraped-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
+        </div>
+      </div>
+      <div id="scraped-reels-status" class="status-message" hidden></div>
+      <div id="scraped-reels-content">
+        <div class="empty-state">No scraped data. Start a scrape job below or load existing results.</div>
+      </div>
+    </div>
+
+    <!-- Scrape Profiles Section -->
+    <div class="scrape-section premium-card">
+      <div class="scrape-header">
+        <div class="scrape-title">
+          <span class="scrape-icon">🔍</span>
+          <h3>Scrape Instagram Profiles for Reels</h3>
+        </div>
+        <span class="badge">Playwright</span>
+      </div>
+      <p class="scrape-desc">Enter Instagram usernames to scrape all their Reels URLs. This uses the Render scraper service.</p>
+      
+      <div class="scrape-input-area">
+        <div class="scrape-input-wrapper">
+          <span class="input-icon">@</span>
+          <textarea
+            id="scrape-usernames"
+            class="scrape-textarea"
+            placeholder="Enter usernames, one per line&#10;e.g.&#10;nasa&#10;natgeo&#10;nike"
+            rows="3"
+          ></textarea>
+        </div>
+        <div class="scrape-options">
+          <div class="scrape-option">
+            <label for="scrape-max-reels">Max Reels/Profile</label>
+            <input type="number" id="scrape-max-reels" value="50" min="1" max="200" />
+          </div>
+          <div class="scrape-option">
+            <label for="scrape-max-scrolls">Scroll Passes</label>
+            <input type="number" id="scrape-max-scrolls" value="8" min="1" max="30" />
+          </div>
+          <div class="scrape-option toggle-option">
+            <label class="toggle-label">
+              <input type="checkbox" id="scrape-headless" checked />
+              <span>Headless Mode</span>
+            </label>
+          </div>
+        </div>
+        <button id="start-scrape-btn" class="btn btn-primary btn-block">
+          <span class="btn-content">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Start Scraping
+          </span>
+        </button>
+        <div id="scrape-job-status" class="scrape-status" hidden></div>
       </div>
     </div>
 
