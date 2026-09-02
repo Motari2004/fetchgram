@@ -56,7 +56,6 @@ const fetchScrapedBtn = document.getElementById("fetch-scraped-btn");
 const clearScrapedBtn = document.getElementById("clear-scraped-btn");
 const scrapedReelsContent = document.getElementById("scraped-reels-content");
 const scrapedReelsStatus = document.getElementById("scraped-reels-status");
-const deleteAllBtn = document.getElementById("delete-all-btn");
 
 // Cookie upload elements
 const cookieFileInput = document.getElementById('cookie-file-input-main');
@@ -68,6 +67,15 @@ const cookieUploadStatus = document.getElementById('cookie-upload-status');
 // All Usernames elements
 const allUsernamesSection = document.getElementById('all-usernames-section');
 const allUsernamesList = document.getElementById('all-usernames-list');
+
+// Zernio (Facebook) elements
+const zernioAccountSelect = document.getElementById('zernio-account-select');
+const zernioText = document.getElementById('zernio-text');
+const zernioSchedule = document.getElementById('zernio-schedule');
+const zernioPublishBtn = document.getElementById('zernio-publish-btn');
+const zernioScheduleBtn = document.getElementById('zernio-schedule-btn');
+const zernioStatus = document.getElementById('zernio-status');
+const zernioStatusBadge = document.getElementById('zernio-status-badge');
 
 let currentVideoUrl = null;
 let currentVideoItem = null;
@@ -529,9 +537,182 @@ function showScrapedStatus(message, type) {
   }, 8000);
 }
 
+// ==================== ZERNIO (FACEBOOK) FUNCTIONS ====================
+
+function showZernioStatus(message, type) {
+  if (!zernioStatus) return;
+  zernioStatus.textContent = message;
+  zernioStatus.className = 'status-message ' + type;
+  zernioStatus.style.display = 'block';
+  setTimeout(() => {
+    zernioStatus.style.display = 'none';
+  }, 8000);
+}
+
+async function publishToFacebook(videoUrl, text, accountId, publishNow = true, scheduledTime = null) {
+  const payload = {
+    video_url: videoUrl,
+    text: text,
+    publish_now: publishNow
+  };
+
+  if (accountId && accountId !== 'all') {
+    payload.account_id = accountId;
+  }
+
+  if (scheduledTime) {
+    payload.scheduled_time = scheduledTime;
+  }
+
+  try {
+    const response = await fetch('/api/zernio/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+    console.log('📤 Zernio response:', data);
+    return data;
+  } catch (error) {
+    console.error('❌ Zernio error:', error);
+    throw error;
+  }
+}
+
+async function checkZernioStatus() {
+  try {
+    const response = await fetch('/api/zernio/status', {
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'connected') {
+      if (zernioStatusBadge) {
+        zernioStatusBadge.textContent = '✅ Connected';
+        zernioStatusBadge.style.background = 'var(--success-bg)';
+        zernioStatusBadge.style.color = 'var(--success)';
+      }
+      console.log('✅ Zernio connected');
+    } else {
+      if (zernioStatusBadge) {
+        zernioStatusBadge.textContent = '⚠️ Disconnected';
+        zernioStatusBadge.style.background = 'var(--error-bg)';
+        zernioStatusBadge.style.color = 'var(--error)';
+      }
+      console.warn('⚠️ Zernio not connected');
+    }
+  } catch (error) {
+    console.error('Failed to check Zernio status:', error);
+  }
+}
+
+function showZernioSection() {
+  const section = document.getElementById('zernio-section');
+  if (section) {
+    section.hidden = false;
+  }
+}
+
+// ==================== ZERNIO EVENT LISTENERS ====================
+
+zernioPublishBtn?.addEventListener('click', async function() {
+  const text = zernioText.value.trim() || 'Check out this video! 🎬';
+  const accountId = zernioAccountSelect.value;
+  const videoUrl = currentVideoUrl;
+  
+  if (!videoUrl) {
+    showZernioStatus('❌ No video loaded. Please fetch a video first.', 'error');
+    return;
+  }
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Publishing...';
+  showZernioStatus('⏳ Publishing to Facebook...', 'info');
+  
+  try {
+    const result = await publishToFacebook(videoUrl, text, accountId, true, null);
+    
+    if (result.error) {
+      showZernioStatus(`❌ ${result.error}`, 'error');
+    } else if (result.status === 'success') {
+      const count = result.results ? Object.keys(result.results).length : 1;
+      showZernioStatus(`✅ Published successfully to ${count} account(s)!`, 'success');
+    } else {
+      const post = result.post || result;
+      if (post.status === 'published') {
+        showZernioStatus('✅ Video published successfully to Facebook!', 'success');
+      } else if (post.status === 'scheduled') {
+        showZernioStatus(`📅 Video scheduled for ${post.scheduledFor || 'later'}`, 'success');
+      } else {
+        showZernioStatus(`📝 Post status: ${post.status || 'unknown'}`, 'info');
+      }
+    }
+  } catch (error) {
+    console.error('Publish error:', error);
+    showZernioStatus(`❌ Failed to publish: ${error.message || 'Unknown error'}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.innerHTML = `
+      <span class="btn-content">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Publish Now
+      </span>
+    `;
+  }
+});
+
+zernioScheduleBtn?.addEventListener('click', async function() {
+  const text = zernioText.value.trim() || 'Check out this video! 🎬';
+  const accountId = zernioAccountSelect.value;
+  const videoUrl = currentVideoUrl;
+  const scheduleTime = zernioSchedule.value;
+  
+  if (!videoUrl) {
+    showZernioStatus('❌ No video loaded. Please fetch a video first.', 'error');
+    return;
+  }
+  
+  if (!scheduleTime) {
+    showZernioStatus('❌ Please select a date and time to schedule.', 'error');
+    return;
+  }
+  
+  const scheduledDateTime = new Date(scheduleTime).toISOString();
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Scheduling...';
+  showZernioStatus('⏳ Scheduling post...', 'info');
+  
+  try {
+    const result = await publishToFacebook(videoUrl, text, accountId, false, scheduledDateTime);
+    
+    if (result.error) {
+      showZernioStatus(`❌ ${result.error}`, 'error');
+    } else {
+      const post = result.post || result;
+      if (post.status === 'scheduled') {
+        showZernioStatus(`📅 Post scheduled for ${new Date(scheduleTime).toLocaleString()}`, 'success');
+      } else {
+        showZernioStatus(`📝 Post status: ${post.status || 'unknown'}`, 'info');
+      }
+    }
+  } catch (error) {
+    console.error('Schedule error:', error);
+    showZernioStatus(`❌ Failed to schedule: ${error.message || 'Unknown error'}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.innerHTML = '<span class="btn-content">📅 Schedule</span>';
+  }
+});
+
 // ==================== DELETE FUNCTIONS ====================
 
-// Delete profile function (called from 🗑️ buttons on profile cards)
 async function deleteProfile(username) {
   if (!confirm(`⚠️ Permanently delete ALL data for @${username} from the database?`)) {
     return;
@@ -551,7 +732,6 @@ async function deleteProfile(username) {
     console.log('Delete response:', data);
     
     if (response.ok && data.status === 'success') {
-      // Remove from UI data immediately
       if (window.scrapedData) {
         window.scrapedData = window.scrapedData.filter(p => p.username !== username);
         renderScrapedResults(window.scrapedData);
@@ -564,7 +744,6 @@ async function deleteProfile(username) {
         'success'
       );
       
-      // Force a fresh reload from database to confirm (with delay)
       setTimeout(() => {
         autoLoadScrapedResults();
       }, 1500);
@@ -578,38 +757,6 @@ async function deleteProfile(username) {
   }
 }
 
-// Delete all data button
-deleteAllBtn?.addEventListener('click', async function() {
-  if (!confirm('⚠️ PERMANENTLY delete ALL scraped data from the database? This cannot be undone!')) {
-    return;
-  }
-  
-  showScrapedStatus('🗑️ Permanently deleting ALL data from database...', 'info');
-  
-  try {
-    const response = await fetch('/api/scraped/clear', {
-      method: 'POST',
-      credentials: 'same-origin'
-    });
-    
-    const data = await response.json();
-    console.log('Delete all response:', data);
-    
-    if (response.ok) {
-      window.scrapedData = [];
-      window.allUsernames = [];
-      renderScrapedResults([]);
-      deleteAllBtn.hidden = true;
-      showScrapedStatus('✅ PERMANENTLY DELETED ALL scraped data from database', 'success');
-    } else {
-      showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
-    }
-  } catch (error) {
-    console.error('Delete error:', error);
-    showScrapedStatus(`❌ Failed to delete: ${error.message}`, 'error');
-  }
-});
-
 // ==================== SCRAPED REELS FUNCTIONS ====================
 
 function renderScrapedResults(results, stats, isLoading = false) {
@@ -618,16 +765,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
   const exportBtn = document.getElementById('export-scraped-btn');
   const countBadge = document.getElementById('scraped-count-badge');
   
-  // Show/hide delete all button
-  if (deleteAllBtn) {
-    if (results && results.length > 0 && !isLoading) {
-      deleteAllBtn.hidden = false;
-    } else {
-      deleteAllBtn.hidden = true;
-    }
-  }
-  
-  // Show all usernames
   if (allUsernamesSection && allUsernamesList) {
     if (results && results.length > 0) {
       const usernames = results.map(p => `@${p.username}`).join(', ');
@@ -638,7 +775,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
     }
   }
   
-  // Show loading state
   if (isLoading) {
     content.innerHTML = `
       <div class="loading-state">
@@ -668,7 +804,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
     return;
   }
   
-  // Calculate stats
   let totalReels = 0;
   let successCount = 0;
   let errorCount = 0;
@@ -680,7 +815,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
     else errorCount++;
   });
   
-  // Update stats
   document.getElementById('stat-profiles').textContent = results.length;
   document.getElementById('stat-reels').textContent = totalReels;
   document.getElementById('stat-success').textContent = successCount;
@@ -690,7 +824,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
   if (exportBtn) exportBtn.hidden = false;
   if (countBadge) countBadge.textContent = `${results.length} profiles (${totalReels} reels)`;
   
-  // Build HTML - ALL profiles start COLLAPSED with delete button
   let html = `<div class="scraped-profiles-grid">`;
   
   results.forEach((profile, index) => {
@@ -753,7 +886,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
   content.innerHTML = html;
   clearScrapedBtn.hidden = false;
   
-  // Add copy functionality
   document.querySelectorAll('.copy-reel-btn').forEach(btn => {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -762,7 +894,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
     });
   });
   
-  // Add download functionality
   document.querySelectorAll('.download-reel-btn').forEach(btn => {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -926,7 +1057,6 @@ async function fetchScrapedResults() {
     if (response.ok && data.results && data.results.length > 0) {
       window.scrapedData = data.results;
       window.allUsernames = data.usernames || [];
-      
       renderScrapedResults(data.results);
       
       const usernameList = data.usernames ? data.usernames.join(', ') : '';
@@ -979,7 +1109,6 @@ clearScrapedBtn.addEventListener('click', function() {
   document.getElementById('scraped-count-badge').textContent = '0 profiles';
   window.scrapedData = [];
   this.hidden = true;
-  if (deleteAllBtn) deleteAllBtn.hidden = true;
   showScrapedStatus('✅ Cleared scraped results', 'success');
   localStorage.removeItem('last_scrape_job_id');
 });
@@ -1138,6 +1267,7 @@ function showDirectUrl(url, item) {
   }
   
   showBlueskySection();
+  showZernioSection();
 }
 
 function formatDuration(seconds) {
@@ -1317,6 +1447,7 @@ async function initSession() {
 initSession().then(() => {
     checkInstagramStatus();
     checkBlueskyStatus();
+    checkZernioStatus();
     setTimeout(autoLoadScrapedResults, 1000);
 });
 
