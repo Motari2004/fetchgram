@@ -64,6 +64,10 @@ const uploadCookieMainBtn = document.getElementById('upload-cookie-main-btn');
 const clearCookieMainBtn = document.getElementById('clear-cookie-main-btn');
 const cookieUploadStatus = document.getElementById('cookie-upload-status');
 
+// All Usernames elements
+const allUsernamesSection = document.getElementById('all-usernames-section');
+const allUsernamesList = document.getElementById('all-usernames-list');
+
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
@@ -537,6 +541,17 @@ function renderScrapedResults(results, stats) {
   const exportBtn = document.getElementById('export-scraped-btn');
   const countBadge = document.getElementById('scraped-count-badge');
   
+  // Show all usernames
+  if (allUsernamesSection && allUsernamesList) {
+    if (results && results.length > 0) {
+      const usernames = results.map(p => `@${p.username}`).join(', ');
+      allUsernamesList.textContent = usernames;
+      allUsernamesSection.hidden = false;
+    } else {
+      allUsernamesSection.hidden = true;
+    }
+  }
+  
   if (!results || results.length === 0) {
     content.innerHTML = `<div class="empty-state">No profiles found in the scraped data.</div>`;
     if (statsContainer) statsContainer.hidden = true;
@@ -785,6 +800,7 @@ startScrapeBtn.addEventListener('click', async function() {
 });
 
 // ==================== FETCH SCRAPED RESULTS ====================
+
 async function fetchScrapedResults() {
   const btn = document.getElementById('fetch-scraped-btn');
   btn.textContent = '⏳ Loading...';
@@ -820,6 +836,41 @@ async function fetchScrapedResults() {
     btn.disabled = false;
   }
 }
+
+fetchScrapedBtn.addEventListener('click', fetchScrapedResults);
+
+// ==================== EXPORT SCRAPED RESULTS ====================
+
+document.getElementById('export-scraped-btn')?.addEventListener('click', function() {
+  const results = window.scrapedData || [];
+  if (results.length === 0) {
+    showScrapedStatus('No data to export', 'error');
+    return;
+  }
+  
+  const dataStr = JSON.stringify(results, null, 2);
+  const blob = new Blob([dataStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `scraped_reels_${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showScrapedStatus('✅ Exported successfully!', 'success');
+});
+
+clearScrapedBtn.addEventListener('click', function() {
+  document.getElementById('scraped-reels-content').innerHTML = `<div class="empty-state">No scraped data. Start a scrape job below or load existing results.</div>`;
+  document.getElementById('scraped-stats').hidden = true;
+  document.getElementById('export-scraped-btn').hidden = true;
+  document.getElementById('scraped-count-badge').textContent = '0 profiles';
+  window.scrapedData = [];
+  this.hidden = true;
+  showScrapedStatus('✅ Cleared scraped results', 'success');
+  localStorage.removeItem('last_scrape_job_id');
+});
 
 // ==================== DOWNLOAD FUNCTIONS ====================
 
