@@ -999,7 +999,7 @@ def store_scraped_data():
 
 @app.route("/api/scraped/latest", methods=["GET"])
 def get_scraped_data():
-    """Get the latest scraped data from PostgreSQL (for ALL users)."""
+    """Get ALL scraped data from PostgreSQL - show all profiles from all jobs."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
@@ -1007,37 +1007,75 @@ def get_scraped_data():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Get the most recent scraped data (ignore user_id)
+        # Get ALL scraped data
         cur.execute("""
             SELECT 
-                id,
-                job_id,
-                usernames,
                 results,
-                status,
                 total_profiles,
                 total_reels,
-                created_at,
-                updated_at
+                usernames,
+                created_at
             FROM scraped_reels 
-            ORDER BY created_at DESC 
-            LIMIT 1
+            ORDER BY created_at DESC
         """)
         
-        result = cur.fetchone()
+        all_results = cur.fetchall()
         
-        if result:
+        if all_results:
+            # Combine ALL profiles from ALL jobs
+            combined_results = []
+            seen_usernames = set()
+            total_profiles = 0
+            total_reels = 0
+            
+            for entry in all_results:
+                results = entry['results']
+                if results and isinstance(results, list):
+                    for profile in results:
+                        username = profile.get('username')
+                        if username:
+                            # Check if we already have this username
+                            if username not in seen_usernames:
+                                seen_usernames.add(username)
+                                combined_results.append({
+                                    'username': username,
+                                    'reels': profile.get('reels', []),
+                                    'status': profile.get('status', 'ok')
+                                })
+                                total_profiles += 1
+                                total_reels += len(profile.get('reels', []))
+                            else:
+                                # Merge reels for existing username
+                                for existing in combined_results:
+                                    if existing.get('username') == username:
+                                        existing_reels = existing.get('reels', [])
+                                        new_reels = profile.get('reels', [])
+                                        for reel in new_reels:
+                                            if reel not in existing_reels:
+                                                existing_reels.append(reel)
+                                        total_reels += len(new_reels)
+                                        break
+            
+            # Sort by number of reels (most first)
+            combined_results.sort(key=lambda x: len(x.get('reels', [])), reverse=True)
+            
+            # Get all usernames from the database
+            all_usernames = []
+            cur.execute("SELECT DISTINCT unnest(usernames) as username FROM scraped_reels WHERE usernames IS NOT NULL AND array_length(usernames, 1) > 0")
+            username_rows = cur.fetchall()
+            for row in username_rows:
+                if row['username']:
+                    all_usernames.append(row['username'])
+            
             return jsonify({
                 "status": "success",
-                "results": result['results'],
-                "job_id": result['job_id'],
-                "usernames": result['usernames'],
-                "status": result['status'],
-                "total_profiles": result['total_profiles'],
-                "total_reels": result['total_reels'],
-                "created_at": result['created_at'].isoformat() if result['created_at'] else None,
-                "updated_at": result['updated_at'].isoformat() if result['updated_at'] else None,
-                "message": f"Loaded {result['total_profiles']} profiles with {result['total_reels']} reels from database"
+                "results": combined_results,
+                "total_profiles": len(combined_results),
+                "total_reels": total_reels,
+                "usernames": list(seen_usernames),
+                "all_usernames": all_usernames,
+                "job_count": len(all_results),
+                "message": f"Loaded {len(combined_results)} unique profiles with {total_reels} total reels"
             })
         else:
             return jsonify({
