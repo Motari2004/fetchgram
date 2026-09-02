@@ -544,9 +544,60 @@ function showZernioStatus(message, type) {
   zernioStatus.textContent = message;
   zernioStatus.className = 'status-message ' + type;
   zernioStatus.style.display = 'block';
-  setTimeout(() => {
-    zernioStatus.style.display = 'none';
-  }, 8000);
+  
+  // Don't auto-hide success/error messages - let user dismiss or keep visible
+  if (type === 'success' || type === 'error') {
+    // Add close button to status message
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = `
+      background: none;
+      border: none;
+      color: inherit;
+      cursor: pointer;
+      float: right;
+      font-size: 16px;
+      padding: 0 4px;
+    `;
+    closeBtn.onclick = function() {
+      zernioStatus.style.display = 'none';
+    };
+    zernioStatus.appendChild(closeBtn);
+  }
+}
+
+function showZernioSuccess(message, details) {
+  if (!zernioStatus) return;
+  
+  let html = `<div style="display: flex; align-items: flex-start; gap: 12px;">`;
+  html += `<span style="font-size: 20px;">✅</span>`;
+  html += `<div style="flex: 1;">`;
+  html += `<strong style="font-size: 15px;">${message}</strong>`;
+  
+  if (details) {
+    html += `<div style="margin-top: 6px; font-size: 13px; opacity: 0.9;">`;
+    if (details.post_id) {
+      html += `<div>📋 Post ID: ${details.post_id}</div>`;
+    }
+    if (details.status) {
+      html += `<div>📊 Status: ${details.status}</div>`;
+    }
+    if (details.url) {
+      html += `<div>🔗 <a href="${details.url}" target="_blank" style="color: var(--accent);">View on Facebook</a></div>`;
+    }
+    if (details.accounts) {
+      html += `<div>📱 Published to: ${details.accounts}</div>`;
+    }
+    html += `</div>`;
+  }
+  
+  html += `</div>`;
+  html += `<button onclick="this.parentElement.parentElement.style.display='none'" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-muted);">✕</button>`;
+  html += `</div>`;
+  
+  zernioStatus.innerHTML = html;
+  zernioStatus.className = 'status-message success';
+  zernioStatus.style.display = 'block';
 }
 
 async function publishToFacebook(videoUrl, text, accountId, publishNow = true, scheduledTime = null) {
@@ -629,8 +680,13 @@ zernioPublishBtn?.addEventListener('click', async function() {
     return;
   }
   
+  const accountName = accountId === 'all' ? 'All Accounts' : 
+    zernioAccountSelect.options[zernioAccountSelect.selectedIndex]?.text || 'Selected Account';
+  
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Publishing...';
+  
+  // Show publishing status
   showZernioStatus('⏳ Publishing to Facebook...', 'info');
   
   try {
@@ -638,19 +694,84 @@ zernioPublishBtn?.addEventListener('click', async function() {
     
     if (result.error) {
       showZernioStatus(`❌ ${result.error}`, 'error');
-    } else if (result.status === 'success') {
-      const count = result.results ? Object.keys(result.results).length : 1;
-      showZernioStatus(`✅ Published successfully to ${count} account(s)!`, 'success');
+      return;
+    }
+    
+    // Handle success with detailed status
+    let successMessage = '';
+    let details = {};
+    
+    if (result.status === 'success') {
+      // Multi-account publishing
+      const results = result.results || {};
+      const accountNames = Object.values(results).map(r => r.account_name).join(', ');
+      successMessage = `✅ Published successfully to ${Object.keys(results).length} account(s)!`;
+      details = {
+        accounts: accountNames,
+        post_id: result.post_id || 'N/A',
+        status: 'published'
+      };
+      
+      // Check if any account failed
+      const failed = Object.values(results).filter(r => r.result && r.result.error);
+      if (failed.length > 0) {
+        successMessage += ` (${failed.length} account(s) had issues)`;
+      }
+      
+      showZernioSuccess(successMessage, details);
+      
     } else {
+      // Single account or post response
       const post = result.post || result;
-      if (post.status === 'published') {
-        showZernioStatus('✅ Video published successfully to Facebook!', 'success');
-      } else if (post.status === 'scheduled') {
-        showZernioStatus(`📅 Video scheduled for ${post.scheduledFor || 'later'}`, 'success');
+      const postStatus = post.status || 'unknown';
+      
+      if (postStatus === 'published') {
+        successMessage = '✅ Video published successfully to Facebook!';
+        details = {
+          post_id: post._id || 'N/A',
+          status: 'published',
+          url: post.platforms?.find(p => p.platform === 'facebook')?.publishedUrl || null,
+          accounts: accountName
+        };
+        showZernioSuccess(successMessage, details);
+        
+      } else if (postStatus === 'scheduled') {
+        const scheduledTime = post.scheduledFor || 'later';
+        successMessage = `📅 Video scheduled for ${new Date(scheduledTime).toLocaleString()}`;
+        details = {
+          post_id: post._id || 'N/A',
+          status: 'scheduled',
+          scheduled_for: scheduledTime,
+          accounts: accountName
+        };
+        showZernioSuccess(successMessage, details);
+        
+      } else if (postStatus === 'draft') {
+        successMessage = '📝 Video saved as draft.';
+        details = {
+          post_id: post._id || 'N/A',
+          status: 'draft',
+          accounts: accountName
+        };
+        showZernioSuccess(successMessage, details);
+        
       } else {
-        showZernioStatus(`📝 Post status: ${post.status || 'unknown'}`, 'info');
+        // Unknown status but no error
+        successMessage = `📊 Post created with status: ${postStatus}`;
+        details = {
+          post_id: post._id || 'N/A',
+          status: postStatus,
+          accounts: accountName
+        };
+        showZernioSuccess(successMessage, details);
       }
     }
+    
+    // Clear the schedule input if it was set
+    if (zernioSchedule) {
+      zernioSchedule.value = '';
+    }
+    
   } catch (error) {
     console.error('Publish error:', error);
     showZernioStatus(`❌ Failed to publish: ${error.message || 'Unknown error'}`, 'error');
@@ -683,25 +804,54 @@ zernioScheduleBtn?.addEventListener('click', async function() {
     return;
   }
   
+  const accountName = accountId === 'all' ? 'All Accounts' : 
+    zernioAccountSelect.options[zernioAccountSelect.selectedIndex]?.text || 'Selected Account';
+  
   const scheduledDateTime = new Date(scheduleTime).toISOString();
+  const displayTime = new Date(scheduleTime).toLocaleString();
   
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Scheduling...';
-  showZernioStatus('⏳ Scheduling post...', 'info');
+  showZernioStatus(`⏳ Scheduling post for ${displayTime}...`, 'info');
   
   try {
     const result = await publishToFacebook(videoUrl, text, accountId, false, scheduledDateTime);
     
     if (result.error) {
       showZernioStatus(`❌ ${result.error}`, 'error');
-    } else {
-      const post = result.post || result;
-      if (post.status === 'scheduled') {
-        showZernioStatus(`📅 Post scheduled for ${new Date(scheduleTime).toLocaleString()}`, 'success');
-      } else {
-        showZernioStatus(`📝 Post status: ${post.status || 'unknown'}`, 'info');
-      }
+      return;
     }
+    
+    // Handle success with detailed status
+    const post = result.post || result;
+    const postStatus = post.status || 'unknown';
+    
+    if (postStatus === 'scheduled') {
+      const successMessage = `📅 Post scheduled for ${displayTime}`;
+      const details = {
+        post_id: post._id || 'N/A',
+        status: 'scheduled',
+        scheduled_for: scheduledDateTime,
+        accounts: accountName
+      };
+      showZernioSuccess(successMessage, details);
+    } else if (postStatus === 'published') {
+      showZernioSuccess('✅ Video published immediately!', {
+        post_id: post._id || 'N/A',
+        status: 'published',
+        accounts: accountName
+      });
+    } else {
+      showZernioSuccess(`📊 Post status: ${postStatus}`, {
+        post_id: post._id || 'N/A',
+        status: postStatus,
+        accounts: accountName
+      });
+    }
+    
+    // Clear the schedule input after successful scheduling
+    zernioSchedule.value = '';
+    
   } catch (error) {
     console.error('Schedule error:', error);
     showZernioStatus(`❌ Failed to schedule: ${error.message || 'Unknown error'}`, 'error');
