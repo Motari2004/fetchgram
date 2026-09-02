@@ -95,21 +95,6 @@ def get_user_id():
     
     return user_id
 
-def set_user_cookie(response):
-    """Set the user_id cookie on the response."""
-    user_id = session.get('user_id')
-    if user_id:
-        response.set_cookie(
-            'user_id',
-            user_id,
-            max_age=30*24*60*60,  # 30 days
-            path='/',
-            secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
-            httponly=True,
-            samesite='Lax'
-        )
-    return response
-
 def save_cookies_to_db(cookies_data, username):
     """Save cookies to Neon PostgreSQL."""
     user_id = get_user_id()
@@ -1267,6 +1252,16 @@ def debug_session():
         "user_id_from_session": session.get('user_id')
     })
 
+@app.route("/api/init", methods=["GET"])
+def init_session():
+    """Initialize session and return user_id."""
+    user_id = get_user_id()
+    return jsonify({
+        "status": "success",
+        "user_id": user_id,
+        "has_cookies": bool(get_cookies_from_db())
+    })
+
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     cookie_status = "configured" if get_cookie_file() else "not configured"
@@ -1277,6 +1272,24 @@ def api_status():
         "download_history_count": 0,
         "recent_downloads": []
     })
+
+# ============== AFTER REQUEST ==============
+
+@app.after_request
+def after_request(response):
+    """Ensure user_id cookie is set on every response."""
+    user_id = session.get('user_id')
+    if user_id:
+        response.set_cookie(
+            'user_id',
+            user_id,
+            max_age=30*24*60*60,  # 30 days
+            path='/',
+            secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
+            httponly=True,
+            samesite='Lax'
+        )
+    return response
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

@@ -70,15 +70,11 @@ let currentVideoItem = null;
 // Render scraper URL
 const RENDER_SCRAPER_URL = 'https://ig-reels-scraper.onrender.com';
 
-
-
-
-
-
-
 // ==================== INSTAGRAM COOKIE FUNCTIONS ====================
 
 function updateInstagramStatus(hasCookies, username) {
+  console.log('🔄 Updating status:', { hasCookies, username });
+  
   if (hasCookies) {
     instagramIndicator.textContent = '🟢';
     instagramIndicator.className = 'status-icon online';
@@ -88,6 +84,16 @@ function updateInstagramStatus(hasCookies, username) {
     }
     clearCookieBtn.hidden = false;
     clearCookieMainBtn.hidden = false;
+    
+    // Update the upload label
+    if (cookieFileLabelText) {
+      cookieFileLabelText.textContent = `✅ Connected as @${username || 'Instagram User'}`;
+    }
+    const label = document.querySelector('.cookie-upload-label');
+    if (label) {
+      label.style.borderColor = 'var(--success)';
+      label.classList.add('has-file');
+    }
   } else {
     instagramIndicator.textContent = '⚪';
     instagramIndicator.className = 'status-icon offline';
@@ -97,39 +103,63 @@ function updateInstagramStatus(hasCookies, username) {
     }
     clearCookieBtn.hidden = true;
     clearCookieMainBtn.hidden = true;
+    
+    // Reset the upload label
+    if (cookieFileLabelText) {
+      cookieFileLabelText.textContent = 'Choose cookies.json';
+    }
+    const label = document.querySelector('.cookie-upload-label');
+    if (label) {
+      label.style.borderColor = '';
+      label.classList.remove('has-file');
+    }
   }
 }
 
 async function checkInstagramStatus() {
+  console.log('🔍 Checking Instagram status...');
+  
   try {
-    const savedResponse = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
+    // First check the database (persistent storage)
+    const savedResponse = await fetch('/api/instagram/cookies_status', { 
+      credentials: 'same-origin' 
+    });
     const savedData = await savedResponse.json();
+    console.log('📊 Database status response:', savedData);
     
     if (savedData.has_cookies) {
       updateInstagramStatus(true, savedData.username);
       return;
     }
     
-    const response = await fetch('/api/cookies/status', { credentials: 'same-origin' });
+    // Fallback: check session cookies
+    const response = await fetch('/api/cookies/status', { 
+      credentials: 'same-origin' 
+    });
     const data = await response.json();
+    console.log('📊 Session status response:', data);
     updateInstagramStatus(data.has_cookies, data.username);
+    
+    // If we have cookies in session but not DB, something is wrong
+    if (data.has_cookies && !savedData.has_cookies) {
+      console.warn('Cookies found in session but not in DB - re-saving...');
+      const cookiesResponse = await fetch('/api/instagram/get_cookies', { credentials: 'same-origin' });
+      const cookiesData = await cookiesResponse.json();
+      if (cookiesData.cookies) {
+        await fetch('/api/instagram/save_cookies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ cookies: cookiesData.cookies, remember: true })
+        });
+      }
+    }
+    
   } catch (error) {
-    console.error('Failed to check Instagram status:', error);
+    console.error('❌ Failed to check Instagram status:', error);
     updateInstagramStatus(false);
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ==================== BLUESKY FUNCTIONS ====================
 
@@ -350,7 +380,6 @@ function showCookieStatus(message, type) {
   cookieUploadStatus.textContent = message;
   cookieUploadStatus.className = 'cookie-status-msg ' + (type || '');
   cookieUploadStatus.style.display = 'block';
-  // Don't auto-hide error messages
   if (type !== 'error') {
     setTimeout(() => {
       cookieUploadStatus.style.display = 'none';
@@ -358,14 +387,12 @@ function showCookieStatus(message, type) {
   }
 }
 
-// File input change handler
 cookieFileInput.addEventListener('change', function() {
   if (this.files.length > 0) {
     const fileName = this.files[0].name;
     cookieFileLabelText.textContent = `📄 ${fileName}`;
     this.parentElement.classList.add('has-file');
     uploadCookieMainBtn.disabled = false;
-    // Clear any old status messages
     cookieUploadStatus.style.display = 'none';
   } else {
     cookieFileLabelText.textContent = 'Choose cookies.json';
@@ -374,7 +401,6 @@ cookieFileInput.addEventListener('change', function() {
   }
 });
 
-// Upload cookies - IMPROVED VERSION
 uploadCookieMainBtn.addEventListener('click', async function() {
   const file = cookieFileInput.files[0];
   if (!file) {
@@ -387,7 +413,6 @@ uploadCookieMainBtn.addEventListener('click', async function() {
     return;
   }
   
-  // Disable button and show loading state
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Uploading...';
   showCookieStatus('⏳ Uploading cookies...', 'info');
@@ -402,13 +427,11 @@ uploadCookieMainBtn.addEventListener('click', async function() {
     });
     
     const data = await response.json();
-    console.log('Upload response:', data); // Debug log
+    console.log('Upload response:', data);
     
     if (response.ok && data.status === 'success') {
       showCookieStatus(`✅ ${data.message || 'Cookies uploaded successfully!'}`, 'success');
-      // Update the status card
       updateInstagramStatus(true, data.username || 'Instagram User');
-      // Clear the file input
       cookieFileInput.value = '';
       cookieFileLabelText.textContent = '✅ Uploaded!';
       cookieFileInput.parentElement.classList.remove('has-file');
@@ -416,7 +439,6 @@ uploadCookieMainBtn.addEventListener('click', async function() {
       this.disabled = true;
       clearCookieMainBtn.hidden = false;
       
-      // Refresh the status after a moment
       setTimeout(() => {
         checkInstagramStatus();
       }, 1000);
@@ -430,14 +452,11 @@ uploadCookieMainBtn.addEventListener('click', async function() {
     showCookieStatus(`❌ Network error: ${error.message}`, 'error');
     this.disabled = false;
   } finally {
-    // Reset button if it's not disabled (error case)
     if (!this.disabled) {
       this.innerHTML = '<span class="btn-content">⬆ Upload</span>';
     } else {
-      // If successful, keep the button disabled but reset text after a delay
       setTimeout(() => {
         this.innerHTML = '<span class="btn-content">⬆ Upload</span>';
-        // Check if we need to re-enable (if no file selected)
         if (!cookieFileInput.files || cookieFileInput.files.length === 0) {
           this.disabled = true;
         }
@@ -446,7 +465,6 @@ uploadCookieMainBtn.addEventListener('click', async function() {
   }
 });
 
-// Clear cookies - IMPROVED VERSION
 clearCookieMainBtn.addEventListener('click', async function() {
   this.disabled = true;
   this.textContent = '⏳';
@@ -573,7 +591,6 @@ startScrapeBtn.addEventListener('click', async function() {
   const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
   const headless = scrapeHeadless.checked;
   
-  // First check if we have cookies uploaded
   try {
     const cookieStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
     const cookieData = await cookieStatus.json();
@@ -709,10 +726,8 @@ async function fetchScrapedResults() {
   }
 }
 
-// Fetch scraped results button
 fetchScrapedBtn.addEventListener('click', fetchScrapedResults);
 
-// Clear scraped results
 clearScrapedBtn.addEventListener('click', function() {
   scrapedReelsContent.innerHTML = `<div class="empty-state">No scraped data. Start a scrape job below or load existing results.</div>`;
   this.hidden = true;
@@ -1005,10 +1020,26 @@ form.addEventListener("submit", async (e) => {
 
 // ==================== INIT ====================
 
-checkInstagramStatus();
-checkBlueskyStatus();
+async function initSession() {
+    try {
+        const response = await fetch('/api/init', { credentials: 'same-origin' });
+        const data = await response.json();
+        console.log('Session initialized:', data);
+        
+        if (data.has_cookies) {
+            await checkInstagramStatus();
+        }
+    } catch (error) {
+        console.error('Failed to initialize session:', error);
+    }
+}
 
-// Check if there's a recent scrape job on load
+// Call init before checking status
+initSession().then(() => {
+    checkInstagramStatus();
+    checkBlueskyStatus();
+});
+
 const savedJobId = localStorage.getItem('last_scrape_job_id');
 if (savedJobId) {
   showScrapeStatus(`ℹ️ Last job ID: ${savedJobId.slice(0, 8)}... - Click "Load Results" to check for completed jobs.`, 'running');
