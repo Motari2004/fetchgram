@@ -207,16 +207,16 @@
           <span class="delete-icon">🗑️</span>
           <h3>Delete Profile from Database</h3>
         </div>
-        <span class="badge">Permanent</span>
+        <span class="badge" id="delete-count-badge">0 profiles</span>
       </div>
       
       <div class="delete-profile-body">
         <p class="delete-profile-desc">
-          Enter an Instagram username to permanently delete ALL their scraped data from the database.
+          Enter a username below and click delete to permanently remove ALL their scraped data from the database.
           This action cannot be undone.
         </p>
         
-        <div class="delete-profile-area">
+        <div class="delete-input-area">
           <div class="delete-input-wrapper">
             <span class="input-icon">@</span>
             <input
@@ -241,11 +241,9 @@
         
         <div class="delete-profile-help">
           <details>
-            <summary>📋 How to find usernames to delete</summary>
-            <div class="help-content">
-              <p>Usernames are shown in the "All Profiles in Database" section above.</p>
-              <p>Simply type the exact username (without the @ symbol) and click Delete.</p>
-              <p class="help-note">⚠️ This will permanently remove ALL scraped data for that profile.</p>
+            <summary>📋 Available profiles to delete</summary>
+            <div class="help-content" id="delete-profile-list">
+              <p style="color: var(--text-muted);">Loading profiles...</p>
             </div>
           </details>
         </div>
