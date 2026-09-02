@@ -570,7 +570,8 @@ function startPollingJob(jobId) {
   }, 2000);
 }
 
-// Start scraping job
+// ==================== START SCRAPING - SIMPLIFIED ====================
+
 startScrapeBtn.addEventListener('click', async function() {
   const usernames = scrapeUsernames.value
     .split('\n')
@@ -586,24 +587,7 @@ startScrapeBtn.addEventListener('click', async function() {
   const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
   const headless = scrapeHeadless.checked;
   
-  // Check if we have cookies
-  const cookiesStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
-  const cookiesData = await cookiesStatus.json();
-  
-  if (!cookiesData.has_cookies) {
-    showScrapeStatus('Please upload Instagram cookies first', 'error');
-    return;
-  }
-  
-  // Get full cookies
-  const cookiesResponse = await fetch('/api/instagram/get_cookies', { credentials: 'same-origin' });
-  const cookiesResult = await cookiesResponse.json();
-  
-  if (!cookiesResult.cookies) {
-    showScrapeStatus('Failed to get cookies data', 'error');
-    return;
-  }
-  
+  // ✅ NO COOKIE CHECK - Just send the request to Render
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
   showScrapeStatus('⏳ Starting scrape job on Render...', 'running');
@@ -613,12 +597,13 @@ startScrapeBtn.addEventListener('click', async function() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        cookies: cookiesResult.cookies,
         usernames: usernames,
         maxReels: maxReels,
         maxScrolls: maxScrolls,
         headless: headless,
-        sendToVercel: true
+        sendToVercel: true,
+        // Let Render use its own cookies
+        use_render_cookies: true
       })
     });
     
@@ -946,7 +931,6 @@ checkBlueskyStatus();
 // Check if there's a recent scrape job on load
 const savedJobId = localStorage.getItem('last_scrape_job_id');
 if (savedJobId) {
-  // Check if the job is still running or complete
   fetch(`${RENDER_SCRAPER_URL}/api/scrape/status/${savedJobId}`)
     .then(res => res.json())
     .then(data => {
@@ -960,7 +944,5 @@ if (savedJobId) {
         showScrapeStatus(`❌ Job ${savedJobId} failed`, 'error');
       }
     })
-    .catch(() => {
-      // Render might be sleeping, ignore
-    });
+    .catch(() => {});
 }
