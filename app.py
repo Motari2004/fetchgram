@@ -583,6 +583,100 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
             "error": str(e)
         }
 
+# ============== ZERNIO (FACEBOOK) INTEGRATION ==============
+
+ZERNIO_API_KEY = os.environ.get('ZERNIO_API_KEY', 'sk_48ad5dd4a9d9bd8e2561633862dc1708b3fb2013645023fde617921bd065a037')
+ZERNIO_BASE_URL = "https://zernio.com/api/v1"
+
+# Zernio Facebook accounts configuration
+ZERNIO_ACCOUNTS = {
+    "wildlife_explorers": {
+        "account_id": "6a8c73ab77555aae01fabf32",
+        "name": "Wildlife Explorers",
+        "page_id": "1378720185326161"
+    },
+    "lifestyle_collective": {
+        "account_id": "6a8c73d677555aae01fac672",
+        "name": "Lifestyle Collective",
+        "page_id": "1265613679974575"
+    }
+}
+
+def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None):
+    """
+    Publish a video to Facebook via Zernio
+    
+    Args:
+        video_url: URL of the video to publish
+        text: Caption text
+        account_id: Zernio Facebook account ID
+        publish_now: If True, publish immediately. If False and scheduled_time provided, schedule.
+        scheduled_time: ISO format datetime string (e.g., "2026-09-03T10:00:00Z")
+    
+    Returns:
+        dict: Response from Zernio API
+    """
+    headers = {
+        "Authorization": f"Bearer {ZERNIO_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "content": text,
+        "platforms": [
+            {
+                "platform": "facebook",
+                "accountId": account_id
+            }
+        ],
+        "mediaItems": [
+            {
+                "type": "video",
+                "url": video_url
+            }
+        ]
+    }
+    
+    if publish_now:
+        payload["publishNow"] = True
+    elif scheduled_time:
+        payload["scheduledFor"] = scheduled_time
+        payload["timezone"] = "UTC"
+    
+    try:
+        response = requests.post(
+            f"{ZERNIO_BASE_URL}/posts",
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+        
+        if response.status_code in [200, 201]:
+            return response.json()
+        else:
+            return {"error": response.text, "status_code": response.status_code}
+    except Exception as e:
+        return {"error": str(e)}
+
+def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_time=None):
+    """Publish a video to all connected Facebook accounts"""
+    results = {}
+    
+    for key, account in ZERNIO_ACCOUNTS.items():
+        result = publish_to_facebook(
+            video_url=video_url,
+            text=text,
+            account_id=account["account_id"],
+            publish_now=publish_now,
+            scheduled_time=scheduled_time
+        )
+        results[key] = {
+            "account_name": account["name"],
+            "result": result
+        }
+    
+    return results
+
 # ============== ROUTES ==============
 
 @app.route("/")
@@ -995,8 +1089,6 @@ def store_scraped_data():
         cur.close()
         conn.close()
 
-
-
 @app.route("/api/scraped/latest", methods=["GET"])
 def get_scraped_data():
     """Get ALL scraped data from PostgreSQL - show all profiles from all jobs."""
@@ -1091,8 +1183,6 @@ def get_scraped_data():
         cur.close()
         conn.close()
 
-
-
 @app.route("/api/scraped/delete", methods=["POST"])
 def delete_scraped_by_username():
     """Delete scraped data for a specific username - PERMANENT DELETE from database."""
@@ -1149,8 +1239,6 @@ def delete_scraped_by_username():
     finally:
         cur.close()
         conn.close()
-
-
 
 @app.route("/api/scraped/history", methods=["GET"])
 def get_scraped_history():
@@ -1605,6 +1693,76 @@ def bluesky_status():
         "message": "Bluesky credentials are configured" if has_credentials else "Bluesky credentials are not configured."
     })
 
+# ============== ZERNIO (FACEBOOK) ROUTES ==============
+
+@app.route('/api/zernio/publish', methods=['POST'])
+def zernio_publish():
+    """Publish a video to Facebook via Zernio"""
+    data = request.get_json(silent=True) or {}
+    
+    video_url = data.get('video_url')
+    text = data.get('text', 'Check out this video! 🎬')
+    account_id = data.get('account_id')
+    publish_now = data.get('publish_now', True)
+    scheduled_time = data.get('scheduled_time')
+    
+    if not video_url:
+        return jsonify({"error": "video_url is required"}), 400
+    
+    # If account_id is provided, publish to that account only
+    if account_id:
+        result = publish_to_facebook(
+            video_url=video_url,
+            text=text,
+            account_id=account_id,
+            publish_now=publish_now,
+            scheduled_time=scheduled_time
+        )
+        return jsonify(result)
+    
+    # Otherwise publish to all accounts
+    results = publish_video_to_all_accounts(
+        video_url=video_url,
+        text=text,
+        publish_now=publish_now,
+        scheduled_time=scheduled_time
+    )
+    
+    return jsonify({
+        "status": "success",
+        "message": f"Published to {len(results)} accounts",
+        "results": results
+    })
+
+@app.route('/api/zernio/accounts', methods=['GET'])
+def zernio_list_accounts():
+    """List all connected Zernio Facebook accounts"""
+    return jsonify({
+        "status": "success",
+        "accounts": ZERNIO_ACCOUNTS
+    })
+
+@app.route('/api/zernio/status', methods=['GET'])
+def zernio_status():
+    """Check Zernio connection status"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {ZERNIO_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        
+        return jsonify({
+            "status": "connected" if response.status_code == 200 else "error",
+            "status_code": response.status_code,
+            "message": "Zernio API is accessible" if response.status_code == 200 else "Failed to connect"
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 # ============== PROCESS REELS ==============
 
 @app.route("/api/process-reels", methods=["POST"])
@@ -1706,8 +1864,9 @@ def api_status():
     cookie_status = "configured" if get_cookie_file() else "not configured"
     return jsonify({
         "status": "running",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "cookies": cookie_status,
+        "zernio_connected": bool(ZERNIO_API_KEY),
         "download_history_count": 0,
         "recent_downloads": []
     })
