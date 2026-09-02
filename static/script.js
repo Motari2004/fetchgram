@@ -56,6 +56,7 @@ const fetchScrapedBtn = document.getElementById("fetch-scraped-btn");
 const clearScrapedBtn = document.getElementById("clear-scraped-btn");
 const scrapedReelsContent = document.getElementById("scraped-reels-content");
 const scrapedReelsStatus = document.getElementById("scraped-reels-status");
+const deleteAllBtn = document.getElementById("delete-all-btn");
 
 // Cookie upload elements
 const cookieFileInput = document.getElementById('cookie-file-input-main');
@@ -89,7 +90,6 @@ function updateInstagramStatus(hasCookies, username) {
     clearCookieBtn.hidden = false;
     clearCookieMainBtn.hidden = false;
     
-    // Update the upload label
     if (cookieFileLabelText) {
       cookieFileLabelText.textContent = `✅ Connected as @${username || 'Instagram User'}`;
     }
@@ -108,7 +108,6 @@ function updateInstagramStatus(hasCookies, username) {
     clearCookieBtn.hidden = true;
     clearCookieMainBtn.hidden = true;
     
-    // Reset the upload label
     if (cookieFileLabelText) {
       cookieFileLabelText.textContent = 'Choose cookies.json';
     }
@@ -124,7 +123,6 @@ async function checkInstagramStatus() {
   console.log('🔍 Checking Instagram status...');
   
   try {
-    // First check the database (persistent storage)
     const savedResponse = await fetch('/api/instagram/cookies_status', { 
       credentials: 'same-origin' 
     });
@@ -136,7 +134,6 @@ async function checkInstagramStatus() {
       return;
     }
     
-    // Fallback: check session cookies
     const response = await fetch('/api/cookies/status', { 
       credentials: 'same-origin' 
     });
@@ -144,7 +141,6 @@ async function checkInstagramStatus() {
     console.log('📊 Session status response:', data);
     updateInstagramStatus(data.has_cookies, data.username);
     
-    // If we have cookies in session but not DB, something is wrong
     if (data.has_cookies && !savedData.has_cookies) {
       console.warn('Cookies found in session but not in DB - re-saving...');
       const cookiesResponse = await fetch('/api/instagram/get_cookies', { credentials: 'same-origin' });
@@ -533,6 +529,63 @@ function showScrapedStatus(message, type) {
   }, 8000);
 }
 
+// ==================== DELETE FUNCTIONS ====================
+
+async function deleteProfile(username) {
+  if (!confirm(`Are you sure you want to delete all data for @${username}?`)) {
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/scraped/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username: username })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showScrapedStatus(`✅ Deleted all data for @${username}`, 'success');
+      setTimeout(autoLoadScrapedResults, 1000);
+    } else {
+      showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (error) {
+    console.error('Delete error:', error);
+    showScrapedStatus(`❌ Failed to delete: ${error.message}`, 'error');
+  }
+}
+
+// Delete all data button
+deleteAllBtn?.addEventListener('click', async function() {
+  if (!confirm('⚠️ Are you sure you want to delete ALL scraped data? This cannot be undone!')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/scraped/clear', {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showScrapedStatus('✅ Deleted ALL scraped data', 'success');
+      window.scrapedData = [];
+      renderScrapedResults([]);
+      deleteAllBtn.hidden = true;
+    } else {
+      showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (error) {
+    console.error('Delete error:', error);
+    showScrapedStatus(`❌ Failed to delete: ${error.message}`, 'error');
+  }
+});
+
 // ==================== SCRAPED REELS FUNCTIONS ====================
 
 function renderScrapedResults(results, stats, isLoading = false) {
@@ -540,6 +593,15 @@ function renderScrapedResults(results, stats, isLoading = false) {
   const statsContainer = document.getElementById('scraped-stats');
   const exportBtn = document.getElementById('export-scraped-btn');
   const countBadge = document.getElementById('scraped-count-badge');
+  
+  // Show/hide delete all button
+  if (deleteAllBtn) {
+    if (results && results.length > 0) {
+      deleteAllBtn.hidden = false;
+    } else {
+      deleteAllBtn.hidden = true;
+    }
+  }
   
   // Show all usernames
   if (allUsernamesSection && allUsernamesList) {
@@ -604,7 +666,7 @@ function renderScrapedResults(results, stats, isLoading = false) {
   if (exportBtn) exportBtn.hidden = false;
   if (countBadge) countBadge.textContent = `${results.length} profiles (${totalReels} reels)`;
   
-  // Build HTML - ALL profiles start COLLAPSED
+  // Build HTML - ALL profiles start COLLAPSED with delete button
   let html = `<div class="scraped-profiles-grid">`;
   
   results.forEach((profile, index) => {
@@ -613,7 +675,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
     const status = profile.status || 'ok';
     const statusClass = status === 'ok' ? 'ok' : 
                         (status === 'no_reels_found' || status === 'private') ? 'warn' : 'err';
-    // ALL profiles start collapsed
     const isOpen = false;
     
     html += `
@@ -625,6 +686,9 @@ function renderScrapedResults(results, stats, isLoading = false) {
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <span class="scraped-profile-count">📹 ${reelCount}</span>
+            <button class="btn btn-sm btn-danger delete-profile-btn" data-username="${escapeHtml(username)}" onclick="event.stopPropagation(); deleteProfile('${escapeHtml(username)}')">
+              🗑️
+            </button>
             <span class="scraped-profile-toggle ${isOpen ? 'open' : ''}">▼</span>
           </div>
         </div>
@@ -633,7 +697,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
     `;
     
     if (reelCount > 0) {
-      // Show all reels (up to 50)
       const reelsToShow = profile.reels.slice(0, 50);
       reelsToShow.forEach((url, idx) => {
         html += `
@@ -829,7 +892,6 @@ async function fetchScrapedResults() {
   btn.textContent = '⏳ Loading...';
   btn.disabled = true;
   
-  // Show loading state
   renderScrapedResults(null, null, true);
   
   try {
@@ -841,10 +903,8 @@ async function fetchScrapedResults() {
       window.scrapedData = data.results;
       window.allUsernames = data.usernames || [];
       
-      // Render all profiles
       renderScrapedResults(data.results);
       
-      // Show status with all usernames
       const usernameList = data.usernames ? data.usernames.join(', ') : '';
       showScrapedStatus(
         `✅ Loaded ${data.results.length} profiles: ${usernameList}`,
@@ -895,6 +955,7 @@ clearScrapedBtn.addEventListener('click', function() {
   document.getElementById('scraped-count-badge').textContent = '0 profiles';
   window.scrapedData = [];
   this.hidden = true;
+  if (deleteAllBtn) deleteAllBtn.hidden = true;
   showScrapedStatus('✅ Cleared scraped results', 'success');
   localStorage.removeItem('last_scrape_job_id');
 });
@@ -1185,11 +1246,9 @@ form.addEventListener("submit", async (e) => {
 // ==================== AUTO-LOAD ON PAGE LOAD ====================
 
 async function autoLoadScrapedResults() {
-  // Show loading state immediately
   renderScrapedResults(null, null, true);
   
   try {
-    // Check if we have data in the database
     const response = await fetch('/api/scraped/latest', { credentials: 'same-origin' });
     const data = await response.json();
     console.log('📊 Auto-loading scraped data:', data);
@@ -1205,7 +1264,6 @@ async function autoLoadScrapedResults() {
         'success'
       );
     } else {
-      // No data found, show empty state
       renderScrapedResults([]);
     }
   } catch (error) {
@@ -1232,19 +1290,14 @@ async function initSession() {
 
 // ==================== INIT WITH AUTO-LOAD ====================
 
-// Call init before checking status
 initSession().then(() => {
     checkInstagramStatus();
     checkBlueskyStatus();
-    // Auto-load scraped results after session is fully initialized
     setTimeout(autoLoadScrapedResults, 1000);
 });
 
-// Also load results when page becomes visible again (if user switches tabs)
 document.addEventListener('visibilitychange', function() {
   if (!document.hidden) {
-    // Page became visible again, refresh data
     autoLoadScrapedResults();
   }
 });
-

@@ -1091,6 +1091,57 @@ def get_scraped_data():
         cur.close()
         conn.close()
 
+
+
+@app.route("/api/scraped/delete", methods=["POST"])
+def delete_scraped_by_username():
+    """Delete scraped data for a specific username."""
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "").strip()
+    
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+    
+    user_id = get_user_id()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        
+        # Delete all jobs that contain this username
+        cur.execute("""
+            DELETE FROM scraped_reels 
+            WHERE user_id = %s 
+            AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS r 
+                WHERE r->>'username' = %s
+            )
+        """, (user_id, username))
+        
+        deleted_count = cur.rowcount
+        conn.commit()
+        
+        app.logger.info(f"Deleted {deleted_count} jobs for username: {username}")
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Deleted {deleted_count} jobs for @{username}",
+            "deleted_count": deleted_count
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Delete error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
+
+
+
 @app.route("/api/scraped/history", methods=["GET"])
 def get_scraped_history():
     """Get all scraped data history for the user."""
