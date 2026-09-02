@@ -141,12 +141,13 @@
       </div>
     </div>
 
-    <!-- Scraped Reels Section -->
+    <!-- ============ SCRAPED REELS SECTION ============ -->
     <div class="scraped-reels-section premium-card" id="scraped-reels-section">
       <div class="scraped-reels-header">
         <div class="scraped-reels-title">
           <span class="scraped-icon">📊</span>
           <h3>Scraped Reels from Profiles</h3>
+          <span class="badge" id="scraped-count-badge">0 profiles</span>
         </div>
         <div class="scraped-reels-actions">
           <button id="fetch-scraped-btn" class="btn btn-sm btn-primary">
@@ -154,15 +155,39 @@
             Load Results
           </button>
           <button id="clear-scraped-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
+          <button id="export-scraped-btn" class="btn btn-sm btn-success" hidden>📥 Export</button>
         </div>
       </div>
+      
       <div id="scraped-reels-status" class="status-message" hidden></div>
+      
+      <!-- Stats Summary -->
+      <div id="scraped-stats" class="scraped-stats" hidden>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-profiles">0</span>
+          <span class="stat-label">Profiles</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-reels">0</span>
+          <span class="stat-label">Total Reels</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-success">0</span>
+          <span class="stat-label">Successful</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-errors">0</span>
+          <span class="stat-label">Errors</span>
+        </div>
+      </div>
+      
+      <!-- Results Grid -->
       <div id="scraped-reels-content">
         <div class="empty-state">No scraped data. Start a scrape job below or load existing results.</div>
       </div>
     </div>
 
-    <!-- Scrape Profiles Section -->
+    <!-- ============ SCRAPE PROFILES SECTION ============ -->
     <div class="scrape-section premium-card">
       <div class="scrape-header">
         <div class="scrape-title">
@@ -217,7 +242,7 @@
       </div>
     </div>
 
-    <!-- Main Input Area -->
+    <!-- ============ MAIN INPUT AREA ============ -->
     <div class="input-area">
       <form id="fetch-form">
         <div class="input-wrapper">
@@ -299,7 +324,7 @@
       </div>
     </div>
 
-    <!-- Bluesky Configuration Modal -->
+    <!-- ============ BLUESKY CONFIGURATION MODAL ============ -->
     <div id="bluesky-modal" class="modal-overlay" hidden>
       <div class="modal-content premium-card">
         <div class="modal-header">
@@ -338,7 +363,7 @@
       </div>
     </div>
 
-    <!-- Bluesky Post Section -->
+    <!-- ============ BLUESKY POST SECTION ============ -->
     <div id="bluesky-section" class="bluesky-section premium-card" hidden>
       <div class="bluesky-header">
         <div class="bluesky-header-left">
@@ -369,7 +394,7 @@
       </div>
     </div>
 
-    <!-- Download Progress -->
+    <!-- ============ DOWNLOAD PROGRESS ============ -->
     <div id="download-progress" class="progress-section" hidden>
       <div class="progress-header">
         <span class="progress-label">Downloading...</span>

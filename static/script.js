@@ -520,58 +520,155 @@ function hideScrapeProgress() {
 }
 
 function showScrapedStatus(message, type) {
-  scrapedReelsStatus.textContent = message;
-  scrapedReelsStatus.className = 'status-message ' + type;
-  scrapedReelsStatus.style.display = 'block';
+  const statusEl = document.getElementById('scraped-reels-status');
+  statusEl.textContent = message;
+  statusEl.className = 'status-message ' + type;
+  statusEl.style.display = 'block';
   setTimeout(() => {
-    scrapedReelsStatus.style.display = 'none';
+    statusEl.style.display = 'none';
   }, 8000);
 }
 
+// ==================== SCRAPED REELS FUNCTIONS ====================
+
 function renderScrapedResults(results) {
+  const content = document.getElementById('scraped-reels-content');
+  const stats = document.getElementById('scraped-stats');
+  const exportBtn = document.getElementById('export-scraped-btn');
+  const countBadge = document.getElementById('scraped-count-badge');
+  
   if (!results || results.length === 0) {
-    scrapedReelsContent.innerHTML = `<div class="empty-state">No profiles found in the scraped data.</div>`;
+    content.innerHTML = `<div class="empty-state">No profiles found in the scraped data.</div>`;
+    if (stats) stats.hidden = true;
+    if (exportBtn) exportBtn.hidden = true;
+    if (countBadge) countBadge.textContent = '0 profiles';
     return;
   }
   
-  let html = `<div class="scraped-reels-grid">`;
+  // Update stats
+  let totalReels = 0;
+  let successCount = 0;
+  let errorCount = 0;
   
   results.forEach(profile => {
+    if (profile.status === 'ok') successCount++;
+    else if (profile.status !== 'ok') errorCount++;
+    if (profile.reels) totalReels += profile.reels.length;
+  });
+  
+  document.getElementById('stat-profiles').textContent = results.length;
+  document.getElementById('stat-reels').textContent = totalReels;
+  document.getElementById('stat-success').textContent = successCount;
+  document.getElementById('stat-errors').textContent = errorCount;
+  if (stats) stats.hidden = false;
+  if (exportBtn) exportBtn.hidden = false;
+  if (countBadge) countBadge.textContent = `${results.length} profiles (${totalReels} reels)`;
+  
+  // Build HTML
+  let html = `<div class="scraped-profiles-grid">`;
+  
+  results.forEach((profile, index) => {
     const statusClass = profile.status === 'ok' ? 'ok' : 
                         (profile.status === 'no_reels_found' || profile.status === 'private') ? 'warn' : 'err';
     const statusLabel = profile.status || 'unknown';
     const reelCount = (profile.reels || []).length;
+    const isOpen = index < 3; // First 3 open by default
     
     html += `
       <div class="scraped-profile-card">
-        <div class="scraped-profile-name">
-          @${profile.username || 'unknown'}
-          <span class="status-badge ${statusClass}">${statusLabel}</span>
+        <div class="scraped-profile-header" onclick="toggleProfile(this)">
+          <div class="scraped-profile-name">
+            @${escapeHtml(profile.username || 'unknown')}
+            <span class="status-badge ${statusClass}">${escapeHtml(statusLabel)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="scraped-profile-count">📹 ${reelCount}</span>
+            <span class="scraped-profile-toggle ${isOpen ? 'open' : ''}">▼</span>
+          </div>
         </div>
-        <div class="scraped-profile-count">📹 ${reelCount} reels</div>
-        <div class="scraped-profile-urls">
+        <div class="scraped-profile-body ${isOpen ? 'open' : ''}">
+          <div class="scraped-profile-reels">
     `;
     
     if (reelCount > 0) {
-      profile.reels.slice(0, 10).forEach(url => {
-        html += `<a href="${url}" target="_blank">${url}</a>`;
+      profile.reels.slice(0, 20).forEach((url, idx) => {
+        html += `
+          <div class="scraped-reel-item">
+            <span class="scraped-reel-index">#${idx + 1}</span>
+            <span class="scraped-reel-url"><a href="${escapeHtml(url)}" target="_blank">${escapeHtml(url)}</a></span>
+            <div class="scraped-reel-actions">
+              <button class="btn btn-sm btn-success btn-icon copy-reel-btn" data-url="${escapeHtml(url)}">📋</button>
+            </div>
+          </div>
+        `;
       });
-      if (reelCount > 10) {
-        html += `<div style="color:var(--text-muted);font-size:11px;padding-top:4px;">+${reelCount - 10} more</div>`;
+      
+      if (reelCount > 20) {
+        html += `<div style="color:var(--text-muted);font-size:12px;padding:6px 0;text-align:center;">+${reelCount - 20} more reels</div>`;
       }
     } else {
-      html += `<span style="color:var(--text-muted);font-size:12px;">No reels found</span>`;
+      html += `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No reels found</div>`;
     }
     
     html += `
+          </div>
         </div>
       </div>
     `;
   });
   
   html += `</div>`;
-  scrapedReelsContent.innerHTML = html;
+  content.innerHTML = html;
   clearScrapedBtn.hidden = false;
+  
+  // Add copy functionality
+  document.querySelectorAll('.copy-reel-btn').forEach(btn => {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const url = this.dataset.url;
+      copyToClipboard(url, this);
+    });
+  });
+}
+
+// ==================== SCRAPED REELS HELPER FUNCTIONS ====================
+
+function toggleProfile(header) {
+  const body = header.nextElementSibling;
+  const toggle = header.querySelector('.scraped-profile-toggle');
+  
+  if (body.classList.contains('open')) {
+    body.classList.remove('open');
+    toggle.classList.remove('open');
+    toggle.textContent = '▼';
+  } else {
+    body.classList.add('open');
+    toggle.classList.add('open');
+    toggle.textContent = '▲';
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+async function copyToClipboard(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = '✅';
+    setTimeout(() => { btn.textContent = '📋'; }, 2000);
+  } catch {
+    const input = document.createElement('input');
+    input.value = text;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    document.body.removeChild(input);
+    btn.textContent = '✅';
+    setTimeout(() => { btn.textContent = '📋'; }, 2000);
+  }
 }
 
 // ==================== START SCRAPING ====================
@@ -674,62 +771,60 @@ startScrapeBtn.addEventListener('click', async function() {
 // ==================== FETCH SCRAPED RESULTS ====================
 
 async function fetchScrapedResults() {
-  fetchScrapedBtn.textContent = '⏳ Loading...';
-  fetchScrapedBtn.disabled = true;
+  const btn = document.getElementById('fetch-scraped-btn');
+  btn.textContent = '⏳ Loading...';
+  btn.disabled = true;
   
   try {
     const response = await fetch('/api/scraped/latest', { credentials: 'same-origin' });
     const data = await response.json();
     
     if (response.ok && data.results && data.results.length > 0) {
+      window.scrapedData = data.results; // Store for export
       renderScrapedResults(data.results);
-      showScrapedStatus(`✅ Loaded ${data.results.length} profiles from Vercel storage`, 'success');
-      
-      if (data.job_id) {
-        const header = document.querySelector('.scraped-reels-header');
-        const existingCount = header.querySelector('.count');
-        if (existingCount) existingCount.remove();
-        const countSpan = document.createElement('span');
-        countSpan.className = 'count';
-        countSpan.textContent = `Job: ${data.job_id.slice(0, 8)}...`;
-        header.appendChild(countSpan);
-      }
+      showScrapedStatus(`✅ Loaded ${data.results.length} profiles`, 'success');
     } else {
-      const jobId = localStorage.getItem('last_scrape_job_id');
-      if (jobId) {
-        showScrapedStatus(`⏳ Job ${jobId.slice(0, 8)}... is still processing or no results yet. Try again in a minute.`, 'info');
-        scrapedReelsContent.innerHTML = `
-          <div class="empty-state">
-            <div style="font-size: 24px; margin-bottom: 8px;">⏳</div>
-            <strong>Waiting for results...</strong>
-            <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-              Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${jobId}</code>
-            </p>
-            <p style="margin-top: 4px; font-size: 13px; color: var(--text-muted);">
-              Render is still processing. Results will appear here automatically.
-            </p>
-            <button onclick="fetchScrapedResults()" class="btn btn-sm btn-primary" style="margin-top: 12px;">
-              🔄 Try Again
-            </button>
-          </div>
-        `;
-      } else {
-        showScrapedStatus('No results found. Start a new scrape job.', 'error');
-        scrapedReelsContent.innerHTML = `<div class="empty-state">No results found. Click "Start Scraping" to begin a new job.</div>`;
-      }
+      showScrapedStatus('No results found. Start a new scrape job.', 'error');
+      renderScrapedResults([]);
     }
   } catch (error) {
     showScrapedStatus(`❌ Failed to load results: ${error.message}`, 'error');
   } finally {
-    fetchScrapedBtn.textContent = '📊 Load Results';
-    fetchScrapedBtn.disabled = false;
+    btn.textContent = '📊 Load Results';
+    btn.disabled = false;
   }
 }
 
 fetchScrapedBtn.addEventListener('click', fetchScrapedResults);
 
+// ==================== EXPORT SCRAPED RESULTS ====================
+
+document.getElementById('export-scraped-btn')?.addEventListener('click', function() {
+  const results = window.scrapedData || [];
+  if (results.length === 0) {
+    showScrapedStatus('No data to export', 'error');
+    return;
+  }
+  
+  const dataStr = JSON.stringify(results, null, 2);
+  const blob = new Blob([dataStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `scraped_reels_${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showScrapedStatus('✅ Exported successfully!', 'success');
+});
+
 clearScrapedBtn.addEventListener('click', function() {
-  scrapedReelsContent.innerHTML = `<div class="empty-state">No scraped data. Start a scrape job below or load existing results.</div>`;
+  document.getElementById('scraped-reels-content').innerHTML = `<div class="empty-state">No scraped data. Start a scrape job below or load existing results.</div>`;
+  document.getElementById('scraped-stats').hidden = true;
+  document.getElementById('export-scraped-btn').hidden = true;
+  document.getElementById('scraped-count-badge').textContent = '0 profiles';
+  window.scrapedData = [];
   this.hidden = true;
   showScrapedStatus('✅ Cleared scraped results', 'success');
   localStorage.removeItem('last_scrape_job_id');
