@@ -535,7 +535,7 @@ function showScrapedStatus(message, type) {
 
 // ==================== SCRAPED REELS FUNCTIONS ====================
 
-function renderScrapedResults(results, stats) {
+function renderScrapedResults(results, stats, isLoading = false) {
   const content = document.getElementById('scraped-reels-content');
   const statsContainer = document.getElementById('scraped-stats');
   const exportBtn = document.getElementById('export-scraped-btn');
@@ -552,8 +552,30 @@ function renderScrapedResults(results, stats) {
     }
   }
   
+  // Show loading state
+  if (isLoading) {
+    content.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p style="color: var(--text-muted); margin-top: 12px;">Loading scraped data...</p>
+      </div>
+    `;
+    if (statsContainer) statsContainer.hidden = true;
+    if (exportBtn) exportBtn.hidden = true;
+    if (countBadge) countBadge.textContent = 'Loading...';
+    return;
+  }
+  
   if (!results || results.length === 0) {
-    content.innerHTML = `<div class="empty-state">No profiles found in the scraped data.</div>`;
+    content.innerHTML = `
+      <div class="empty-state">
+        <div style="font-size: 32px; margin-bottom: 12px;">📭</div>
+        <strong>No scraped data found</strong>
+        <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+          Enter usernames below and click "Start Scraping" to begin.
+        </p>
+      </div>
+    `;
     if (statsContainer) statsContainer.hidden = true;
     if (exportBtn) exportBtn.hidden = true;
     if (countBadge) countBadge.textContent = '0 profiles';
@@ -807,6 +829,9 @@ async function fetchScrapedResults() {
   btn.textContent = '⏳ Loading...';
   btn.disabled = true;
   
+  // Show loading state
+  renderScrapedResults(null, null, true);
+  
   try {
     const response = await fetch('/api/scraped/latest', { credentials: 'same-origin' });
     const data = await response.json();
@@ -832,6 +857,7 @@ async function fetchScrapedResults() {
   } catch (error) {
     console.error('❌ Fetch error:', error);
     showScrapedStatus(`❌ Failed to load results: ${error.message}`, 'error');
+    renderScrapedResults([]);
   } finally {
     btn.textContent = '📊 Load Results';
     btn.disabled = false;
@@ -1159,6 +1185,9 @@ form.addEventListener("submit", async (e) => {
 // ==================== AUTO-LOAD ON PAGE LOAD ====================
 
 async function autoLoadScrapedResults() {
+  // Show loading state immediately
+  renderScrapedResults(null, null, true);
+  
   try {
     // Check if we have data in the database
     const response = await fetch('/api/scraped/latest', { credentials: 'same-origin' });
@@ -1175,9 +1204,13 @@ async function autoLoadScrapedResults() {
         `✅ Auto-loaded ${data.results.length} profiles: ${usernameList}`,
         'success'
       );
+    } else {
+      // No data found, show empty state
+      renderScrapedResults([]);
     }
   } catch (error) {
     console.error('❌ Auto-load failed:', error);
+    renderScrapedResults([]);
   }
 }
 
