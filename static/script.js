@@ -70,6 +70,12 @@ let currentVideoItem = null;
 // Render scraper URL
 const RENDER_SCRAPER_URL = 'https://ig-reels-scraper.onrender.com';
 
+
+
+
+
+
+
 // ==================== INSTAGRAM COOKIE FUNCTIONS ====================
 
 function updateInstagramStatus(hasCookies, username) {
@@ -112,6 +118,18 @@ async function checkInstagramStatus() {
     updateInstagramStatus(false);
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ==================== BLUESKY FUNCTIONS ====================
 

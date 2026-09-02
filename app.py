@@ -75,12 +75,40 @@ init_db()
 # ============== COOKIE STORAGE FUNCTIONS ==============
 
 def get_user_id():
-    """Get or create a user ID for this session."""
-    user_id = session.get('user_id')
+    """
+    Get or create a persistent user ID.
+    Uses a browser cookie (which survives page refreshes) instead of Flask session.
+    """
+    # First try to get from request cookies (persistent)
+    user_id = request.cookies.get('user_id')
+    
+    # If not found, try session
+    if not user_id:
+        user_id = session.get('user_id')
+    
+    # If still not found, create new one
     if not user_id:
         user_id = str(uuid.uuid4())
-        session['user_id'] = user_id
+    
+    # Store in session for this request
+    session['user_id'] = user_id
+    
     return user_id
+
+def set_user_cookie(response):
+    """Set the user_id cookie on the response."""
+    user_id = session.get('user_id')
+    if user_id:
+        response.set_cookie(
+            'user_id',
+            user_id,
+            max_age=30*24*60*60,  # 30 days
+            path='/',
+            secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
+            httponly=True,
+            samesite='Lax'
+        )
+    return response
 
 def save_cookies_to_db(cookies_data, username):
     """Save cookies to Neon PostgreSQL."""
@@ -584,11 +612,16 @@ def upload_cookies():
                     username = value.split(':')[0]
                 break
 
+        # Get persistent user_id (from cookie or create new)
+        user_id = get_user_id()
+        
+        # Save to database
         success = save_cookies_to_db(cookies_data, username or 'Instagram User')
         
         if not success:
             return jsonify({"error": "Failed to save cookies to database", "status": "error"}), 500
 
+        # Save in session
         encrypted = encrypt_credentials(json.dumps(cookies_data), "instagram_cookies")
         if encrypted:
             session['instagram_encrypted'] = encrypted
@@ -598,11 +631,25 @@ def upload_cookies():
         session['cookies_data'] = cookies_data
         session['username'] = username or 'Instagram User'
 
-        return jsonify({
+        # Create response with user_id cookie
+        response = jsonify({
             "status": "success",
             "message": "Cookies uploaded and saved to database!",
             "username": username or 'Instagram User'
         })
+        
+        # Set the user_id cookie
+        response.set_cookie(
+            'user_id',
+            user_id,
+            max_age=30*24*60*60,  # 30 days
+            path='/',
+            secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
+            httponly=True,
+            samesite='Lax'
+        )
+        
+        return response
 
     except json.JSONDecodeError:
         return jsonify({"error": "Invalid JSON file", "status": "error"}), 400
@@ -1204,6 +1251,7 @@ def debug_cookies():
 
 @app.route("/api/debug/session", methods=["GET"])
 def debug_session():
+    """Debug endpoint to check session contents."""
     db_cookies = get_cookies_from_db()
     return jsonify({
         "session_keys": list(session.keys()),
@@ -1214,7 +1262,9 @@ def debug_session():
         "session_permanent": session.permanent,
         "cookie_file": session.get('cookie_file'),
         "db_cookies": db_cookies is not None,
-        "db_username": db_cookies.get('username') if db_cookies else None
+        "db_username": db_cookies.get('username') if db_cookies else None,
+        "user_id_from_cookie": request.cookies.get('user_id'),
+        "user_id_from_session": session.get('user_id')
     })
 
 @app.route("/api/commands/status", methods=["GET"])
