@@ -909,32 +909,74 @@ def store_scraped_data():
     results = data.get("results", [])
     job_id = data.get("job_id")
     usernames = data.get("usernames", [])
-    status = data.get("status", 'completed')
     
     if not results:
         return jsonify({"error": "No results provided"}), 400
     
-    success = store_scraped_data_internal(job_id, results, usernames, status)
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
     
-    if success:
+    try:
+        # Calculate stats
+        total_profiles = len(results)
+        total_reels = 0
+        for profile in results:
+            if profile.get('reels'):
+                total_reels += len(profile.get('reels', []))
+        
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO scraped_reels (user_id, job_id, usernames, results, status, total_profiles, total_reels, updated_at)
+            VALUES ('single-user', %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (user_id, job_id) 
+            DO UPDATE SET 
+                results = EXCLUDED.results,
+                usernames = EXCLUDED.usernames,
+                status = EXCLUDED.status,
+                total_profiles = EXCLUDED.total_profiles,
+                total_reels = EXCLUDED.total_reels,
+                updated_at = NOW()
+        """, (
+            job_id or f"job_{datetime.utcnow().isoformat()}", 
+            usernames,
+            json.dumps(results),
+            'completed',
+            total_profiles,
+            total_reels
+        ))
+        conn.commit()
+        
+        app.logger.info(f"Stored {total_profiles} profiles with {total_reels} total reels")
+        
         return jsonify({
             "status": "success",
-            "message": f"Stored {len(results)} profiles",
-            "count": len(results)
+            "message": f"Stored {total_profiles} profiles with {total_reels} total reels",
+            "count": total_profiles,
+            "reels_count": total_reels,
+            "job_id": job_id
         })
-    else:
-        return jsonify({"error": "Failed to store data"}), 500
+        
+    except Exception as e:
+        app.logger.error(f"Database store error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
 
 @app.route("/api/scraped/latest", methods=["GET"])
 def get_scraped_data():
-    """Get the latest scraped data from PostgreSQL."""
-    user_id = get_user_id()
+    """Get the latest scraped data from PostgreSQL (for ALL users)."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
     
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get the most recent scraped data (ignore user_id)
         cur.execute("""
             SELECT 
                 id,
@@ -947,10 +989,9 @@ def get_scraped_data():
                 created_at,
                 updated_at
             FROM scraped_reels 
-            WHERE user_id = %s 
             ORDER BY created_at DESC 
             LIMIT 1
-        """, (user_id,))
+        """)
         
         result = cur.fetchone()
         
@@ -965,7 +1006,7 @@ def get_scraped_data():
                 "total_reels": result['total_reels'],
                 "created_at": result['created_at'].isoformat() if result['created_at'] else None,
                 "updated_at": result['updated_at'].isoformat() if result['updated_at'] else None,
-                "message": f"Loaded {result['total_profiles']} profiles from database"
+                "message": f"Loaded {result['total_profiles']} profiles with {result['total_reels']} reels from database"
             })
         else:
             return jsonify({
@@ -975,7 +1016,7 @@ def get_scraped_data():
             })
             
     except Exception as e:
-        app.logger.error(f"Database get error: {e}")
+        app.logger.error(f"Database error: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
