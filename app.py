@@ -1095,7 +1095,7 @@ def get_scraped_data():
 
 @app.route("/api/scraped/delete", methods=["POST"])
 def delete_scraped_by_username():
-    """Delete scraped data for a specific username."""
+    """Delete scraped data for a specific username - FORCE DELETE."""
     data = request.get_json(silent=True) or {}
     username = data.get("username", "").strip()
     
@@ -1110,6 +1110,20 @@ def delete_scraped_by_username():
     try:
         cur = conn.cursor()
         
+        # First, check how many jobs will be deleted
+        cur.execute("""
+            SELECT COUNT(*) as count FROM scraped_reels 
+            WHERE user_id = %s 
+            AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS r 
+                WHERE r->>'username' = %s
+            )
+        """, (user_id, username))
+        result = cur.fetchone()
+        jobs_to_delete = result[0] if result else 0
+        
+        app.logger.info(f"Found {jobs_to_delete} jobs containing username: {username}")
+        
         # Delete all jobs that contain this username
         cur.execute("""
             DELETE FROM scraped_reels 
@@ -1123,16 +1137,18 @@ def delete_scraped_by_username():
         deleted_count = cur.rowcount
         conn.commit()
         
-        app.logger.info(f"Deleted {deleted_count} jobs for username: {username}")
+        app.logger.info(f"✅ Deleted {deleted_count} jobs for username: {username}")
         
         return jsonify({
             "status": "success",
             "message": f"Deleted {deleted_count} jobs for @{username}",
-            "deleted_count": deleted_count
+            "deleted_count": deleted_count,
+            "jobs_found": jobs_to_delete
         })
         
     except Exception as e:
         app.logger.error(f"Delete error: {e}")
+        conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()

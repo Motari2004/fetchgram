@@ -536,6 +536,9 @@ async function deleteProfile(username) {
     return;
   }
   
+  // Show loading state immediately
+  showScrapedStatus(`🗑️ Deleting @${username}...`, 'info');
+  
   try {
     const response = await fetch('/api/scraped/delete', {
       method: 'POST',
@@ -545,10 +548,23 @@ async function deleteProfile(username) {
     });
     
     const data = await response.json();
+    console.log('Delete response:', data);
     
     if (response.ok) {
-      showScrapedStatus(`✅ Deleted all data for @${username}`, 'success');
-      setTimeout(autoLoadScrapedResults, 1000);
+      // Remove the profile from the current data immediately
+      if (window.scrapedData) {
+        window.scrapedData = window.scrapedData.filter(p => p.username !== username);
+        // Update the UI immediately
+        renderScrapedResults(window.scrapedData);
+      }
+      
+      showScrapedStatus(`✅ Deleted all data for @${username} (${data.deleted_count || 0} jobs removed)`, 'success');
+      
+      // Wait 2 seconds then reload from database to confirm
+      setTimeout(() => {
+        autoLoadScrapedResults();
+      }, 2000);
+      
     } else {
       showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
     }
@@ -559,10 +575,13 @@ async function deleteProfile(username) {
 }
 
 // Delete all data button
+// Delete all data button
 deleteAllBtn?.addEventListener('click', async function() {
   if (!confirm('⚠️ Are you sure you want to delete ALL scraped data? This cannot be undone!')) {
     return;
   }
+  
+  showScrapedStatus('🗑️ Deleting all data...', 'info');
   
   try {
     const response = await fetch('/api/scraped/clear', {
@@ -571,12 +590,14 @@ deleteAllBtn?.addEventListener('click', async function() {
     });
     
     const data = await response.json();
+    console.log('Delete all response:', data);
     
     if (response.ok) {
-      showScrapedStatus('✅ Deleted ALL scraped data', 'success');
+      // Clear the data immediately
       window.scrapedData = [];
       renderScrapedResults([]);
       deleteAllBtn.hidden = true;
+      showScrapedStatus('✅ Deleted ALL scraped data', 'success');
     } else {
       showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
     }
