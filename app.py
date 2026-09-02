@@ -1102,7 +1102,6 @@ def delete_scraped_by_username():
     if not username:
         return jsonify({"error": "Username is required"}), 400
     
-    user_id = get_user_id()
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
@@ -1110,28 +1109,26 @@ def delete_scraped_by_username():
     try:
         cur = conn.cursor()
         
-        # First, count how many jobs will be deleted
+        # Count how many jobs will be deleted (NO user_id filter)
         cur.execute("""
             SELECT COUNT(*) FROM scraped_reels 
-            WHERE user_id = %s 
-            AND EXISTS (
+            WHERE EXISTS (
                 SELECT 1 FROM jsonb_array_elements(results) AS r 
                 WHERE r->>'username' = %s
             )
-        """, (user_id, username))
+        """, (username,))
         jobs_count = cur.fetchone()[0]
         
         app.logger.info(f"📊 Found {jobs_count} jobs containing username: {username}")
         
-        # Delete all jobs that contain this username
+        # Delete all jobs that contain this username (NO user_id filter)
         cur.execute("""
             DELETE FROM scraped_reels 
-            WHERE user_id = %s 
-            AND EXISTS (
+            WHERE EXISTS (
                 SELECT 1 FROM jsonb_array_elements(results) AS r 
                 WHERE r->>'username' = %s
             )
-        """, (user_id, username))
+        """, (username,))
         
         deleted_count = cur.rowcount
         conn.commit()
@@ -1152,8 +1149,6 @@ def delete_scraped_by_username():
     finally:
         cur.close()
         conn.close()
-
-
 
 
 
