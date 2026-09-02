@@ -591,8 +591,8 @@ function renderScrapedResults(results, stats) {
     const status = profile.status || 'ok';
     const statusClass = status === 'ok' ? 'ok' : 
                         (status === 'no_reels_found' || status === 'private') ? 'warn' : 'err';
-    // 👇 CHANGE HERE: All profiles start collapsed (isOpen = false)
-    const isOpen = false; // <-- ALL PROFILES START CLOSED
+    // ALL profiles start collapsed
+    const isOpen = false;
     
     html += `
       <div class="scraped-profile-card">
@@ -1156,6 +1156,31 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
+// ==================== AUTO-LOAD ON PAGE LOAD ====================
+
+async function autoLoadScrapedResults() {
+  try {
+    // Check if we have data in the database
+    const response = await fetch('/api/scraped/latest', { credentials: 'same-origin' });
+    const data = await response.json();
+    console.log('📊 Auto-loading scraped data:', data);
+    
+    if (response.ok && data.results && data.results.length > 0) {
+      window.scrapedData = data.results;
+      window.allUsernames = data.usernames || [];
+      renderScrapedResults(data.results);
+      
+      const usernameList = data.usernames ? data.usernames.join(', ') : '';
+      showScrapedStatus(
+        `✅ Auto-loaded ${data.results.length} profiles: ${usernameList}`,
+        'success'
+      );
+    }
+  } catch (error) {
+    console.error('❌ Auto-load failed:', error);
+  }
+}
+
 // ==================== INIT ====================
 
 async function initSession() {
@@ -1172,10 +1197,22 @@ async function initSession() {
     }
 }
 
+// ==================== INIT WITH AUTO-LOAD ====================
+
 // Call init before checking status
 initSession().then(() => {
     checkInstagramStatus();
     checkBlueskyStatus();
+    // Auto-load scraped results after session is fully initialized
+    setTimeout(autoLoadScrapedResults, 1000);
+});
+
+// Also load results when page becomes visible again (if user switches tabs)
+document.addEventListener('visibilitychange', function() {
+  if (!document.hidden) {
+    // Page became visible again, refresh data
+    autoLoadScrapedResults();
+  }
 });
 
 const savedJobId = localStorage.getItem('last_scrape_job_id');
