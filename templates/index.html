@@ -200,6 +200,58 @@
       </div>
     </div>
 
+    <!-- ============ DELETE PROFILE SECTION ============ -->
+    <div class="delete-profile-section premium-card">
+      <div class="delete-profile-header">
+        <div class="delete-profile-title">
+          <span class="delete-icon">🗑️</span>
+          <h3>Delete Profile from Database</h3>
+        </div>
+        <span class="badge">Permanent</span>
+      </div>
+      
+      <div class="delete-profile-body">
+        <p class="delete-profile-desc">
+          Enter an Instagram username to permanently delete ALL their scraped data from the database.
+          This action cannot be undone.
+        </p>
+        
+        <div class="delete-profile-area">
+          <div class="delete-input-wrapper">
+            <span class="input-icon">@</span>
+            <input
+              type="text"
+              id="delete-username-input"
+              class="input-field"
+              placeholder="Enter username to delete (e.g. elenaajoyce)"
+              autocomplete="off"
+            />
+          </div>
+          <button id="delete-profile-btn" class="btn btn-danger">
+            <span class="btn-content">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <path d="M3 5H15M7 5V3C7 2.44772 7.44772 2 8 2H10C10.5523 2 11 2.44772 11 3V5M6 5V15C6 15.5523 6.44772 16 7 16H11C11.5523 16 12 15.5523 12 15V5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Delete Profile
+            </span>
+          </button>
+        </div>
+        
+        <div id="delete-profile-status" class="status-message" hidden></div>
+        
+        <div class="delete-profile-help">
+          <details>
+            <summary>📋 How to find usernames to delete</summary>
+            <div class="help-content">
+              <p>Usernames are shown in the "All Profiles in Database" section above.</p>
+              <p>Simply type the exact username (without the @ symbol) and click Delete.</p>
+              <p class="help-note">⚠️ This will permanently remove ALL scraped data for that profile.</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+
     <!-- ============ SCRAPE PROFILES SECTION ============ -->
     <div class="scrape-section premium-card">
       <div class="scrape-header">

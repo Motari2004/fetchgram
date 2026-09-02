@@ -69,6 +69,11 @@ const cookieUploadStatus = document.getElementById('cookie-upload-status');
 const allUsernamesSection = document.getElementById('all-usernames-section');
 const allUsernamesList = document.getElementById('all-usernames-list');
 
+// Delete Profile elements
+const deleteUsernameInput = document.getElementById('delete-username-input');
+const deleteProfileBtn = document.getElementById('delete-profile-btn');
+const deleteProfileStatus = document.getElementById('delete-profile-status');
+
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
@@ -531,13 +536,22 @@ function showScrapedStatus(message, type) {
 
 // ==================== DELETE FUNCTIONS ====================
 
-async function deleteProfile(username) {
+// Delete profile from the dedicated input section
+deleteProfileBtn?.addEventListener('click', async function() {
+  const username = deleteUsernameInput.value.trim();
+  
+  if (!username) {
+    showDeleteStatus('❌ Please enter a username to delete', 'error');
+    return;
+  }
+  
   if (!confirm(`⚠️ Permanently delete ALL data for @${username} from the database?`)) {
     return;
   }
   
-  // Show deleting status
-  showScrapedStatus(`🗑️ Permanently deleting @${username} from database...`, 'info');
+  showDeleteStatus(`🗑️ Permanently deleting @${username} from database...`, 'info');
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Deleting...';
   
   try {
     const response = await fetch('/api/scraped/delete', {
@@ -551,31 +565,41 @@ async function deleteProfile(username) {
     console.log('Delete response:', data);
     
     if (response.ok && data.status === 'success') {
-      // Remove from UI immediately
-      if (window.scrapedData) {
-        window.scrapedData = window.scrapedData.filter(p => p.username !== username);
-        renderScrapedResults(window.scrapedData);
-      }
+      showDeleteStatus(`✅ Permanently deleted @${username} (${data.deleted_count || 0} jobs removed)`, 'success');
+      deleteUsernameInput.value = '';
       
-      // Clear all usernames list
-      window.allUsernames = window.allUsernames?.filter(u => u !== username) || [];
-      
-      showScrapedStatus(
-        `✅ Permanently deleted @${username} (${data.deleted_count || 0} jobs removed from database)`, 
-        'success'
-      );
-      
-      // Force a fresh reload from database to confirm (with delay)
+      // Refresh the scraped data to update the UI
       setTimeout(() => {
         autoLoadScrapedResults();
-      }, 1500);
+      }, 1000);
       
     } else {
-      showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
+      showDeleteStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
     }
   } catch (error) {
     console.error('Delete error:', error);
-    showScrapedStatus(`❌ Failed to delete: ${error.message}`, 'error');
+    showDeleteStatus(`❌ Failed to delete: ${error.message}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.innerHTML = `
+      <span class="btn-content">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M3 5H15M7 5V3C7 2.44772 7.44772 2 8 2H10C10.5523 2 11 2.44772 11 3V5M6 5V15C6 15.5523 6.44772 16 7 16H11C11.5523 16 12 15.5523 12 15V5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Delete Profile
+      </span>
+    `;
+  }
+});
+
+function showDeleteStatus(message, type) {
+  deleteProfileStatus.textContent = message;
+  deleteProfileStatus.className = 'status-message ' + type;
+  deleteProfileStatus.style.display = 'block';
+  if (type !== 'error') {
+    setTimeout(() => {
+      deleteProfileStatus.style.display = 'none';
+    }, 8000);
   }
 }
 
@@ -597,7 +621,6 @@ deleteAllBtn?.addEventListener('click', async function() {
     console.log('Delete all response:', data);
     
     if (response.ok) {
-      // Clear everything from UI
       window.scrapedData = [];
       window.allUsernames = [];
       renderScrapedResults([]);
@@ -622,7 +645,7 @@ function renderScrapedResults(results, stats, isLoading = false) {
   
   // Show/hide delete all button
   if (deleteAllBtn) {
-    if (results && results.length > 0) {
+    if (results && results.length > 0 && !isLoading) {
       deleteAllBtn.hidden = false;
     } else {
       deleteAllBtn.hidden = true;
@@ -1325,5 +1348,13 @@ initSession().then(() => {
 document.addEventListener('visibilitychange', function() {
   if (!document.hidden) {
     autoLoadScrapedResults();
+  }
+});
+
+// Enter key support for delete input
+deleteUsernameInput?.addEventListener('keypress', function(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    deleteProfileBtn?.click();
   }
 });
