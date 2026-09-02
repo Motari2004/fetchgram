@@ -9,11 +9,7 @@ const template = document.getElementById("result-template");
 const instagramIndicator = document.getElementById("instagram-indicator");
 const instagramStatusText = document.getElementById("instagram-status-text");
 const instagramUsernameDisplay = document.getElementById("instagram-username-display");
-const fileInput = document.getElementById("cookie-file-input");
-const uploadCookieLabel = document.getElementById("upload-cookie-label");
 const clearCookieBtn = document.getElementById("clear-cookie-btn");
-const instagramUploadInfo = document.getElementById("instagram-upload-info");
-const instagramUploadError = document.getElementById("instagram-upload-error");
 
 // Bluesky elements
 const blueskyIndicator = document.getElementById("bluesky-indicator");
@@ -61,6 +57,13 @@ const clearScrapedBtn = document.getElementById("clear-scraped-btn");
 const scrapedReelsContent = document.getElementById("scraped-reels-content");
 const scrapedReelsStatus = document.getElementById("scraped-reels-status");
 
+// Cookie upload elements
+const cookieFileInput = document.getElementById('cookie-file-input-main');
+const cookieFileLabelText = document.getElementById('cookie-file-label-text');
+const uploadCookieMainBtn = document.getElementById('upload-cookie-main-btn');
+const clearCookieMainBtn = document.getElementById('clear-cookie-main-btn');
+const cookieUploadStatus = document.getElementById('cookie-upload-status');
+
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
@@ -78,10 +81,7 @@ function updateInstagramStatus(hasCookies, username) {
       instagramUsernameDisplay.textContent = `@${username || 'Instagram User'}`;
     }
     clearCookieBtn.hidden = false;
-    uploadCookieLabel.innerHTML = '✅ Connected';
-    uploadCookieLabel.style.opacity = '0.7';
-    uploadCookieLabel.style.pointerEvents = 'none';
-    fileInput.disabled = true;
+    clearCookieMainBtn.hidden = false;
   } else {
     instagramIndicator.textContent = '⚪';
     instagramIndicator.className = 'status-icon offline';
@@ -90,14 +90,7 @@ function updateInstagramStatus(hasCookies, username) {
       instagramUsernameDisplay.textContent = '';
     }
     clearCookieBtn.hidden = true;
-    uploadCookieLabel.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Upload Cookies
-    `;
-    uploadCookieLabel.style.opacity = '1';
-    uploadCookieLabel.style.pointerEvents = 'auto';
-    fileInput.disabled = false;
-    fileInput.value = '';
+    clearCookieMainBtn.hidden = true;
   }
 }
 
@@ -118,104 +111,6 @@ async function checkInstagramStatus() {
     console.error('Failed to check Instagram status:', error);
     updateInstagramStatus(false);
   }
-}
-
-fileInput.addEventListener('change', async function() {
-  const file = this.files[0];
-  if (!file) return;
-  
-  if (!file.name.endsWith('.json')) {
-    showInstagramError('File must be a JSON file');
-    return;
-  }
-  
-  try {
-    const content = await file.text();
-    const cookiesData = JSON.parse(content);
-    
-    if (!Array.isArray(cookiesData)) {
-      showInstagramError('Invalid cookie format - expected an array');
-      return;
-    }
-    
-    const hasSession = cookiesData.some(cookie => 
-      cookie && typeof cookie === 'object' && 
-      (cookie.name === 'sessionid' || cookie.name === 'ds_user_id')
-    );
-    
-    if (!hasSession) {
-      showInstagramError('No session cookies found. Make sure you\'re logged into Instagram.');
-      return;
-    }
-    
-    uploadCookieLabel.innerHTML = '⏳ Saving...';
-    uploadCookieLabel.style.opacity = '0.7';
-    
-    const saveResponse = await fetch('/api/instagram/save_cookies', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ cookies: cookiesData, remember: true })
-    });
-    
-    const saveData = await saveResponse.json();
-    
-    if (saveResponse.ok) {
-      updateInstagramStatus(true, saveData.username);
-      showInstagramInfo(`✅ ${saveData.message}`);
-      fileInput.value = '';
-    } else {
-      showInstagramError(saveData.error || 'Failed to save cookies');
-      updateInstagramStatus(false);
-    }
-  } catch (error) {
-    showInstagramError('Failed to process cookies: ' + error.message);
-  } finally {
-    uploadCookieLabel.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Upload Cookies
-    `;
-    uploadCookieLabel.style.opacity = '1';
-  }
-});
-
-clearCookieBtn.addEventListener('click', async function() {
-  this.textContent = '⏳';
-  this.disabled = true;
-  
-  try {
-    const response = await fetch('/api/instagram/clear_cookies', {
-      method: 'POST',
-      credentials: 'same-origin'
-    });
-    const data = await response.json();
-    
-    if (response.ok) {
-      updateInstagramStatus(false);
-      showInstagramInfo('✅ Cookies cleared');
-    } else {
-      showInstagramError(data.error || 'Failed to clear cookies');
-    }
-  } catch (error) {
-    showInstagramError('Failed to clear: ' + error.message);
-  } finally {
-    this.textContent = 'Clear';
-    this.disabled = false;
-  }
-});
-
-function showInstagramInfo(message) {
-  instagramUploadInfo.textContent = message;
-  instagramUploadInfo.style.display = 'block';
-  instagramUploadError.style.display = 'none';
-  setTimeout(() => { instagramUploadInfo.style.display = 'none'; }, 5000);
-}
-
-function showInstagramError(message) {
-  instagramUploadError.textContent = '❌ ' + message;
-  instagramUploadError.style.display = 'block';
-  instagramUploadInfo.style.display = 'none';
-  setTimeout(() => { instagramUploadError.style.display = 'none'; }, 5000);
 }
 
 // ==================== BLUESKY FUNCTIONS ====================
@@ -431,6 +326,102 @@ blueskyPostBtn.addEventListener('click', async function() {
   }
 });
 
+// ==================== COOKIE UPLOAD FUNCTIONS ====================
+
+function showCookieStatus(message, type) {
+  cookieUploadStatus.textContent = message;
+  cookieUploadStatus.className = 'cookie-status-msg ' + (type || '');
+  cookieUploadStatus.style.display = 'block';
+  setTimeout(() => {
+    cookieUploadStatus.style.display = 'none';
+  }, 6000);
+}
+
+// File input change handler
+cookieFileInput.addEventListener('change', function() {
+  if (this.files.length > 0) {
+    const fileName = this.files[0].name;
+    cookieFileLabelText.textContent = `📄 ${fileName}`;
+    this.parentElement.classList.add('has-file');
+    uploadCookieMainBtn.disabled = false;
+  } else {
+    cookieFileLabelText.textContent = 'Choose cookies.json';
+    this.parentElement.classList.remove('has-file');
+    uploadCookieMainBtn.disabled = true;
+  }
+});
+
+// Upload cookies
+uploadCookieMainBtn.addEventListener('click', async function() {
+  const file = cookieFileInput.files[0];
+  if (!file) {
+    showCookieStatus('Please select a cookies.json file first', 'error');
+    return;
+  }
+  
+  if (!file.name.endsWith('.json')) {
+    showCookieStatus('File must be a JSON file', 'error');
+    return;
+  }
+  
+  const formData = new FormData();
+  formData.append('cookies_file', file);
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Uploading...';
+  showCookieStatus('⏳ Uploading cookies...', 'info');
+  
+  try {
+    const response = await fetch('/api/cookies/upload', {
+      method: 'POST',
+      body: formData
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showCookieStatus(`✅ ${data.message}`, 'success');
+      updateInstagramStatus(true, data.username);
+      cookieFileInput.value = '';
+      cookieFileLabelText.textContent = 'Choose cookies.json';
+      cookieFileInput.parentElement.classList.remove('has-file');
+      this.disabled = true;
+      clearCookieMainBtn.hidden = false;
+    } else {
+      showCookieStatus(`❌ ${data.error || 'Upload failed'}`, 'error');
+    }
+  } catch (error) {
+    showCookieStatus(`❌ Failed to upload: ${error.message}`, 'error');
+  } finally {
+    this.innerHTML = '<span class="btn-content">⬆ Upload</span>';
+    this.disabled = false;
+  }
+});
+
+// Clear cookies
+clearCookieMainBtn.addEventListener('click', async function() {
+  this.disabled = true;
+  this.textContent = '⏳';
+  
+  try {
+    const response = await fetch('/api/cookies/clear', { method: 'POST' });
+    const data = await response.json();
+    
+    if (response.ok) {
+      showCookieStatus('✅ Cookies cleared', 'success');
+      updateInstagramStatus(false);
+      this.hidden = true;
+    } else {
+      showCookieStatus(`❌ ${data.error || 'Failed to clear'}`, 'error');
+    }
+  } catch (error) {
+    showCookieStatus(`❌ Failed to clear: ${error.message}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.textContent = '🗑️ Clear';
+  }
+});
+
 // ==================== SCRAPE FUNCTIONS ====================
 
 function showScrapeStatus(message, type) {
@@ -528,13 +519,26 @@ startScrapeBtn.addEventListener('click', async function() {
   const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
   const headless = scrapeHeadless.checked;
   
+  // First check if we have cookies uploaded
+  try {
+    const cookieStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
+    const cookieData = await cookieStatus.json();
+    
+    if (!cookieData.has_cookies) {
+      showScrapeStatus('❌ Please upload your Instagram cookies.json file first!', 'error');
+      return;
+    }
+  } catch (error) {
+    showScrapeStatus('❌ Failed to check cookie status', 'error');
+    return;
+  }
+  
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
-  showScrapeStatus('⏳ Sending request...', 'running');
-  showScrapeProgress(10, 'Checking cookies...');
+  showScrapeStatus('⏳ Sending request to Render...', 'running');
+  showScrapeProgress(10, 'Connecting to Vercel proxy...');
   
   try {
-    // Call the proxy endpoint (same domain)
     const response = await fetch('/api/scrape/proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -603,7 +607,6 @@ async function fetchScrapedResults() {
   fetchScrapedBtn.disabled = true;
   
   try {
-    // Get results from Vercel storage (where Render posted them)
     const response = await fetch('/api/scraped/latest', { credentials: 'same-origin' });
     const data = await response.json();
     
@@ -611,7 +614,6 @@ async function fetchScrapedResults() {
       renderScrapedResults(data.results);
       showScrapedStatus(`✅ Loaded ${data.results.length} profiles from Vercel storage`, 'success');
       
-      // Show job info if available
       if (data.job_id) {
         const header = document.querySelector('.scraped-reels-header');
         const existingCount = header.querySelector('.count');
@@ -622,7 +624,6 @@ async function fetchScrapedResults() {
         header.appendChild(countSpan);
       }
     } else {
-      // Check if there's a pending job
       const jobId = localStorage.getItem('last_scrape_job_id');
       if (jobId) {
         showScrapedStatus(`⏳ Job ${jobId.slice(0, 8)}... is still processing or no results yet. Try again in a minute.`, 'info');
@@ -956,7 +957,6 @@ checkBlueskyStatus();
 // Check if there's a recent scrape job on load
 const savedJobId = localStorage.getItem('last_scrape_job_id');
 if (savedJobId) {
-  // Just show a notification that there's a pending job
   showScrapeStatus(`ℹ️ Last job ID: ${savedJobId.slice(0, 8)}... - Click "Load Results" to check for completed jobs.`, 'running');
   scrapedReelsContent.innerHTML = `
     <div class="empty-state">

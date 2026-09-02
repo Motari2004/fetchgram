@@ -34,7 +34,6 @@
       <span class="mark-badge">PRO</span>
     </div>
     <div class="topbar-actions">
-      <a href="/instaloader" class="topbar-link">📸 Reels</a>
       <span class="topbar-note">⚡ Premium</span>
     </div>
   </header>
@@ -63,15 +62,8 @@
           <span class="status-sub" id="instagram-username-display"></span>
         </div>
         <div class="status-card-actions">
-          <label for="cookie-file-input" class="btn btn-sm btn-ghost" id="upload-cookie-label">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Upload Cookies
-          </label>
-          <input type="file" id="cookie-file-input" accept=".json" style="display:none" />
           <button id="clear-cookie-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
         </div>
-        <div id="instagram-upload-info" class="status-message success" hidden></div>
-        <div id="instagram-upload-error" class="status-message error" hidden></div>
       </div>
 
       <!-- Bluesky Status -->
@@ -89,6 +81,53 @@
           <button id="clear-bluesky-creds-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
         </div>
         <div id="saved-credentials-info" class="status-message success" hidden></div>
+      </div>
+    </div>
+
+    <!-- ============ COOKIE UPLOAD SECTION ============ -->
+    <div class="cookie-upload-section premium-card">
+      <div class="cookie-upload-header">
+        <div class="cookie-upload-title">
+          <span class="cookie-icon">🍪</span>
+          <h3>Upload Instagram Cookies</h3>
+        </div>
+        <span class="badge">Required for scraping</span>
+      </div>
+      
+      <div class="cookie-upload-body">
+        <p class="cookie-upload-desc">
+          Upload your <code>cookies.json</code> file exported from your browser. 
+          This is required for scraping Instagram profiles and downloading videos.
+        </p>
+        
+        <div class="cookie-upload-area">
+          <label for="cookie-file-input-main" class="cookie-upload-label">
+            <span class="upload-icon">📁</span>
+            <span id="cookie-file-label-text">Choose cookies.json</span>
+            <input type="file" id="cookie-file-input-main" accept=".json" />
+          </label>
+          <button id="upload-cookie-main-btn" class="btn btn-primary" disabled>
+            <span class="btn-content">⬆ Upload</span>
+          </button>
+          <button id="clear-cookie-main-btn" class="btn btn-danger" hidden>🗑️ Clear</button>
+        </div>
+        
+        <div id="cookie-upload-status" class="cookie-status-msg" hidden></div>
+        
+        <div class="cookie-upload-help">
+          <details>
+            <summary>📖 How to export cookies.json</summary>
+            <div class="help-content">
+              <ol>
+                <li>Install a cookie exporter extension like <strong>Cookie-Editor</strong> or <strong>Get cookies.txt LOCALLY</strong></li>
+                <li>Log into <a href="https://instagram.com" target="_blank">instagram.com</a> in your browser</li>
+                <li>Open the extension and click <strong>Export</strong> → <strong>Export as JSON</strong></li>
+                <li>Save the file as <code>cookies.json</code></li>
+              </ol>
+              <p class="help-note">⚠️ Treat this file like a password - never share it!</p>
+            </div>
+          </details>
+        </div>
       </div>
     </div>
 
