@@ -332,9 +332,12 @@ function showCookieStatus(message, type) {
   cookieUploadStatus.textContent = message;
   cookieUploadStatus.className = 'cookie-status-msg ' + (type || '');
   cookieUploadStatus.style.display = 'block';
-  setTimeout(() => {
-    cookieUploadStatus.style.display = 'none';
-  }, 6000);
+  // Don't auto-hide error messages
+  if (type !== 'error') {
+    setTimeout(() => {
+      cookieUploadStatus.style.display = 'none';
+    }, 8000);
+  }
 }
 
 // File input change handler
@@ -344,6 +347,8 @@ cookieFileInput.addEventListener('change', function() {
     cookieFileLabelText.textContent = `📄 ${fileName}`;
     this.parentElement.classList.add('has-file');
     uploadCookieMainBtn.disabled = false;
+    // Clear any old status messages
+    cookieUploadStatus.style.display = 'none';
   } else {
     cookieFileLabelText.textContent = 'Choose cookies.json';
     this.parentElement.classList.remove('has-file');
@@ -351,68 +356,99 @@ cookieFileInput.addEventListener('change', function() {
   }
 });
 
-// Upload cookies
+// Upload cookies - IMPROVED VERSION
 uploadCookieMainBtn.addEventListener('click', async function() {
   const file = cookieFileInput.files[0];
   if (!file) {
-    showCookieStatus('Please select a cookies.json file first', 'error');
+    showCookieStatus('❌ Please select a cookies.json file first', 'error');
     return;
   }
   
   if (!file.name.endsWith('.json')) {
-    showCookieStatus('File must be a JSON file', 'error');
+    showCookieStatus('❌ File must be a .json file', 'error');
     return;
   }
   
-  const formData = new FormData();
-  formData.append('cookies_file', file);
-  
+  // Disable button and show loading state
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Uploading...';
   showCookieStatus('⏳ Uploading cookies...', 'info');
   
   try {
+    const formData = new FormData();
+    formData.append('cookies_file', file);
+    
     const response = await fetch('/api/cookies/upload', {
       method: 'POST',
       body: formData
     });
     
     const data = await response.json();
+    console.log('Upload response:', data); // Debug log
     
-    if (response.ok) {
-      showCookieStatus(`✅ ${data.message}`, 'success');
-      updateInstagramStatus(true, data.username);
+    if (response.ok && data.status === 'success') {
+      showCookieStatus(`✅ ${data.message || 'Cookies uploaded successfully!'}`, 'success');
+      // Update the status card
+      updateInstagramStatus(true, data.username || 'Instagram User');
+      // Clear the file input
       cookieFileInput.value = '';
-      cookieFileLabelText.textContent = 'Choose cookies.json';
+      cookieFileLabelText.textContent = '✅ Uploaded!';
       cookieFileInput.parentElement.classList.remove('has-file');
+      cookieFileInput.parentElement.classList.add('has-file');
       this.disabled = true;
       clearCookieMainBtn.hidden = false;
+      
+      // Refresh the status after a moment
+      setTimeout(() => {
+        checkInstagramStatus();
+      }, 1000);
+      
     } else {
-      showCookieStatus(`❌ ${data.error || 'Upload failed'}`, 'error');
+      showCookieStatus(`❌ ${data.error || 'Upload failed. Please try again.'}`, 'error');
+      this.disabled = false;
     }
   } catch (error) {
-    showCookieStatus(`❌ Failed to upload: ${error.message}`, 'error');
-  } finally {
-    this.innerHTML = '<span class="btn-content">⬆ Upload</span>';
+    console.error('Upload error:', error);
+    showCookieStatus(`❌ Network error: ${error.message}`, 'error');
     this.disabled = false;
+  } finally {
+    // Reset button if it's not disabled (error case)
+    if (!this.disabled) {
+      this.innerHTML = '<span class="btn-content">⬆ Upload</span>';
+    } else {
+      // If successful, keep the button disabled but reset text after a delay
+      setTimeout(() => {
+        this.innerHTML = '<span class="btn-content">⬆ Upload</span>';
+        // Check if we need to re-enable (if no file selected)
+        if (!cookieFileInput.files || cookieFileInput.files.length === 0) {
+          this.disabled = true;
+        }
+      }, 2000);
+    }
   }
 });
 
-// Clear cookies
+// Clear cookies - IMPROVED VERSION
 clearCookieMainBtn.addEventListener('click', async function() {
   this.disabled = true;
   this.textContent = '⏳';
   
   try {
-    const response = await fetch('/api/cookies/clear', { method: 'POST' });
+    const response = await fetch('/api/cookies/clear', { 
+      method: 'POST',
+      credentials: 'same-origin'
+    });
     const data = await response.json();
     
     if (response.ok) {
-      showCookieStatus('✅ Cookies cleared', 'success');
+      showCookieStatus('✅ Cookies cleared successfully', 'success');
       updateInstagramStatus(false);
       this.hidden = true;
+      cookieFileLabelText.textContent = 'Choose cookies.json';
+      cookieFileInput.parentElement.classList.remove('has-file');
+      uploadCookieMainBtn.disabled = true;
     } else {
-      showCookieStatus(`❌ ${data.error || 'Failed to clear'}`, 'error');
+      showCookieStatus(`❌ ${data.error || 'Failed to clear cookies'}`, 'error');
     }
   } catch (error) {
     showCookieStatus(`❌ Failed to clear: ${error.message}`, 'error');

@@ -1631,3 +1631,35 @@ html, body {
     justify-content: center;
   }
 }
+
+
+
+/* Cookie Status Messages */
+.cookie-status-msg {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-top: 10px;
+  display: none;
+}
+
+.cookie-status-msg.success {
+  display: block;
+  background: var(--success-bg);
+  color: var(--success);
+  border: 1px solid rgba(0, 200, 83, 0.2);
+}
+
+.cookie-status-msg.error {
+  display: block;
+  background: var(--error-bg);
+  color: var(--error);
+  border: 1px solid rgba(255, 82, 82, 0.2);
+}
+
+.cookie-status-msg.info {
+  display: block;
+  background: rgba(108, 99, 255, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(108, 99, 255, 0.2);
+}
