@@ -1242,6 +1242,74 @@ def debug_cookies():
     })
 
 
+
+
+# ============== SCRAPED DATA STORAGE (for Render integration) ==============
+
+# In-memory store for scraped data (ephemeral on serverless)
+scraped_data_store = {}
+
+@app.route("/api/scraped/store", methods=["POST"])
+def store_scraped_data():
+    """Store scraped data from Render."""
+    data = request.get_json(silent=True) or {}
+    results = data.get("results", [])
+    job_id = data.get("job_id")
+    
+    if not results:
+        return jsonify({"error": "No results provided"}), 400
+    
+    # Store in memory with timestamp
+    scraped_data_store['latest'] = {
+        'results': results,
+        'job_id': job_id,
+        'timestamp': datetime.utcnow().isoformat(),
+        'count': len(results)
+    }
+    
+    app.logger.info(f"Stored {len(results)} profiles from job {job_id}")
+    
+    return jsonify({
+        "status": "success",
+        "message": f"Stored {len(results)} profiles",
+        "count": len(results)
+    })
+
+
+@app.route("/api/scraped/latest", methods=["GET"])
+def get_scraped_data():
+    """Get the latest scraped data."""
+    latest = scraped_data_store.get('latest')
+    if not latest:
+        return jsonify({
+            "status": "success",
+            "results": [],
+            "message": "No scraped data available"
+        })
+    
+    return jsonify({
+        "status": "success",
+        "results": latest.get('results', []),
+        "job_id": latest.get('job_id'),
+        "timestamp": latest.get('timestamp'),
+        "count": latest.get('count', 0)
+    })
+
+
+@app.route("/api/scraped/clear", methods=["POST"])
+def clear_scraped_data():
+    """Clear stored scraped data."""
+    scraped_data_store.clear()
+    return jsonify({
+        "status": "success",
+        "message": "Scraped data cleared"
+    })
+
+
+
+
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
