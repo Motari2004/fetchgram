@@ -582,7 +582,7 @@ function renderScrapedResults(results, stats) {
   if (exportBtn) exportBtn.hidden = false;
   if (countBadge) countBadge.textContent = `${results.length} profiles (${totalReels} reels)`;
   
-  // Build HTML - Show ALL profiles with their usernames
+  // Build HTML - ALL profiles start COLLAPSED
   let html = `<div class="scraped-profiles-grid">`;
   
   results.forEach((profile, index) => {
@@ -591,7 +591,8 @@ function renderScrapedResults(results, stats) {
     const status = profile.status || 'ok';
     const statusClass = status === 'ok' ? 'ok' : 
                         (status === 'no_reels_found' || status === 'private') ? 'warn' : 'err';
-    const isOpen = index < 3; // First 3 open by default
+    // 👇 CHANGE HERE: All profiles start collapsed (isOpen = false)
+    const isOpen = false; // <-- ALL PROFILES START CLOSED
     
     html += `
       <div class="scraped-profile-card">
