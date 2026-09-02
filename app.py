@@ -493,28 +493,28 @@ def index():
 def upload_cookies():
     """Upload cookies.json file (one-shot, also saves persistently)."""
     if 'cookies_file' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+        return jsonify({"error": "No file uploaded", "status": "error"}), 400
 
     file = request.files['cookies_file']
     if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
+        return jsonify({"error": "No file selected", "status": "error"}), 400
 
     if not file.filename.endswith('.json'):
-        return jsonify({"error": "File must be a JSON file"}), 400
+        return jsonify({"error": "File must be a JSON file", "status": "error"}), 400
 
     try:
         content = file.read().decode('utf-8')
         cookies_data = json.loads(content)
 
         if not isinstance(cookies_data, list):
-            return jsonify({"error": "Invalid cookie format - expected an array"}), 400
+            return jsonify({"error": "Invalid cookie format - expected an array", "status": "error"}), 400
 
         has_session = any(
             isinstance(c, dict) and c.get('name') in ('sessionid', 'ds_user_id')
             for c in cookies_data
         )
         if not has_session:
-            return jsonify({"error": "No session cookies found. Make sure you're logged into Instagram."}), 400
+            return jsonify({"error": "No session cookies found. Make sure you're logged into Instagram.", "status": "error"}), 400
 
         # Extract username
         username = None
@@ -530,33 +530,42 @@ def upload_cookies():
                     username = value.split(':')[0]
                 break
 
-        # Persist encrypted
+        # Save to session - BOTH encrypted and plain for redundancy
+        session.permanent = True
+        
+        # Save encrypted
         encrypted = encrypt_credentials(json.dumps(cookies_data), "instagram_cookies")
         if encrypted:
-            session.permanent = True
             session['instagram_encrypted'] = encrypted
             session['instagram_username'] = username or 'Instagram User'
             session['instagram_saved'] = True
+        
+        # Also save cookies directly in session for easy access
+        session['cookies_data'] = cookies_data
+        session['username'] = username or 'Instagram User'
 
-        # Also write file for immediate use
+        # Write file for immediate use
         cookie_id = uuid.uuid4().hex[:8]
         cookie_file = os.path.join('/tmp', f'uploaded_cookies_{cookie_id}.txt')
         write_netscape_cookies(cookies_data, cookie_file)
         session['cookie_file'] = cookie_file
         session['cookie_id'] = cookie_id
-        session['username'] = username or 'Instagram User'
+
+        app.logger.info(f"Cookies uploaded successfully for user: {username}")
+        app.logger.info(f"Session keys: {list(session.keys())}")
 
         return jsonify({
             "status": "success",
-            "message": "Cookies uploaded and saved persistently!",
+            "message": f"Cookies uploaded and saved persistently!",
             "username": session['username'],
             "cookie_id": cookie_id
         })
 
     except json.JSONDecodeError:
-        return jsonify({"error": "Invalid JSON file"}), 400
+        return jsonify({"error": "Invalid JSON file", "status": "error"}), 400
     except Exception as e:
-        return jsonify({"error": f"Failed to process cookies: {str(e)}"}), 500
+        app.logger.error(f"Cookie upload error: {e}")
+        return jsonify({"error": f"Failed to process cookies: {str(e)}", "status": "error"}), 500
 
 
 @app.route("/api/cookies/status", methods=["GET"])
@@ -1093,8 +1102,8 @@ def save_instagram_cookies():
 @app.route("/api/instagram/cookies_status", methods=["GET"])
 def instagram_cookies_status():
     """Check if Instagram cookies are saved."""
+    # Check encrypted cookies first
     encrypted = session.get('instagram_encrypted')
-
     if encrypted:
         try:
             decrypted = decrypt_credentials(encrypted)
@@ -1105,15 +1114,34 @@ def instagram_cookies_status():
                     "username": session.get('instagram_username', 'Instagram User'),
                     "message": "Cookies are saved and valid"
                 })
-        except Exception:
-            pass
-
+        except Exception as e:
+            app.logger.error(f"Status check decrypt error: {e}")
+    
+    # Check direct cookies_data
+    cookies_data = session.get('cookies_data')
+    if cookies_data:
+        return jsonify({
+            "status": "success",
+            "has_cookies": True,
+            "username": session.get('username', 'Instagram User'),
+            "message": "Cookies are saved"
+        })
+    
+    # Check cookie file
+    cookie_file = session.get('cookie_file')
+    if cookie_file and os.path.exists(cookie_file):
+        return jsonify({
+            "status": "success",
+            "has_cookies": True,
+            "username": session.get('username', 'Instagram User'),
+            "message": "Cookies file exists"
+        })
+    
     return jsonify({
         "status": "success",
         "has_cookies": False,
         "message": "No saved cookies found"
     })
-
 
 @app.route("/api/instagram/clear_cookies", methods=["POST"])
 def clear_instagram_cookies():
