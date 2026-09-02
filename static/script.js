@@ -532,12 +532,12 @@ function showScrapedStatus(message, type) {
 // ==================== DELETE FUNCTIONS ====================
 
 async function deleteProfile(username) {
-  if (!confirm(`Are you sure you want to delete all data for @${username}?`)) {
+  if (!confirm(`⚠️ Permanently delete ALL data for @${username} from the database?`)) {
     return;
   }
   
-  // Show loading state immediately
-  showScrapedStatus(`🗑️ Deleting @${username}...`, 'info');
+  // Show deleting status
+  showScrapedStatus(`🗑️ Permanently deleting @${username} from database...`, 'info');
   
   try {
     const response = await fetch('/api/scraped/delete', {
@@ -550,20 +550,25 @@ async function deleteProfile(username) {
     const data = await response.json();
     console.log('Delete response:', data);
     
-    if (response.ok) {
-      // Remove the profile from the current data immediately
+    if (response.ok && data.status === 'success') {
+      // Remove from UI immediately
       if (window.scrapedData) {
         window.scrapedData = window.scrapedData.filter(p => p.username !== username);
-        // Update the UI immediately
         renderScrapedResults(window.scrapedData);
       }
       
-      showScrapedStatus(`✅ Deleted all data for @${username} (${data.deleted_count || 0} jobs removed)`, 'success');
+      // Clear all usernames list
+      window.allUsernames = window.allUsernames?.filter(u => u !== username) || [];
       
-      // Wait 2 seconds then reload from database to confirm
+      showScrapedStatus(
+        `✅ Permanently deleted @${username} (${data.deleted_count || 0} jobs removed from database)`, 
+        'success'
+      );
+      
+      // Force a fresh reload from database to confirm (with delay)
       setTimeout(() => {
         autoLoadScrapedResults();
-      }, 2000);
+      }, 1500);
       
     } else {
       showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
@@ -575,13 +580,12 @@ async function deleteProfile(username) {
 }
 
 // Delete all data button
-// Delete all data button
 deleteAllBtn?.addEventListener('click', async function() {
-  if (!confirm('⚠️ Are you sure you want to delete ALL scraped data? This cannot be undone!')) {
+  if (!confirm('⚠️ PERMANENTLY delete ALL scraped data from the database? This cannot be undone!')) {
     return;
   }
   
-  showScrapedStatus('🗑️ Deleting all data...', 'info');
+  showScrapedStatus('🗑️ Permanently deleting ALL data from database...', 'info');
   
   try {
     const response = await fetch('/api/scraped/clear', {
@@ -593,11 +597,12 @@ deleteAllBtn?.addEventListener('click', async function() {
     console.log('Delete all response:', data);
     
     if (response.ok) {
-      // Clear the data immediately
+      // Clear everything from UI
       window.scrapedData = [];
+      window.allUsernames = [];
       renderScrapedResults([]);
       deleteAllBtn.hidden = true;
-      showScrapedStatus('✅ Deleted ALL scraped data', 'success');
+      showScrapedStatus('✅ PERMANENTLY DELETED ALL scraped data from database', 'success');
     } else {
       showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
     }
