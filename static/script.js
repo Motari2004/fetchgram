@@ -66,8 +66,6 @@ let currentVideoItem = null;
 
 // Render scraper URL
 const RENDER_SCRAPER_URL = 'https://ig-reels-scraper.onrender.com';
-let scrapePollingInterval = null;
-let currentScrapeJobId = null;
 
 // ==================== INSTAGRAM COOKIE FUNCTIONS ====================
 
@@ -496,80 +494,6 @@ function renderScrapedResults(results) {
   clearScrapedBtn.hidden = false;
 }
 
-async function fetchScrapedResults() {
-  const jobId = localStorage.getItem('last_scrape_job_id');
-  
-  if (!jobId) {
-    showScrapedStatus('No recent scrape job found. Start a new scrape.', 'error');
-    return;
-  }
-  
-  fetchScrapedBtn.textContent = '⏳ Loading...';
-  fetchScrapedBtn.disabled = true;
-  
-  try {
-    const response = await fetch(`${RENDER_SCRAPER_URL}/api/scrape/status/${jobId}`);
-    const data = await response.json();
-    
-    if (response.ok && data.results) {
-      renderScrapedResults(data.results);
-      showScrapedStatus(`✅ Loaded ${data.results.length} profiles from job ${jobId}`, 'success');
-    } else {
-      showScrapedStatus(`❌ Failed to load results: ${data.error || 'Job not found'}`, 'error');
-      scrapedReelsContent.innerHTML = `<div class="empty-state">No results found for job ${jobId}. Start a new scrape.</div>`;
-    }
-  } catch (error) {
-    showScrapedStatus(`❌ Failed to connect to Render: ${error.message}`, 'error');
-  } finally {
-    fetchScrapedBtn.textContent = '📊 Load Results';
-    fetchScrapedBtn.disabled = false;
-  }
-}
-
-function startPollingJob(jobId) {
-  if (scrapePollingInterval) clearInterval(scrapePollingInterval);
-  
-  currentScrapeJobId = jobId;
-  let attempts = 0;
-  const maxAttempts = 120;
-  
-  scrapePollingInterval = setInterval(async () => {
-    attempts++;
-    
-    try {
-      const response = await fetch(`${RENDER_SCRAPER_URL}/api/scrape/status/${jobId}`);
-      const data = await response.json();
-      
-      if (!response.ok) {
-        showScrapeStatus(`❌ Job failed: ${data.error || 'Unknown error'}`, 'error');
-        clearInterval(scrapePollingInterval);
-        return;
-      }
-      
-      if (data.status === 'running') {
-        const logCount = data.log ? data.log.length : 0;
-        showScrapeStatus(`⏳ Scraping in progress... (${logCount} entries)`, 'running');
-      } else if (data.status === 'done') {
-        showScrapeStatus(`✅ Scraping complete! Found ${data.results ? data.results.length : 0} profiles`, 'success');
-        clearInterval(scrapePollingInterval);
-        localStorage.setItem('last_scrape_job_id', jobId);
-        setTimeout(() => {
-          fetchScrapedResults();
-        }, 1000);
-      } else if (data.status === 'error') {
-        showScrapeStatus(`❌ Job failed: ${data.error || 'Unknown error'}`, 'error');
-        clearInterval(scrapePollingInterval);
-      }
-    } catch (error) {
-      console.error('Polling error:', error);
-      if (attempts > maxAttempts) {
-        showScrapeStatus('⚠️ Timed out waiting for job to complete', 'error');
-        clearInterval(scrapePollingInterval);
-      }
-    }
-  }, 2000);
-}
-
 // ==================== START SCRAPING - SIMPLIFIED ====================
 
 startScrapeBtn.addEventListener('click', async function() {
@@ -587,10 +511,9 @@ startScrapeBtn.addEventListener('click', async function() {
   const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
   const headless = scrapeHeadless.checked;
   
-  // ✅ NO COOKIE CHECK - Just send the request to Render
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
-  showScrapeStatus('⏳ Starting scrape job on Render...', 'running');
+  showScrapeStatus('⏳ Sending request to Render...', 'running');
   
   try {
     const response = await fetch(`${RENDER_SCRAPER_URL}/api/scrape/start`, {
@@ -601,17 +524,18 @@ startScrapeBtn.addEventListener('click', async function() {
         maxReels: maxReels,
         maxScrolls: maxScrolls,
         headless: headless,
-        sendToVercel: true,
-        // Let Render use its own cookies
-        use_render_cookies: true
+        sendToVercel: true
       })
     });
     
     const data = await response.json();
     
     if (response.ok) {
-      showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
-      startPollingJob(data.jobId);
+      showScrapeStatus(`✅ Job started! Job ID: ${data.jobId} - Render will post results to Vercel when done.`, 'success');
+      // Store the job ID for reference
+      localStorage.setItem('last_scrape_job_id', data.jobId);
+      // Clear any old results
+      scrapedReelsContent.innerHTML = `<div class="empty-state">Job started! Render will process and send results back. Click "Load Results" when done.</div>`;
     } else {
       showScrapeStatus(`❌ Failed to start job: ${data.error || 'Unknown error'}`, 'error');
     }
@@ -629,6 +553,32 @@ startScrapeBtn.addEventListener('click', async function() {
     this.disabled = false;
   }
 });
+
+// ==================== FETCH SCRAPED RESULTS ====================
+
+async function fetchScrapedResults() {
+  fetchScrapedBtn.textContent = '⏳ Loading...';
+  fetchScrapedBtn.disabled = true;
+  
+  try {
+    // Get results from Vercel storage (where Render posted them)
+    const response = await fetch('/api/scraped/latest', { credentials: 'same-origin' });
+    const data = await response.json();
+    
+    if (response.ok && data.results && data.results.length > 0) {
+      renderScrapedResults(data.results);
+      showScrapedStatus(`✅ Loaded ${data.results.length} profiles from Vercel storage`, 'success');
+    } else {
+      showScrapedStatus('No results found. Start a new scrape job and wait for Render to complete.', 'error');
+      scrapedReelsContent.innerHTML = `<div class="empty-state">No results found. Click "Start Scraping" to begin a new job.</div>`;
+    }
+  } catch (error) {
+    showScrapedStatus(`❌ Failed to load results: ${error.message}`, 'error');
+  } finally {
+    fetchScrapedBtn.textContent = '📊 Load Results';
+    fetchScrapedBtn.disabled = false;
+  }
+}
 
 // Fetch scraped results button
 fetchScrapedBtn.addEventListener('click', fetchScrapedResults);
@@ -931,18 +881,5 @@ checkBlueskyStatus();
 // Check if there's a recent scrape job on load
 const savedJobId = localStorage.getItem('last_scrape_job_id');
 if (savedJobId) {
-  fetch(`${RENDER_SCRAPER_URL}/api/scrape/status/${savedJobId}`)
-    .then(res => res.json())
-    .then(data => {
-      if (data.status === 'running') {
-        showScrapeStatus(`⏳ Job ${savedJobId} is still running...`, 'running');
-        startPollingJob(savedJobId);
-      } else if (data.status === 'done') {
-        showScrapeStatus(`✅ Job ${savedJobId} completed`, 'success');
-        fetchScrapedResults();
-      } else if (data.status === 'error') {
-        showScrapeStatus(`❌ Job ${savedJobId} failed`, 'error');
-      }
-    })
-    .catch(() => {});
+  showScrapeStatus(`ℹ️ Last job ID: ${savedJobId} - Click "Load Results" to check for completed jobs.`, 'running');
 }
