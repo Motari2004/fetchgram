@@ -1086,6 +1086,52 @@ async function deleteProfile(username) {
   }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ==================== SCRAPED REELS FUNCTIONS ====================
 
 function renderScrapedResults(results, stats, isLoading = false) {
@@ -1184,14 +1230,23 @@ function renderScrapedResults(results, stats, isLoading = false) {
     
     if (reelCount > 0) {
       const reelsToShow = profile.reels.slice(0, 50);
-      reelsToShow.forEach((url, idx) => {
+      reelsToShow.forEach((reel, idx) => {
+        // 🔥 Handle both string URLs and objects with captions
+        let reelUrl = reel;
+        let reelCaption = '';
+        if (typeof reel === 'object') {
+          reelUrl = reel.url || reel;
+          reelCaption = reel.caption || '';
+        }
+        
         html += `
           <div class="scraped-reel-item">
             <span class="scraped-reel-index">#${idx + 1}</span>
-            <span class="scraped-reel-url"><a href="${escapeHtml(url)}" target="_blank">${escapeHtml(url)}</a></span>
+            <span class="scraped-reel-url"><a href="${escapeHtml(reelUrl)}" target="_blank">${escapeHtml(reelUrl)}</a></span>
+            ${reelCaption ? `<span class="scraped-reel-caption">📝 ${escapeHtml(reelCaption.substring(0, 60))}${reelCaption.length > 60 ? '...' : ''}</span>` : ''}
             <div class="scraped-reel-actions">
-              <button class="btn btn-sm btn-success btn-icon copy-reel-btn" data-url="${escapeHtml(url)}">📋</button>
-              <button class="btn btn-sm btn-primary btn-icon download-reel-btn" data-url="${escapeHtml(url)}">⬇</button>
+              <button class="btn btn-sm btn-success btn-icon copy-reel-btn" data-url="${escapeHtml(reelUrl)}">📋</button>
+              <button class="btn btn-sm btn-primary btn-icon download-reel-btn" data-url="${escapeHtml(reelUrl)}">⬇</button>
             </div>
           </div>
         `;
@@ -1231,6 +1286,39 @@ function renderScrapedResults(results, stats, isLoading = false) {
     });
   });
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ==================== SCRAPED REELS HELPER FUNCTIONS ====================
 

@@ -3332,3 +3332,31 @@ html, body {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-primary);
 }
+
+
+
+
+/* Reel caption styling */
+.scraped-reel-caption {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  padding: 2px 8px;
+  border-radius: 4px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  flex: 1;
+  min-width: 80px;
+}
+
+@media (max-width: 640px) {
+  .scraped-reel-caption {
+    max-width: 120px;
+    font-size: 10px;
+    padding: 1px 6px;
+    min-width: 50px;
+  }
+}
