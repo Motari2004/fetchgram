@@ -17,6 +17,11 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+
+FIXED_USER_ID = 'fetchgram-shared-user'
+
+
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'fetchgram-dev-secret-change-me-in-production-2024')
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -111,23 +116,23 @@ init_db()
 def get_user_id():
     """
     Get or create a persistent user ID.
-    Uses a fixed user_id from database instead of creating new ones per device.
+    Uses a fixed user_id so all devices share the same cookies.
     """
-    # First try to get from request cookies (persistent)
+    # First try to get from request cookies
     user_id = request.cookies.get('user_id')
     
     # If not found, try session
     if not user_id:
         user_id = session.get('user_id')
     
-    # If still not found, check if there's already a user in the database
+    # If still not found, check database for any existing user
     if not user_id:
         conn = get_db_connection()
         if conn:
             try:
                 cur = conn.cursor()
-                # Get the first user_id from the database
-                cur.execute("SELECT user_id FROM user_cookies LIMIT 1")
+                # Get the first user_id from user_cookies
+                cur.execute("SELECT user_id FROM user_cookies ORDER BY updated_at DESC LIMIT 1")
                 result = cur.fetchone()
                 if result:
                     user_id = result[0]
@@ -138,10 +143,10 @@ def get_user_id():
             finally:
                 conn.close()
     
-    # If still not found, create new one
+    # If still not found, use the fixed user_id
     if not user_id:
-        user_id = str(uuid.uuid4())
-        app.logger.info(f"🆕 Created new user_id: {user_id}")
+        user_id = FIXED_USER_ID
+        app.logger.info(f"🆕 Using fixed user_id: {user_id}")
     
     # Store in session for this request
     session['user_id'] = user_id
@@ -1872,6 +1877,21 @@ def debug_session():
 def init_session():
     """Initialize session and return user_id."""
     user_id = get_user_id()
+    
+    # Auto-sync cookies from database to session
+    db_cookies = get_cookies_from_db()
+    if db_cookies and not session.get('instagram_encrypted'):
+        cookies_data = db_cookies.get('cookie_data', [])
+        username = db_cookies.get('username', 'Instagram User')
+        
+        encrypted = encrypt_credentials(json.dumps(cookies_data), "instagram_cookies")
+        if encrypted:
+            session['instagram_encrypted'] = encrypted
+            session['instagram_username'] = username
+            session['instagram_saved'] = True
+            session['cookies_data'] = cookies_data
+            session['username'] = username
+    
     return jsonify({
         "status": "success",
         "user_id": user_id,
@@ -1901,6 +1921,18 @@ def after_request(response):
             'user_id',
             user_id,
             max_age=30*24*60*60,  # 30 days
+            path='/',
+            secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
+            httponly=True,
+            samesite='Lax'
+        )
+    else:
+        # If no user_id in session, set a default one
+        default_id = FIXED_USER_ID
+        response.set_cookie(
+            'user_id',
+            default_id,
+            max_age=30*24*60*60,
             path='/',
             secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
             httponly=True,
