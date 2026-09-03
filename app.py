@@ -2630,7 +2630,7 @@ def init_session():
 def sync_captions():
     """
     Sync captions for a specific username.
-    Fetches captions for all reels of that profile using the caption service.
+    Fetches captions for ALL reels of that profile using the caption service.
     """
     data = request.get_json(silent=True) or {}
     username = data.get("username", "").strip()
@@ -2680,75 +2680,72 @@ def sync_captions():
                 
                 app.logger.info(f"📹 Processing {total_reels} reels for @{username}")
                 
+                # 🔥 FIX: Collect all URLs that need captions
+                urls_to_fetch = []
+                reel_indices = []
+                
                 for reel_idx, reel in enumerate(reels):
                     if isinstance(reel, dict):
                         reel_url = reel.get('url')
                         existing_caption = reel.get('caption', '')
-                        
-                        # Skip if already has caption
                         if existing_caption and existing_caption.strip():
                             captions_skipped += 1
                             continue
-                        
-                        # Fetch caption from service
-                        try:
-                            response = requests.post(
-                                CAPTION_SERVICE_URL,
-                                json={"url": reel_url},
-                                timeout=30,
-                                headers={"Content-Type": "application/json"}
-                            )
-                            
-                            if response.status_code == 200:
-                                data = response.json()
-                                if data.get('success') and data.get('caption'):
-                                    results[profile_idx]['reels'][reel_idx]['caption'] = data['caption']
-                                    captions_fetched += 1
-                                    updated = True
-                                    app.logger.info(f"✅ Fetched caption for {reel_url[:50]}...")
-                                else:
-                                    app.logger.warning(f"⚠️ No caption for {reel_url[:50]}...")
-                            else:
-                                app.logger.error(f"❌ Error {response.status_code} for {reel_url[:50]}...")
-                                errors += 1
-                                
-                        except requests.exceptions.Timeout:
-                            app.logger.error(f"⏰ Timeout for {reel_url[:50]}...")
-                            errors += 1
-                        except Exception as e:
-                            app.logger.error(f"❌ Error: {e}")
-                            errors += 1
-                        
-                        # Small delay to avoid rate limiting
-                        time.sleep(1)
+                        if reel_url:
+                            urls_to_fetch.append(reel_url)
+                            reel_indices.append(reel_idx)
                     else:
-                        # Convert string to dict with caption
+                        # Convert string to dict
                         reel_url = str(reel)
-                        try:
-                            response = requests.post(
-                                CAPTION_SERVICE_URL,
-                                json={"url": reel_url},
-                                timeout=30,
-                                headers={"Content-Type": "application/json"}
-                            )
+                        urls_to_fetch.append(reel_url)
+                        reel_indices.append(reel_idx)
+                
+                # 🔥 FIX: Fetch ALL captions in one batch
+                if urls_to_fetch:
+                    app.logger.info(f"📤 Fetching {len(urls_to_fetch)} captions in batch...")
+                    
+                    # Use the batch endpoint
+                    try:
+                        response = requests.post(
+                            f"{CAPTION_SERVICE_URL}/batch",
+                            json={"urls": urls_to_fetch},
+                            timeout=60 * len(urls_to_fetch),  # 60 seconds per URL
+                            headers={"Content-Type": "application/json"}
+                        )
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            if data.get('success'):
+                                captions_map = {}
+                                for item in data.get('results', []):
+                                    if item.get('success'):
+                                        captions_map[item['url']] = item.get('caption', '')
+                                
+                                # Update each reel with its caption
+                                for reel_idx, reel_url in zip(reel_indices, urls_to_fetch):
+                                    caption = captions_map.get(reel_url, '')
+                                    if caption:
+                                        results[profile_idx]['reels'][reel_idx]['caption'] = caption
+                                        captions_fetched += 1
+                                        updated = True
+                                    else:
+                                        results[profile_idx]['reels'][reel_idx]['caption'] = ''
+                                        errors += 1
+                            else:
+                                app.logger.error("Batch API returned error")
+                                errors += len(urls_to_fetch)
+                        else:
+                            app.logger.error(f"Batch API error: {response.status_code}")
+                            errors += len(urls_to_fetch)
                             
-                            caption = ""
-                            if response.status_code == 200:
-                                data = response.json()
-                                if data.get('success') and data.get('caption'):
-                                    caption = data['caption']
-                                    captions_fetched += 1
-                            
-                            results[profile_idx]['reels'][reel_idx] = {
-                                "url": reel_url,
-                                "caption": caption
-                            }
-                            updated = True
-                            time.sleep(1)
-                            
-                        except Exception as e:
-                            app.logger.error(f"❌ Error: {e}")
-                            errors += 1
+                    except requests.exceptions.Timeout:
+                        app.logger.error("Batch API timeout")
+                        errors += len(urls_to_fetch)
+                    except Exception as e:
+                        app.logger.error(f"Batch API error: {e}")
+                        errors += len(urls_to_fetch)
+                else:
+                    app.logger.info("No URLs need caption fetching")
                 
                 break
         
@@ -2761,8 +2758,20 @@ def sync_captions():
             """, (json.dumps(results), result['id']))
             conn.commit()
             
-            # Also update reel_cache if we have captions
-            update_reel_cache(cur, results)
+            # Also update reel_cache
+            for profile in results:
+                for reel in profile.get('reels', []):
+                    if isinstance(reel, dict):
+                        reel_url = reel.get('url')
+                        caption = reel.get('caption', '')
+                        if reel_url and caption:
+                            cur.execute("""
+                                INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+                                VALUES (%s, '', %s, NOW())
+                                ON CONFLICT (reel_url) DO UPDATE SET 
+                                    caption = EXCLUDED.caption,
+                                    created_at = NOW()
+                            """, (reel_url, caption))
             conn.commit()
             
             return jsonify({
