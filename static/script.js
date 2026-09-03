@@ -543,32 +543,7 @@ function showScrapedStatus(message, type) {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ==================== ZERNIO (FACEBOOK) FUNCTIONS ====================
-
-let zernioAccounts = [];
-let zernioAccountsLoaded = false;
 
 function showZernioStatus(message, type) {
   if (!zernioStatus) return;
@@ -665,85 +640,6 @@ function showZernioSuccess(message, details) {
   }, 300);
 }
 
-// ==================== LOAD ZERNIO ACCOUNTS DYNAMICALLY ====================
-
-async function loadZernioAccounts() {
-  try {
-    const response = await fetch('/api/zernio/accounts', {
-      credentials: 'same-origin'
-    });
-    const data = await response.json();
-    
-    if (data.status === 'success' && data.accounts) {
-      zernioAccounts = data.accounts;
-      populateZernioAccountSelect(zernioAccounts);
-      zernioAccountsLoaded = true;
-      console.log('✅ Loaded Zernio accounts:', zernioAccounts);
-      
-      // Update badge
-      if (zernioStatusBadge) {
-        if (zernioAccounts.length > 0) {
-          zernioStatusBadge.textContent = `✅ ${zernioAccounts.length} accounts`;
-          zernioStatusBadge.style.background = 'var(--success-bg)';
-          zernioStatusBadge.style.color = 'var(--success)';
-        } else {
-          zernioStatusBadge.textContent = '⚠️ No accounts';
-          zernioStatusBadge.style.background = 'var(--warning-bg)';
-          zernioStatusBadge.style.color = 'var(--warning)';
-        }
-      }
-    } else {
-      console.warn('⚠️ Failed to load Zernio accounts:', data.message);
-    }
-  } catch (error) {
-    console.error('❌ Failed to load Zernio accounts:', error);
-  }
-}
-
-function populateZernioAccountSelect(accounts) {
-  if (!zernioAccountSelect) return;
-  
-  // Clear existing options
-  zernioAccountSelect.innerHTML = '';
-  
-  // Add "All Accounts" option if multiple accounts
-  if (accounts.length > 1) {
-    const allOption = document.createElement('option');
-    allOption.value = 'all';
-    allOption.textContent = `All Accounts (${accounts.length})`;
-    zernioAccountSelect.appendChild(allOption);
-  }
-  
-  if (accounts.length === 0) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = 'No Facebook accounts found';
-    option.disabled = true;
-    zernioAccountSelect.appendChild(option);
-    return;
-  }
-  
-  // Sort accounts by name
-  accounts.sort((a, b) => a.name.localeCompare(b.name));
-  
-  // Add each account as an option
-  accounts.forEach(account => {
-    const option = document.createElement('option');
-    option.value = account.id;
-    option.textContent = account.name;
-    option.dataset.pageId = account.page_id;
-    option.dataset.status = account.status;
-    zernioAccountSelect.appendChild(option);
-  });
-  
-  // If only one account, select it by default
-  if (accounts.length === 1) {
-    zernioAccountSelect.value = accounts[0].id;
-  }
-}
-
-// ==================== PUBLISH FUNCTIONS ====================
-
 async function publishToFacebook(videoUrl, text, accountId, publishNow = true, scheduledTime = null) {
   const payload = {
     video_url: videoUrl,
@@ -809,10 +705,6 @@ function showZernioSection() {
   const section = document.getElementById('zernio-section');
   if (section) {
     section.hidden = false;
-    // Load accounts if not loaded yet
-    if (!zernioAccountsLoaded) {
-      loadZernioAccounts();
-    }
     setTimeout(() => {
       section.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 300);
@@ -831,17 +723,13 @@ zernioPublishBtn?.addEventListener('click', async function() {
     return;
   }
   
-  // Get account name for display
-  let accountName = accountId === 'all' ? 'All Accounts' : 'Selected Account';
-  if (accountId !== 'all') {
-    const selectedOption = zernioAccountSelect.options[zernioAccountSelect.selectedIndex];
-    accountName = selectedOption ? selectedOption.textContent : 'Selected Account';
-  }
+  const accountName = accountId === 'all' ? 'All Accounts' : 
+    zernioAccountSelect.options[zernioAccountSelect.selectedIndex]?.text || 'Selected Account';
   
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Publishing...';
   
-  showZernioStatus(`⏳ Publishing to ${accountName}...`, 'info');
+  showZernioStatus('⏳ Publishing to Facebook...', 'info');
   
   try {
     const result = await publishToFacebook(videoUrl, text, accountId, true, null);
@@ -953,12 +841,8 @@ zernioScheduleBtn?.addEventListener('click', async function() {
     return;
   }
   
-  // Get account name for display
-  let accountName = accountId === 'all' ? 'All Accounts' : 'Selected Account';
-  if (accountId !== 'all') {
-    const selectedOption = zernioAccountSelect.options[zernioAccountSelect.selectedIndex];
-    accountName = selectedOption ? selectedOption.textContent : 'Selected Account';
-  }
+  const accountName = accountId === 'all' ? 'All Accounts' : 
+    zernioAccountSelect.options[zernioAccountSelect.selectedIndex]?.text || 'Selected Account';
   
   const scheduledDateTime = new Date(scheduleTime).toISOString();
   const displayTime = new Date(scheduleTime).toLocaleString();
@@ -1012,104 +896,6 @@ zernioScheduleBtn?.addEventListener('click', async function() {
     this.innerHTML = '<span class="btn-content">📅 Schedule</span>';
   }
 });
-
-// ==================== REFRESH ZERNIO ACCOUNTS ====================
-
-document.getElementById('refresh-zernio-btn')?.addEventListener('click', async function() {
-  this.disabled = true;
-  this.textContent = '⏳';
-  
-  try {
-    // Force refresh by adding timestamp
-    const response = await fetch('/api/zernio/accounts?t=' + Date.now(), {
-      credentials: 'same-origin'
-    });
-    const data = await response.json();
-    
-    if (data.status === 'success' && data.accounts) {
-      zernioAccounts = data.accounts;
-      populateZernioAccountSelect(zernioAccounts);
-      zernioAccountsLoaded = true;
-      showZernioStatus(`✅ Refreshed ${data.accounts.length} accounts`, 'success');
-      
-      // Update badge
-      if (zernioStatusBadge) {
-        if (zernioAccounts.length > 0) {
-          zernioStatusBadge.textContent = `✅ ${zernioAccounts.length} accounts`;
-          zernioStatusBadge.style.background = 'var(--success-bg)';
-          zernioStatusBadge.style.color = 'var(--success)';
-        } else {
-          zernioStatusBadge.textContent = '⚠️ No accounts';
-          zernioStatusBadge.style.background = 'var(--warning-bg)';
-          zernioStatusBadge.style.color = 'var(--warning)';
-        }
-      }
-    }
-  } catch (error) {
-    showZernioStatus('❌ Failed to refresh accounts', 'error');
-  } finally {
-    this.disabled = false;
-    this.textContent = '🔄 Refresh';
-  }
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ==================== DELETE FUNCTIONS ====================
 
