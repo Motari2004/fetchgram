@@ -1731,13 +1731,8 @@ def zernio_publish():
         "results": results
     })
 
-@app.route('/api/zernio/accounts', methods=['GET'])
-def zernio_list_accounts():
-    """List all connected Zernio Facebook accounts"""
-    return jsonify({
-        "status": "success",
-        "accounts": ZERNIO_ACCOUNTS
-    })
+
+
 
 @app.route('/api/zernio/status', methods=['GET'])
 def zernio_status():

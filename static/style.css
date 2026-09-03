@@ -2855,3 +2855,36 @@ html, body {
     transform: rotate(360deg);
   }
 }
+
+
+
+
+
+
+
+.zernio-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#refresh-zernio-btn {
+  padding: 4px 8px;
+  font-size: 14px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+  color: var(--text-muted);
+}
+
+#refresh-zernio-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+#refresh-zernio-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

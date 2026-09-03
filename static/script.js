@@ -80,6 +80,10 @@ const zernioStatusBadge = document.getElementById('zernio-status-badge');
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
+// Zernio state
+let zernioAccounts = [];
+let zernioAccountsLoaded = false;
+
 // Render scraper URL
 const RENDER_SCRAPER_URL = 'https://ig-reels-scraper.onrender.com';
 
@@ -542,20 +546,15 @@ function showScrapedStatus(message, type) {
 function showZernioStatus(message, type) {
   if (!zernioStatus) return;
   
-  // Remove hidden attribute and show
   zernioStatus.hidden = false;
   zernioStatus.style.display = 'block';
-  
-  // Clear previous content
   zernioStatus.innerHTML = '';
   zernioStatus.className = 'status-message ' + type;
   
-  // Set message
   const textSpan = document.createElement('span');
   textSpan.textContent = message;
   zernioStatus.appendChild(textSpan);
   
-  // Add close button for success/error
   if (type === 'success' || type === 'error') {
     const closeBtn = document.createElement('span');
     closeBtn.textContent = ' ✕';
@@ -575,7 +574,6 @@ function showZernioStatus(message, type) {
     zernioStatus.appendChild(closeBtn);
   }
   
-  // Auto-hide info messages after 8 seconds
   if (type === 'info') {
     setTimeout(() => {
       if (zernioStatus) {
@@ -589,11 +587,9 @@ function showZernioStatus(message, type) {
 function showZernioSuccess(message, details) {
   if (!zernioStatus) return;
   
-  // Remove hidden attribute and show
   zernioStatus.hidden = false;
   zernioStatus.style.display = 'block';
   
-  // Build HTML for success message
   let html = `<div style="display: flex; align-items: flex-start; gap: 10px; padding: 4px 0;">`;
   html += `<span style="font-size: 18px; flex-shrink: 0;">✅</span>`;
   html += `<div style="flex: 1;">`;
@@ -628,11 +624,83 @@ function showZernioSuccess(message, details) {
   zernioStatus.style.display = 'block';
   zernioStatus.hidden = false;
   
-  // Scroll to status message
   setTimeout(() => {
     zernioStatus.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, 300);
 }
+
+// ==================== LOAD ZERNIO ACCOUNTS ====================
+
+async function loadZernioAccounts() {
+  try {
+    const response = await fetch('/api/zernio/accounts', {
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success' && data.accounts) {
+      zernioAccounts = data.accounts;
+      populateZernioAccountSelect(zernioAccounts);
+      zernioAccountsLoaded = true;
+      console.log('✅ Loaded Zernio accounts:', zernioAccounts);
+      
+      if (zernioStatusBadge) {
+        if (zernioAccounts.length > 0) {
+          zernioStatusBadge.textContent = `✅ ${zernioAccounts.length} accounts`;
+          zernioStatusBadge.style.background = 'var(--success-bg)';
+          zernioStatusBadge.style.color = 'var(--success)';
+        } else {
+          zernioStatusBadge.textContent = '⚠️ No accounts';
+          zernioStatusBadge.style.background = 'var(--warning-bg)';
+          zernioStatusBadge.style.color = 'var(--warning)';
+        }
+      }
+    } else {
+      console.warn('⚠️ Failed to load Zernio accounts:', data.message);
+    }
+  } catch (error) {
+    console.error('❌ Failed to load Zernio accounts:', error);
+  }
+}
+
+function populateZernioAccountSelect(accounts) {
+  if (!zernioAccountSelect) return;
+  
+  zernioAccountSelect.innerHTML = '';
+  
+  if (accounts.length > 1) {
+    const allOption = document.createElement('option');
+    allOption.value = 'all';
+    allOption.textContent = `All Accounts (${accounts.length})`;
+    zernioAccountSelect.appendChild(allOption);
+  }
+  
+  if (accounts.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No Facebook accounts found';
+    option.disabled = true;
+    zernioAccountSelect.appendChild(option);
+    return;
+  }
+  
+  accounts.sort((a, b) => a.name.localeCompare(b.name));
+  
+  accounts.forEach(account => {
+    const option = document.createElement('option');
+    option.value = account.id;
+    option.textContent = account.name;
+    option.dataset.pageId = account.page_id;
+    option.dataset.status = account.status;
+    zernioAccountSelect.appendChild(option);
+  });
+  
+  if (accounts.length === 1) {
+    zernioAccountSelect.value = accounts[0].id;
+  }
+}
+
+// ==================== PUBLISH FUNCTIONS ====================
 
 async function publishToFacebook(videoUrl, text, accountId, publishNow = true, scheduledTime = null) {
   const payload = {
@@ -699,6 +767,9 @@ function showZernioSection() {
   const section = document.getElementById('zernio-section');
   if (section) {
     section.hidden = false;
+    if (!zernioAccountsLoaded) {
+      loadZernioAccounts();
+    }
     setTimeout(() => {
       section.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 300);
@@ -717,13 +788,15 @@ zernioPublishBtn?.addEventListener('click', async function() {
     return;
   }
   
-  const accountName = accountId === 'all' ? 'All Accounts' : 
-    zernioAccountSelect.options[zernioAccountSelect.selectedIndex]?.text || 'Selected Account';
+  let accountName = accountId === 'all' ? 'All Accounts' : 'Selected Account';
+  if (accountId !== 'all') {
+    const selectedOption = zernioAccountSelect.options[zernioAccountSelect.selectedIndex];
+    accountName = selectedOption ? selectedOption.textContent : 'Selected Account';
+  }
   
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Publishing...';
-  
-  showZernioStatus('⏳ Publishing to Facebook...', 'info');
+  showZernioStatus(`⏳ Publishing to ${accountName}...`, 'info');
   
   try {
     const result = await publishToFacebook(videoUrl, text, accountId, true, null);
@@ -835,8 +908,11 @@ zernioScheduleBtn?.addEventListener('click', async function() {
     return;
   }
   
-  const accountName = accountId === 'all' ? 'All Accounts' : 
-    zernioAccountSelect.options[zernioAccountSelect.selectedIndex]?.text || 'Selected Account';
+  let accountName = accountId === 'all' ? 'All Accounts' : 'Selected Account';
+  if (accountId !== 'all') {
+    const selectedOption = zernioAccountSelect.options[zernioAccountSelect.selectedIndex];
+    accountName = selectedOption ? selectedOption.textContent : 'Selected Account';
+  }
   
   const scheduledDateTime = new Date(scheduleTime).toISOString();
   const displayTime = new Date(scheduleTime).toLocaleString();
@@ -888,6 +964,44 @@ zernioScheduleBtn?.addEventListener('click', async function() {
   } finally {
     this.disabled = false;
     this.innerHTML = '<span class="btn-content">📅 Schedule</span>';
+  }
+});
+
+// ==================== REFRESH ZERNIO ACCOUNTS ====================
+
+document.getElementById('refresh-zernio-btn')?.addEventListener('click', async function() {
+  this.disabled = true;
+  this.textContent = '⏳';
+  
+  try {
+    const response = await fetch('/api/zernio/accounts?t=' + Date.now(), {
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success' && data.accounts) {
+      zernioAccounts = data.accounts;
+      populateZernioAccountSelect(zernioAccounts);
+      zernioAccountsLoaded = true;
+      showZernioStatus(`✅ Refreshed ${data.accounts.length} accounts`, 'success');
+      
+      if (zernioStatusBadge) {
+        if (zernioAccounts.length > 0) {
+          zernioStatusBadge.textContent = `✅ ${zernioAccounts.length} accounts`;
+          zernioStatusBadge.style.background = 'var(--success-bg)';
+          zernioStatusBadge.style.color = 'var(--success)';
+        } else {
+          zernioStatusBadge.textContent = '⚠️ No accounts';
+          zernioStatusBadge.style.background = 'var(--warning-bg)';
+          zernioStatusBadge.style.color = 'var(--warning)';
+        }
+      }
+    }
+  } catch (error) {
+    showZernioStatus('❌ Failed to refresh accounts', 'error');
+  } finally {
+    this.disabled = false;
+    this.textContent = '🔄 Refresh';
   }
 });
 
@@ -1628,6 +1742,7 @@ initSession().then(() => {
     checkInstagramStatus();
     checkBlueskyStatus();
     checkZernioStatus();
+    loadZernioAccounts();
     setTimeout(autoLoadScrapedResults, 1000);
 });
 
