@@ -649,7 +649,6 @@ syncCaptionsBtn?.addEventListener('click', function() {
 
 
 // Execute Sync
-// In script.js - update sync button handler
 syncExecuteBtn?.addEventListener('click', async function() {
   const username = syncUsernameSelect?.value;
   
@@ -658,10 +657,18 @@ syncExecuteBtn?.addEventListener('click', async function() {
     return;
   }
   
-  this.disabled = true;
-  this.innerHTML = '<span class="btn-spinner"></span> Starting...';
+  if (!confirm(`🔄 Fetch captions for all reels of @${username}?\n\nThis may take a few moments depending on the number of reels.`)) {
+    return;
+  }
   
-  showSyncStatus(`⏳ Starting caption sync for @${username}...`, 'info');
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Syncing...';
+  
+  if (syncProgress) syncProgress.style.display = 'block';
+  if (syncProgressBar) syncProgressBar.style.width = '10%';
+  if (syncProgressText) syncProgressText.textContent = 'Starting...';
+  
+  showSyncStatus(`⏳ Fetching captions for @${username}...`, 'info');
   
   try {
     const response = await fetch('/api/sync-captions', {
@@ -673,46 +680,22 @@ syncExecuteBtn?.addEventListener('click', async function() {
     
     const data = await response.json();
     
-    if (response.status === 202) {
+    if (syncProgressBar) syncProgressBar.style.width = '100%';
+    if (syncProgressText) syncProgressText.textContent = 'Complete!';
+    
+    if (response.ok && data.status === 'success') {
       showSyncStatus(
-        `✅ Sync started for @${username}! Captions will appear in 1-2 minutes.`,
+        `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
         'success'
       );
       
-      // Start polling for updated data
-      let attempts = 0;
-      const maxAttempts = 30; // 30 * 5s = 2.5 minutes
-      
-      const checkUpdates = setInterval(async () => {
-        attempts++;
-        const reloadRes = await fetch('/api/scraped/latest', { credentials: 'same-origin' });
-        const reloadData = await reloadRes.json();
-        
-        if (reloadData.results && reloadData.results.length > 0) {
-          // Check if our profile has captions now
-          const profile = reloadData.results.find(p => p.username === username);
-          if (profile) {
-            const withCaptions = profile.reels.filter(r => r.caption && r.caption.trim().length > 0);
-            if (withCaptions.length > 0 || attempts >= maxAttempts) {
-              clearInterval(checkUpdates);
-              window.scrapedData = reloadData.results;
-              renderScrapedResults(reloadData.results);
-              showSyncStatus(
-                `✅ Captions updated! ${withCaptions.length} captions fetched.`,
-                'success'
-              );
-            }
-          }
-        }
-        
-        if (attempts >= maxAttempts) {
-          clearInterval(checkUpdates);
-          showSyncStatus('⏳ Sync is still processing. Click "Load Results" to check.', 'info');
-        }
-      }, 5000); // Check every 5 seconds
+      // Refresh the scraped results to show new captions
+      setTimeout(() => {
+        autoLoadScrapedResults();
+      }, 1000);
       
     } else {
-      showSyncStatus(`❌ ${data.error || 'Failed to start sync'}`, 'error');
+      showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
     }
     
   } catch (error) {
@@ -721,8 +704,6 @@ syncExecuteBtn?.addEventListener('click', async function() {
   } finally {
     this.disabled = false;
     this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
-  }
-});
 
 
 
