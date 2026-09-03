@@ -1092,7 +1092,7 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
         conn.close()
 
 def run_pipeline(pipeline_id):
-    """Execute a single pipeline with real captions."""
+    """Execute a single pipeline using ONLY stored captions."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -1130,47 +1130,33 @@ def run_pipeline(pipeline_id):
                 reel_url = reel['url']
                 caption = reel.get('caption', '')
                 
-                # If no caption, try to fetch it with yt-dlp
-                if not caption or caption.strip() == '':
-                    app.logger.info(f"📝 No caption in DB, fetching from Instagram for: {reel_url[:50]}...")
-                    _, fetched_caption, _ = get_video_with_captions(reel_url)
-                    if fetched_caption:
-                        caption = fetched_caption
-                        app.logger.info(f"✅ Fetched caption: {caption[:50]}...")
-                
-                # If still no caption, use fallback
+                # 🔥 FIX: If no caption in DB, use fallback - DON'T fetch!
                 if not caption or caption.strip() == '':
                     caption = f"🎬 New reel from @{pipeline['profile_username']}!"
+                    app.logger.info(f"📝 Using fallback caption for: {reel_url[:50]}...")
                 
                 # Truncate caption if too long
                 if len(caption) > 5000:
                     caption = caption[:4997] + "..."
                 
-                # Get direct video URL with caching
-                app.logger.info(f"📥 Getting direct URL for: {reel_url[:60]}...")
-                direct_video_url, cached_caption = get_direct_url_with_caption_cache(reel_url)
-                
-                # Use cached caption if available
-                if cached_caption and (not caption or caption == f"🎬 New reel from @{pipeline['profile_username']}!"):
-                    caption = cached_caption
-                    if len(caption) > 5000:
-                        caption = caption[:4997] + "..."
+                # 🔥 FIX: Get direct URL from cache ONLY - don't fetch if not cached
+                direct_video_url = get_direct_url_from_cache_only(reel_url)
                 
                 if not direct_video_url:
-                    app.logger.error(f"❌ Failed to get direct URL for: {reel_url}")
+                    app.logger.error(f"❌ No cached direct URL for: {reel_url}")
                     mark_reel_as_posted(
                         pipeline_id=pipeline['id'],
                         reel_url=reel_url,
                         caption=caption,
                         status='failed',
-                        error_message='Could not extract direct video URL.'
+                        error_message='No cached direct video URL found. Please pre-fetch URLs.'
                     )
                     failed_count += 1
                     continue
                 
-                app.logger.info(f"✅ Got direct video URL: {direct_video_url[:80]}...")
+                app.logger.info(f"✅ Using cached direct URL for: {reel_url[:50]}...")
                 
-                # Post to Facebook using the REAL caption
+                # Post to Facebook using the caption
                 result = publish_to_facebook(
                     video_url=direct_video_url,
                     text=caption,
