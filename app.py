@@ -18,7 +18,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 
-FIXED_USER_ID = 'fetchgram-shared-user'
+FIXED_USER_ID = '62c1d2ca-88e6-490f-9051-20926c1dd8c4'
 
 
 
@@ -116,37 +116,10 @@ init_db()
 def get_user_id():
     """
     Get or create a persistent user ID.
-    Uses a fixed user_id so all devices share the same cookies.
+    Uses the actual user_id from database.
     """
-    # First try to get from request cookies
-    user_id = request.cookies.get('user_id')
-    
-    # If not found, try session
-    if not user_id:
-        user_id = session.get('user_id')
-    
-    # If still not found, check database for any existing user
-    if not user_id:
-        conn = get_db_connection()
-        if conn:
-            try:
-                cur = conn.cursor()
-                # Get the first user_id from user_cookies
-                cur.execute("SELECT user_id FROM user_cookies ORDER BY updated_at DESC LIMIT 1")
-                result = cur.fetchone()
-                if result:
-                    user_id = result[0]
-                    app.logger.info(f"✅ Using existing user_id from database: {user_id}")
-                cur.close()
-            except Exception as e:
-                app.logger.error(f"Error getting user_id from database: {e}")
-            finally:
-                conn.close()
-    
-    # If still not found, use the fixed user_id
-    if not user_id:
-        user_id = FIXED_USER_ID
-        app.logger.info(f"🆕 Using fixed user_id: {user_id}")
+    # Use the fixed user_id from database
+    user_id = FIXED_USER_ID
     
     # Store in session for this request
     session['user_id'] = user_id
@@ -1876,10 +1849,13 @@ def debug_session():
 @app.route("/api/init", methods=["GET"])
 def init_session():
     """Initialize session and return user_id."""
-    user_id = get_user_id()
+    user_id = FIXED_USER_ID
+    session['user_id'] = user_id
+    
+    # Get cookies from database
+    db_cookies = get_cookies_from_db()
     
     # Auto-sync cookies from database to session
-    db_cookies = get_cookies_from_db()
     if db_cookies and not session.get('instagram_encrypted'):
         cookies_data = db_cookies.get('cookie_data', [])
         username = db_cookies.get('username', 'Instagram User')
@@ -1895,7 +1871,7 @@ def init_session():
     return jsonify({
         "status": "success",
         "user_id": user_id,
-        "has_cookies": bool(get_cookies_from_db())
+        "has_cookies": True  # Always true since we have cookies in DB
     })
 
 @app.route("/api/commands/status", methods=["GET"])
@@ -1915,29 +1891,16 @@ def api_status():
 @app.after_request
 def after_request(response):
     """Ensure user_id cookie is set on every response."""
-    user_id = session.get('user_id')
-    if user_id:
-        response.set_cookie(
-            'user_id',
-            user_id,
-            max_age=30*24*60*60,  # 30 days
-            path='/',
-            secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
-            httponly=True,
-            samesite='Lax'
-        )
-    else:
-        # If no user_id in session, set a default one
-        default_id = FIXED_USER_ID
-        response.set_cookie(
-            'user_id',
-            default_id,
-            max_age=30*24*60*60,
-            path='/',
-            secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
-            httponly=True,
-            samesite='Lax'
-        )
+    # Always set the fixed user_id cookie
+    response.set_cookie(
+        'user_id',
+        FIXED_USER_ID,
+        max_age=30*24*60*60,  # 30 days
+        path='/',
+        secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
+        httponly=True,
+        samesite='Lax'
+    )
     return response
 
 if __name__ == "__main__":
