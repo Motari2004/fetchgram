@@ -1093,7 +1093,136 @@ async function deleteProfile(username) {
 
 
 
+// ==================== SYNC CAPTIONS ====================
 
+// Show sync controls after loading results
+function showSyncControls(usernames) {
+  const controls = document.getElementById('sync-controls');
+  const select = document.getElementById('sync-username-select');
+  
+  if (!controls || !select) return;
+  
+  if (usernames && usernames.length > 0) {
+    controls.style.display = 'block';
+    select.innerHTML = '';
+    
+    usernames.forEach(username => {
+      const option = document.createElement('option');
+      option.value = username;
+      option.textContent = `@${username}`;
+      select.appendChild(option);
+    });
+    
+    // If only one username, auto-select it
+    if (usernames.length === 1) {
+      select.value = usernames[0];
+    }
+  } else {
+    controls.style.display = 'none';
+  }
+}
+
+// Sync captions for selected profile
+document.getElementById('sync-execute-btn')?.addEventListener('click', async function() {
+  const select = document.getElementById('sync-username-select');
+  const username = select?.value;
+  const status = document.getElementById('sync-status');
+  const progress = document.getElementById('sync-progress');
+  const progressBar = document.getElementById('sync-progress-bar');
+  const progressText = document.getElementById('sync-progress-text');
+  
+  if (!username) {
+    showSyncStatus('❌ Please select a profile', 'error');
+    return;
+  }
+  
+  // Confirm before syncing
+  if (!confirm(`🔄 Fetch captions for all reels of @${username}?\n\nThis may take a few moments depending on the number of reels.`)) {
+    return;
+  }
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Syncing...';
+  
+  // Show progress
+  progress.style.display = 'block';
+  progressBar.style.width = '10%';
+  progressText.textContent = 'Starting...';
+  
+  showSyncStatus(`⏳ Fetching captions for @${username}...`, 'info');
+  
+  try {
+    const response = await fetch('/api/sync-captions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username })
+    });
+    
+    const data = await response.json();
+    
+    progressBar.style.width = '100%';
+    progressText.textContent = 'Complete!';
+    
+    if (response.ok && data.status === 'success') {
+      showSyncStatus(
+        `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped} already had captions, ${data.errors} errors)`,
+        'success'
+      );
+      
+      // Refresh the scraped results to show new captions
+      setTimeout(() => {
+        autoLoadScrapedResults();
+      }, 1000);
+      
+    } else {
+      showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
+    }
+    
+  } catch (error) {
+    console.error('Sync error:', error);
+    showSyncStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
+    
+    setTimeout(() => {
+      progress.style.display = 'none';
+      progressBar.style.width = '0%';
+    }, 3000);
+  }
+});
+
+function showSyncStatus(message, type) {
+  const status = document.getElementById('sync-status');
+  if (!status) return;
+  
+  status.textContent = message;
+  status.className = type || 'info';
+  status.style.display = 'block';
+  
+  if (type === 'success' || type === 'error') {
+    setTimeout(() => {
+      status.style.display = 'none';
+    }, 8000);
+  }
+}
+
+// Update the renderScrapedResults function to show sync controls
+// Add this at the end of the function
+function renderScrapedResults(results, stats, isLoading = false) {
+  // ... existing code ...
+  
+  // Show sync controls with available usernames
+  if (results && results.length > 0) {
+    const usernames = results.map(p => p.username);
+    showSyncControls(usernames);
+  } else {
+    showSyncControls([]);
+  }
+  
+  // ... rest of existing code ...
+}
 
 
 

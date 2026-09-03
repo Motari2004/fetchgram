@@ -2625,6 +2625,199 @@ def init_session():
         "has_cookies": True
     })
 
+
+@app.route("/api/sync-captions", methods=["POST"])
+def sync_captions():
+    """
+    Sync captions for a specific username.
+    Fetches captions for all reels of that profile using the caption service.
+    """
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "").strip()
+    
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+    
+    app.logger.info(f"📝 Syncing captions for @{username}")
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get the latest scraped data for this username
+        cur.execute("""
+            SELECT id, results FROM scraped_reels 
+            WHERE EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS elem
+                WHERE elem->>'username' = %s
+            )
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (username,))
+        
+        result = cur.fetchone()
+        if not result:
+            return jsonify({
+                "error": f"No scraped data found for @{username}",
+                "message": f"Please scrape @{username} first"
+            }), 404
+        
+        results = result['results']
+        updated = False
+        total_reels = 0
+        captions_fetched = 0
+        captions_skipped = 0
+        errors = 0
+        
+        # Process each profile
+        for profile_idx, profile in enumerate(results):
+            if profile.get('username') == username:
+                reels = profile.get('reels', [])
+                total_reels = len(reels)
+                
+                app.logger.info(f"📹 Processing {total_reels} reels for @{username}")
+                
+                for reel_idx, reel in enumerate(reels):
+                    if isinstance(reel, dict):
+                        reel_url = reel.get('url')
+                        existing_caption = reel.get('caption', '')
+                        
+                        # Skip if already has caption
+                        if existing_caption and existing_caption.strip():
+                            captions_skipped += 1
+                            continue
+                        
+                        # Fetch caption from service
+                        try:
+                            response = requests.post(
+                                CAPTION_SERVICE_URL,
+                                json={"url": reel_url},
+                                timeout=30,
+                                headers={"Content-Type": "application/json"}
+                            )
+                            
+                            if response.status_code == 200:
+                                data = response.json()
+                                if data.get('success') and data.get('caption'):
+                                    results[profile_idx]['reels'][reel_idx]['caption'] = data['caption']
+                                    captions_fetched += 1
+                                    updated = True
+                                    app.logger.info(f"✅ Fetched caption for {reel_url[:50]}...")
+                                else:
+                                    app.logger.warning(f"⚠️ No caption for {reel_url[:50]}...")
+                            else:
+                                app.logger.error(f"❌ Error {response.status_code} for {reel_url[:50]}...")
+                                errors += 1
+                                
+                        except requests.exceptions.Timeout:
+                            app.logger.error(f"⏰ Timeout for {reel_url[:50]}...")
+                            errors += 1
+                        except Exception as e:
+                            app.logger.error(f"❌ Error: {e}")
+                            errors += 1
+                        
+                        # Small delay to avoid rate limiting
+                        time.sleep(1)
+                    else:
+                        # Convert string to dict with caption
+                        reel_url = str(reel)
+                        try:
+                            response = requests.post(
+                                CAPTION_SERVICE_URL,
+                                json={"url": reel_url},
+                                timeout=30,
+                                headers={"Content-Type": "application/json"}
+                            )
+                            
+                            caption = ""
+                            if response.status_code == 200:
+                                data = response.json()
+                                if data.get('success') and data.get('caption'):
+                                    caption = data['caption']
+                                    captions_fetched += 1
+                            
+                            results[profile_idx]['reels'][reel_idx] = {
+                                "url": reel_url,
+                                "caption": caption
+                            }
+                            updated = True
+                            time.sleep(1)
+                            
+                        except Exception as e:
+                            app.logger.error(f"❌ Error: {e}")
+                            errors += 1
+                
+                break
+        
+        if updated:
+            # Save back to database
+            cur.execute("""
+                UPDATE scraped_reels 
+                SET results = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (json.dumps(results), result['id']))
+            conn.commit()
+            
+            # Also update reel_cache if we have captions
+            update_reel_cache(cur, results)
+            conn.commit()
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Synced captions for @{username}",
+                "total_reels": total_reels,
+                "captions_fetched": captions_fetched,
+                "captions_skipped": captions_skipped,
+                "errors": errors,
+                "username": username
+            })
+        else:
+            return jsonify({
+                "status": "success",
+                "message": f"No new captions needed for @{username}",
+                "total_reels": total_reels,
+                "captions_fetched": 0,
+                "captions_skipped": captions_skipped,
+                "errors": errors,
+                "username": username
+            })
+        
+    except Exception as e:
+        app.logger.error(f"Sync captions error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+def update_reel_cache(cur, results):
+    """Helper function to update reel_cache with captions."""
+    for profile in results:
+        for reel in profile.get('reels', []):
+            if isinstance(reel, dict):
+                reel_url = reel.get('url')
+                caption = reel.get('caption', '')
+                if reel_url and caption:
+                    cur.execute("""
+                        UPDATE reel_cache 
+                        SET caption = %s, created_at = NOW()
+                        WHERE reel_url = %s
+                    """, (caption, reel_url))
+                    if cur.rowcount == 0:
+                        # Not in cache, insert
+                        cur.execute("""
+                            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+                            VALUES (%s, '', %s, NOW())
+                            ON CONFLICT (reel_url) DO UPDATE SET 
+                                caption = EXCLUDED.caption,
+                                created_at = NOW()
+                        """, (reel_url, caption))
+
+
+
+
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     cookie_status = "configured" if get_cookie_file() else "not configured"
