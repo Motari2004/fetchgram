@@ -2515,19 +2515,27 @@ html, body {
 
 
 
+
+
+
+
+
+
+
+
 /* ==================== ZERNIO (FACEBOOK) SECTION ==================== */
 
-.zernio-section {
-  margin-top: 24px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 20px 24px;
-  transition: var(--transition);
+.zernio-section.premium-card {
+  background: var(--bg-card, #1A1A2E) !important;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+  border-radius: var(--radius, 16px);
+  padding: 20px;
+  transition: var(--transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1));
+  backdrop-filter: blur(10px);
 }
 
-.zernio-section:hover {
-  border-color: var(--border-light);
+.zernio-section.premium-card:hover {
+  border-color: var(--border-light, rgba(255, 255, 255, 0.1));
 }
 
 .zernio-header {
@@ -2549,7 +2557,13 @@ html, body {
   font-size: 16px;
   font-weight: 600;
   margin: 0;
-  color: var(--text-primary);
+  color: var(--text-primary, #FFFFFF);
+}
+
+.zernio-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .zernio-icon {
@@ -2557,12 +2571,33 @@ html, body {
 }
 
 #zernio-status-badge {
-  background: var(--success-bg);
-  color: var(--success);
+  background: var(--success-bg, rgba(0, 200, 83, 0.1));
+  color: var(--success, #00C853);
   font-size: 11px;
   padding: 4px 12px;
   border-radius: 20px;
   font-weight: 500;
+}
+
+#refresh-zernio-btn {
+  padding: 4px 8px;
+  font-size: 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--radius-sm, 10px);
+  transition: var(--transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1));
+  color: var(--text-muted, #6B6B85);
+}
+
+#refresh-zernio-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary, #FFFFFF);
+}
+
+#refresh-zernio-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .zernio-body {
@@ -2571,7 +2606,7 @@ html, body {
   gap: 14px;
 }
 
-/* Account Select */
+/* Form Groups */
 .zernio-body .form-group {
   display: flex;
   flex-direction: column;
@@ -2581,80 +2616,86 @@ html, body {
 .zernio-body .form-group label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--text-secondary, #A0A0B8);
 }
 
+/* Account Select */
 #zernio-account-select {
   width: 100%;
-  padding: 10px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  padding: 12px 14px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+  border-radius: var(--radius-sm, 10px);
+  background: var(--bg-input, #1E1E32) !important;
+  color: var(--text-primary, #FFFFFF);
   font-size: 14px;
-  font-family: inherit;
-  transition: var(--transition);
+  font-family: var(--font-display, "Inter", sans-serif);
+  transition: var(--transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1));
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236B6B85' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
   cursor: pointer;
+  outline: none;
 }
 
 #zernio-account-select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: var(--accent, #6C63FF);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(108, 99, 255, 0.3));
 }
 
 #zernio-account-select:hover {
-  border-color: var(--border-light);
+  border-color: var(--border-light, rgba(255, 255, 255, 0.1));
+}
+
+#zernio-account-select option {
+  background: var(--bg-card, #1A1A2E);
+  color: var(--text-primary, #FFFFFF);
 }
 
 /* Textarea */
 .zernio-textarea {
   width: 100%;
   padding: 12px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+  border-radius: var(--radius-sm, 10px);
+  background: var(--bg-input, #1E1E32) !important;
+  color: var(--text-primary, #FFFFFF);
   font-size: 14px;
-  font-family: inherit;
+  font-family: var(--font-display, "Inter", sans-serif);
   resize: vertical;
   min-height: 80px;
   max-height: 200px;
-  transition: var(--transition);
+  transition: var(--transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1));
   line-height: 1.6;
+  outline: none;
 }
 
 .zernio-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: var(--accent, #6C63FF);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(108, 99, 255, 0.3));
 }
 
 .zernio-textarea::placeholder {
-  color: var(--text-muted);
+  color: var(--text-muted, #6B6B85);
 }
 
 /* Schedule Input */
 #zernio-schedule {
   width: 100%;
-  padding: 10px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  padding: 12px 14px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+  border-radius: var(--radius-sm, 10px);
+  background: var(--bg-input, #1E1E32) !important;
+  color: var(--text-primary, #FFFFFF);
   font-size: 14px;
-  font-family: inherit;
-  transition: var(--transition);
+  font-family: var(--font-display, "Inter", sans-serif);
+  transition: var(--transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1));
+  outline: none;
 }
 
 #zernio-schedule:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: var(--accent, #6C63FF);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(108, 99, 255, 0.3));
 }
 
 /* Actions Buttons */
@@ -2668,13 +2709,13 @@ html, body {
 .zernio-actions .btn {
   flex: 1;
   min-width: 140px;
-  padding: 10px 20px;
+  padding: 12px 20px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm, 10px);
   font-weight: 600;
   font-size: 14px;
   cursor: pointer;
-  transition: var(--transition);
+  transition: var(--transition, all 0.3s cubic-bezier(0.4, 0, 0.2, 1));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2682,18 +2723,18 @@ html, body {
 }
 
 #zernio-publish-btn {
-  background: var(--accent);
+  background: var(--accent, #6C63FF);
   color: white;
 }
 
-#zernio-publish-btn:hover {
-  background: var(--accent-hover);
+#zernio-publish-btn:hover:not(:disabled) {
+  background: var(--accent-hover, #5A52E8);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 4px 20px var(--accent-glow, rgba(108, 99, 255, 0.3));
 }
 
 #zernio-publish-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
@@ -2710,50 +2751,51 @@ html, body {
 }
 
 #zernio-schedule-btn {
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary, #A0A0B8);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
 }
 
 #zernio-schedule-btn:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--accent);
-  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--accent, #6C63FF);
+  color: var(--text-primary, #FFFFFF);
 }
 
 /* Status Message */
 #zernio-status {
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  border-radius: var(--radius-sm, 10px);
   font-size: 13px;
   margin-top: 4px;
   display: none;
+  border: 1px solid transparent;
 }
 
 #zernio-status.success {
   display: block;
-  background: var(--success-bg);
-  color: var(--success);
-  border: 1px solid rgba(34, 197, 94, 0.2);
+  background: var(--success-bg, rgba(0, 200, 83, 0.1));
+  color: var(--success, #00C853);
+  border-color: rgba(0, 200, 83, 0.2);
 }
 
 #zernio-status.error {
   display: block;
-  background: var(--error-bg);
-  color: var(--error);
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: var(--error-bg, rgba(255, 82, 82, 0.1));
+  color: var(--error, #FF5252);
+  border-color: rgba(255, 82, 82, 0.2);
 }
 
 #zernio-status.info {
   display: block;
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(108, 99, 255, 0.1);
+  color: var(--accent, #6C63FF);
+  border-color: rgba(108, 99, 255, 0.2);
 }
 
 /* Responsive */
 @media (max-width: 640px) {
-  .zernio-section {
+  .zernio-section.premium-card {
     padding: 16px;
     margin-top: 16px;
   }
@@ -2780,7 +2822,7 @@ html, body {
   
   #zernio-account-select {
     font-size: 13px;
-    padding: 8px 12px;
+    padding: 10px 12px;
   }
   
   .zernio-textarea {
@@ -2790,12 +2832,12 @@ html, body {
   
   #zernio-schedule {
     font-size: 13px;
-    padding: 8px 12px;
+    padding: 10px 12px;
   }
 }
 
 @media (max-width: 480px) {
-  .zernio-section {
+  .zernio-section.premium-card {
     padding: 12px;
   }
   
@@ -2817,44 +2859,17 @@ html, body {
   }
 }
 
-/* Dark Mode Support */
-@media (prefers-color-scheme: dark) {
-  .zernio-section {
-    background: var(--bg-secondary-dark, #1a1a1a);
-    border-color: var(--border-color-dark, #2d2d2d);
-  }
-  
-  .zernio-section:hover {
-    border-color: var(--border-light-dark, #3d3d3d);
-  }
-  
-  #zernio-account-select {
-    background-color: var(--bg-primary-dark, #0d0d0d);
-    border-color: var(--border-color-dark, #2d2d2d);
-  }
-  
-  .zernio-textarea {
-    background-color: var(--bg-primary-dark, #0d0d0d);
-    border-color: var(--border-color-dark, #2d2d2d);
-  }
-  
-  #zernio-schedule {
-    background-color: var(--bg-primary-dark, #0d0d0d);
-    border-color: var(--border-color-dark, #2d2d2d);
-  }
-  
-  #zernio-schedule-btn {
-    background: var(--bg-secondary-dark, #1a1a1a);
-    border-color: var(--border-color-dark, #2d2d2d);
-  }
-}
-
 /* Animations */
 @keyframes spin {
   to {
     transform: rotate(360deg);
   }
 }
+
+
+
+
+
 
 
 

@@ -16,6 +16,10 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+load_dotenv()
+
+
 
 
 FIXED_USER_ID = '62c1d2ca-88e6-490f-9051-20926c1dd8c4'
