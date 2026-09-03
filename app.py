@@ -1091,145 +1091,30 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
         cur.close()
         conn.close()
 
-def run_pipeline(pipeline_id):
-    """Execute a single pipeline using ONLY stored captions."""
+def cache_direct_url(reel_url, direct_url, caption=''):
+    """Cache a direct URL for future use."""
     conn = get_db_connection()
     if not conn:
-        return {"error": "Database connection failed"}
+        return False
     
     try:
-        # Get pipeline configuration
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
-        pipeline = cur.fetchone()
-        cur.close()
-        
-        if not pipeline:
-            return {"error": "Pipeline not found"}
-        
-        if not pipeline['is_active']:
-            return {"error": "Pipeline is inactive"}
-        
-        # Get unposted reels with captions
-        unposted = get_unposted_reels(
-            pipeline['profile_username'], 
-            pipeline['id'], 
-            pipeline['daily_limit']
-        )
-        
-        if not unposted:
-            log_pipeline_run(pipeline['id'], 0, 0, 'completed', 'No unposted reels found')
-            return {"message": "No unposted reels to post", "posted": 0}
-        
-        posted_count = 0
-        failed_count = 0
-        
-        # Post each reel
-        for reel in unposted:
-            try:
-                reel_url = reel['url']
-                caption = reel.get('caption', '')
-                
-                # 🔥 FIX: If no caption in DB, use fallback - DON'T fetch!
-                if not caption or caption.strip() == '':
-                    caption = f"🎬 New reel from @{pipeline['profile_username']}!"
-                    app.logger.info(f"📝 Using fallback caption for: {reel_url[:50]}...")
-                
-                # Truncate caption if too long
-                if len(caption) > 5000:
-                    caption = caption[:4997] + "..."
-                
-                # 🔥 FIX: Get direct URL from cache ONLY - don't fetch if not cached
-                direct_video_url = get_direct_url_from_cache_only(reel_url)
-                
-                if not direct_video_url:
-                    app.logger.error(f"❌ No cached direct URL for: {reel_url}")
-                    mark_reel_as_posted(
-                        pipeline_id=pipeline['id'],
-                        reel_url=reel_url,
-                        caption=caption,
-                        status='failed',
-                        error_message='No cached direct video URL found. Please pre-fetch URLs.'
-                    )
-                    failed_count += 1
-                    continue
-                
-                app.logger.info(f"✅ Using cached direct URL for: {reel_url[:50]}...")
-                
-                # Post to Facebook using the caption
-                result = publish_to_facebook(
-                    video_url=direct_video_url,
-                    text=caption,
-                    account_id=pipeline['facebook_account_id'],
-                    publish_now=True
-                )
-                
-                if result and not result.get('error'):
-                    # Success
-                    post_id = result.get('post', {}).get('_id') or result.get('post_id')
-                    post_url = None
-                    
-                    platforms = result.get('post', {}).get('platforms', [])
-                    for platform in platforms:
-                        if platform.get('platform') == 'facebook':
-                            post_url = platform.get('publishedUrl')
-                            break
-                    
-                    mark_reel_as_posted(
-                        pipeline_id=pipeline['id'],
-                        reel_url=reel_url,
-                        direct_video_url=direct_video_url,
-                        caption=caption,
-                        facebook_post_id=post_id,
-                        facebook_post_url=post_url,
-                        status='success'
-                    )
-                    posted_count += 1
-                    app.logger.info(f"✅ Successfully posted: {reel_url[:50]}...")
-                else:
-                    # Failed
-                    error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
-                    mark_reel_as_posted(
-                        pipeline_id=pipeline['id'],
-                        reel_url=reel_url,
-                        direct_video_url=direct_video_url,
-                        caption=caption,
-                        status='failed',
-                        error_message=str(error_msg)
-                    )
-                    failed_count += 1
-                    app.logger.error(f"❌ Failed to post: {reel_url[:50]}... - {error_msg}")
-                    
-            except Exception as e:
-                app.logger.error(f"Error posting reel: {e}")
-                mark_reel_as_posted(
-                    pipeline_id=pipeline['id'],
-                    reel_url=reel.get('url', 'unknown'),
-                    caption=reel.get('caption', ''),
-                    status='failed',
-                    error_message=str(e)
-                )
-                failed_count += 1
-        
-        # Update pipeline stats
-        update_pipeline_stats(pipeline['id'], posted_count, failed_count)
-        
-        # Log the run
-        log_pipeline_run(pipeline['id'], posted_count, failed_count, 
-                        'completed' if failed_count == 0 else 'partial')
-        
-        return {
-            "message": f"Posted {posted_count} reels, {failed_count} failed",
-            "posted": posted_count,
-            "failed": failed_count,
-            "total": len(unposted)
-        }
-        
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (reel_url) DO UPDATE SET 
+                direct_url = EXCLUDED.direct_url,
+                caption = EXCLUDED.caption,
+                created_at = NOW()
+        """, (reel_url, direct_url, caption))
+        conn.commit()
+        app.logger.info(f"✅ Cached CDN URL for: {reel_url[:50]}...")
+        return True
     except Exception as e:
-        app.logger.error(f"Pipeline execution error: {e}")
-        log_pipeline_run(pipeline_id, 0, 0, 'error', str(e))
-        return {"error": str(e)}
+        app.logger.error(f"Cache error: {e}")
+        return False
     finally:
+        cur.close()
         conn.close()
         
         
