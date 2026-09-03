@@ -336,53 +336,87 @@
       </div>
     </div>
 
-    <!-- ============ ZERNIO (FACEBOOK) SECTION ============ -->
-    <div id="zernio-section" class="zernio-section premium-card">
-      <div class="zernio-header">
-        <div class="zernio-header-left">
-          <span class="zernio-icon">📱</span>
-          <h3>Publish to Facebook</h3>
-        </div>
-        <span class="badge" id="zernio-status-badge">Connected</span>
-      </div>
-      
-      <div class="zernio-body">
-        <div class="form-group">
-          <label>Select Account</label>
-          <select id="zernio-account-select" class="input-field">
-            <option value="all">All Accounts</option>
-            <option value="6a8c73ab77555aae01fabf32">Wildlife Explorers</option>
-            <option value="6a8c73d677555aae01fac672">Lifestyle Collective</option>
-          </select>
-        </div>
-        
-        <div class="form-group">
-          <label for="zernio-text">Post Text</label>
-          <textarea id="zernio-text" class="zernio-textarea" rows="3" placeholder="What would you like to post?">Check out this video! 🎬</textarea>
-        </div>
-        
-        <div class="form-group">
-          <label for="zernio-schedule">Schedule Post (optional)</label>
-          <input type="datetime-local" id="zernio-schedule" class="input-field" />
-        </div>
-        
-        <div class="zernio-actions">
-          <button id="zernio-publish-btn" class="btn btn-primary">
-            <span class="btn-content">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              Publish Now
-            </span>
-          </button>
-          <button id="zernio-schedule-btn" class="btn btn-ghost">
-            <span class="btn-content">📅 Schedule</span>
-          </button>
-        </div>
-        
-        <div id="zernio-status" class="status-message" hidden></div>
-      </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- ============ ZERNIO (FACEBOOK) SECTION ============ -->
+<div id="zernio-section" class="zernio-section premium-card">
+  <div class="zernio-header">
+    <div class="zernio-header-left">
+      <span class="zernio-icon">📱</span>
+      <h3>Publish to Facebook</h3>
     </div>
+    <div class="zernio-header-right">
+      <span class="badge" id="zernio-status-badge">Loading...</span>
+      <button id="refresh-zernio-btn" class="btn btn-sm btn-ghost" title="Refresh accounts">
+        🔄
+      </button>
+    </div>
+  </div>
+  
+  <div class="zernio-body">
+    <div class="form-group">
+      <label>Select Account</label>
+      <select id="zernio-account-select" class="input-field">
+        <option value="">Loading accounts...</option>
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label for="zernio-text">Post Text</label>
+      <textarea id="zernio-text" class="zernio-textarea" rows="3" placeholder="What would you like to post?">Check out this video! 🎬</textarea>
+    </div>
+    
+    <div class="form-group">
+      <label for="zernio-schedule">Schedule Post (optional)</label>
+      <input type="datetime-local" id="zernio-schedule" class="input-field" />
+    </div>
+    
+    <div class="zernio-actions">
+      <button id="zernio-publish-btn" class="btn btn-primary">
+        <span class="btn-content">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Publish Now
+        </span>
+      </button>
+      <button id="zernio-schedule-btn" class="btn btn-ghost">
+        <span class="btn-content">📅 Schedule</span>
+      </button>
+    </div>
+    
+    <div id="zernio-status" class="status-message" hidden></div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     <!-- ============ BLUESKY CONFIGURATION MODAL ============ -->
     <div id="bluesky-modal" class="modal-overlay" hidden>
