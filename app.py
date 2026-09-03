@@ -127,6 +127,11 @@ def init_db():
             );
         """)
         
+        # 🔥 FIX: Add direct_video_url column if it doesn't exist (for existing databases)
+        cur.execute("""
+            ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;
+        """)
+        
         # Pipeline runs log
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pipeline_runs (
