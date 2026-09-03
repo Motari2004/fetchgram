@@ -1231,6 +1231,41 @@ def run_pipeline(pipeline_id):
         return {"error": str(e)}
     finally:
         conn.close()
+        
+        
+        
+        
+        
+def get_direct_url_from_cache_only(reel_url):
+    """Get direct URL from cache ONLY - no external requests."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT direct_url FROM reel_cache 
+            WHERE reel_url = %s AND created_at > NOW() - INTERVAL '30 days'
+        """, (reel_url,))
+        result = cur.fetchone()
+        
+        if result and result[0]:
+            app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
+            return result[0]
+        
+        app.logger.info(f"❌ No cache for: {reel_url[:50]}...")
+        return None
+        
+    except Exception as e:
+        app.logger.error(f"Cache lookup error: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()      
+        
+        
+        
 
 def run_all_active_pipelines():
     """Run all active pipelines"""
