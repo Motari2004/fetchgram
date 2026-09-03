@@ -19,12 +19,7 @@ from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 load_dotenv()
 
-
-
-
 FIXED_USER_ID = '62c1d2ca-88e6-490f-9051-20926c1dd8c4'
-
-
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'fetchgram-dev-secret-change-me-in-production-2024')
@@ -90,6 +85,51 @@ def init_db():
             );
         """)
         
+        # Pipelines table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pipelines (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name TEXT NOT NULL,
+                profile_username TEXT NOT NULL,
+                facebook_account_id TEXT NOT NULL,
+                facebook_page_name TEXT,
+                daily_limit INTEGER DEFAULT 2,
+                is_active BOOLEAN DEFAULT TRUE,
+                last_run TIMESTAMP WITH TIME ZONE,
+                total_posted INTEGER DEFAULT 0,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # Posted reels table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS posted_reels (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+                reel_url TEXT NOT NULL,
+                facebook_post_id TEXT,
+                facebook_post_url TEXT,
+                posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                status TEXT DEFAULT 'success',
+                error_message TEXT,
+                UNIQUE(pipeline_id, reel_url)
+            );
+        """)
+        
+        # Pipeline runs log
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+                run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                reels_posted INTEGER DEFAULT 0,
+                reels_failed INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'completed',
+                error_message TEXT
+            );
+        """)
+        
         # Create indexes for faster queries
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id 
@@ -102,6 +142,22 @@ def init_db():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id 
             ON user_cookies(user_id);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_reels_pipeline_id 
+            ON posted_reels(pipeline_id);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_reels_posted_at 
+            ON posted_reels(posted_at);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pipelines_is_active 
+            ON pipelines(is_active);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id 
+            ON pipeline_runs(pipeline_id);
         """)
         
         conn.commit()
@@ -118,16 +174,9 @@ init_db()
 # ============== COOKIE STORAGE FUNCTIONS ==============
 
 def get_user_id():
-    """
-    Get or create a persistent user ID.
-    Uses the actual user_id from database.
-    """
-    # Use the fixed user_id from database
+    """Get or create a persistent user ID."""
     user_id = FIXED_USER_ID
-    
-    # Store in session for this request
     session['user_id'] = user_id
-    
     return user_id
 
 def save_cookies_to_db(cookies_data, username):
@@ -338,7 +387,6 @@ def is_valid_instagram_url(url: str) -> bool:
 
 def get_cookie_file():
     """Get cookies from session, database, or file."""
-    # First check database
     db_cookies = get_cookies_from_db()
     if db_cookies:
         cookie_data = db_cookies.get('cookie_data', [])
@@ -351,13 +399,11 @@ def get_cookie_file():
             app.logger.info(f"Using cookies from database → {cookie_file}")
             return cookie_file
     
-    # Then check session
     cookie_file = session.get('cookie_file')
     if cookie_file and os.path.exists(cookie_file):
         app.logger.info(f"Using cookies from session: {cookie_file}")
         return cookie_file
     
-    # Check environment variable
     cookies_json_env = os.environ.get('COOKIES_JSON')
     if cookies_json_env:
         try:
@@ -589,20 +635,6 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
 ZERNIO_API_KEY = os.environ.get('ZERNIO_API_KEY', 'sk_48ad5dd4a9d9bd8e2561633862dc1708b3fb2013645023fde617921bd065a037')
 ZERNIO_BASE_URL = "https://zernio.com/api/v1"
 
-# Zernio Facebook accounts configuration
-ZERNIO_ACCOUNTS = {
-    "wildlife_explorers": {
-        "account_id": "6a8c73ab77555aae01fabf32",
-        "name": "Wildlife Explorers",
-        "page_id": "1378720185326161"
-    },
-    "lifestyle_collective": {
-        "account_id": "6a8c73d677555aae01fac672",
-        "name": "Lifestyle Collective",
-        "page_id": "1265613679974575"
-    }
-}
-
 def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None):
     """
     Publish a video to Facebook via Zernio
@@ -663,20 +695,303 @@ def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_t
     """Publish a video to all connected Facebook accounts"""
     results = {}
     
-    for key, account in ZERNIO_ACCOUNTS.items():
-        result = publish_to_facebook(
-            video_url=video_url,
-            text=text,
-            account_id=account["account_id"],
-            publish_now=publish_now,
-            scheduled_time=scheduled_time
-        )
-        results[key] = {
-            "account_name": account["name"],
-            "result": result
+    # Get accounts from Zernio API dynamically
+    try:
+        headers = {
+            "Authorization": f"Bearer {ZERNIO_API_KEY}",
+            "Content-Type": "application/json"
         }
+        response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            accounts = data.get('accounts', [])
+            
+            for account in accounts:
+                if account.get('platform') == 'facebook':
+                    account_id = account.get('_id')
+                    account_name = account.get('displayName', 'Unknown')
+                    result = publish_to_facebook(
+                        video_url=video_url,
+                        text=text,
+                        account_id=account_id,
+                        publish_now=publish_now,
+                        scheduled_time=scheduled_time
+                    )
+                    results[account_id] = {
+                        "account_name": account_name,
+                        "result": result
+                    }
+    except Exception as e:
+        app.logger.error(f"Error getting Zernio accounts: {e}")
     
     return results
+
+# ============== PIPELINE FUNCTIONS ==============
+
+def get_unposted_reels(profile_username, pipeline_id, limit=10):
+    """Get unposted reels for a profile"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        cur = conn.cursor()
+        
+        # Get reels from scraped data
+        cur.execute("""
+            SELECT 
+                results
+            FROM scraped_reels 
+            WHERE EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS elem
+                WHERE elem->>'username' = %s
+            )
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (profile_username,))
+        
+        result = cur.fetchone()
+        if not result:
+            return []
+        
+        # Extract reels for this profile
+        results = result[0]  # results JSONB
+        profile_reels = []
+        for item in results:
+            if item.get('username') == profile_username:
+                profile_reels = item.get('reels', [])
+                break
+        
+        # Get already posted reels
+        cur.execute("""
+            SELECT reel_url FROM posted_reels 
+            WHERE pipeline_id = %s
+        """, (pipeline_id,))
+        posted_urls = {row[0] for row in cur.fetchall()}
+        
+        # Filter unposted reels
+        unposted = [url for url in profile_reels if url not in posted_urls]
+        
+        return unposted[:limit]
+        
+    except Exception as e:
+        app.logger.error(f"Error getting unposted reels: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def mark_reel_as_posted(pipeline_id, reel_url, facebook_post_id=None, facebook_post_url=None, status='success', error_message=None):
+    """Mark a reel as posted"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO posted_reels (pipeline_id, reel_url, facebook_post_id, facebook_post_url, status, error_message)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (pipeline_id, reel_url) DO UPDATE SET
+                status = EXCLUDED.status,
+                error_message = EXCLUDED.error_message,
+                posted_at = NOW()
+        """, (pipeline_id, reel_url, facebook_post_id, facebook_post_url, status, error_message))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"Error marking reel as posted: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def update_pipeline_stats(pipeline_id, posted_count, failed_count):
+    """Update pipeline statistics"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE pipelines 
+            SET total_posted = total_posted + %s,
+                last_run = NOW(),
+                updated_at = NOW()
+            WHERE id = %s
+        """, (posted_count, pipeline_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"Error updating pipeline stats: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed', error_message=None):
+    """Log a pipeline run"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO pipeline_runs (pipeline_id, reels_posted, reels_failed, status, error_message)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (pipeline_id, posted_count, failed_count, status, error_message))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"Error logging pipeline run: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def run_pipeline(pipeline_id):
+    """Execute a single pipeline"""
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Database connection failed"}
+    
+    try:
+        # Get pipeline configuration
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT * FROM pipelines WHERE id = %s
+        """, (pipeline_id,))
+        pipeline = cur.fetchone()
+        cur.close()
+        
+        if not pipeline:
+            return {"error": "Pipeline not found"}
+        
+        if not pipeline['is_active']:
+            return {"error": "Pipeline is inactive"}
+        
+        # Get unposted reels
+        unposted = get_unposted_reels(
+            pipeline['profile_username'], 
+            pipeline['id'], 
+            pipeline['daily_limit']
+        )
+        
+        if not unposted:
+            log_pipeline_run(pipeline['id'], 0, 0, 'completed', 'No unposted reels found')
+            return {"message": "No unposted reels to post", "posted": 0}
+        
+        posted_count = 0
+        failed_count = 0
+        
+        # Post each reel
+        for reel_url in unposted:
+            try:
+                # Post to Facebook
+                result = publish_to_facebook(
+                    video_url=reel_url,
+                    text=f"🎬 New reel from @{pipeline['profile_username']}! Check it out!",
+                    account_id=pipeline['facebook_account_id'],
+                    publish_now=True
+                )
+                
+                if result and not result.get('error'):
+                    # Success
+                    post_id = result.get('post', {}).get('_id') or result.get('post_id')
+                    post_url = None
+                    
+                    # Try to get the Facebook URL
+                    platforms = result.get('post', {}).get('platforms', [])
+                    for platform in platforms:
+                        if platform.get('platform') == 'facebook':
+                            post_url = platform.get('publishedUrl')
+                            break
+                    
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline['id'],
+                        reel_url=reel_url,
+                        facebook_post_id=post_id,
+                        facebook_post_url=post_url,
+                        status='success'
+                    )
+                    posted_count += 1
+                else:
+                    # Failed
+                    error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline['id'],
+                        reel_url=reel_url,
+                        status='failed',
+                        error_message=str(error_msg)
+                    )
+                    failed_count += 1
+                    
+            except Exception as e:
+                app.logger.error(f"Error posting reel: {e}")
+                mark_reel_as_posted(
+                    pipeline_id=pipeline['id'],
+                    reel_url=reel_url,
+                    status='failed',
+                    error_message=str(e)
+                )
+                failed_count += 1
+        
+        # Update pipeline stats
+        update_pipeline_stats(pipeline['id'], posted_count, failed_count)
+        
+        # Log the run
+        log_pipeline_run(pipeline['id'], posted_count, failed_count, 
+                        'completed' if failed_count == 0 else 'partial')
+        
+        return {
+            "message": f"Posted {posted_count} reels, {failed_count} failed",
+            "posted": posted_count,
+            "failed": failed_count,
+            "total": len(unposted)
+        }
+        
+    except Exception as e:
+        app.logger.error(f"Pipeline execution error: {e}")
+        log_pipeline_run(pipeline_id, 0, 0, 'error', str(e))
+        return {"error": str(e)}
+    finally:
+        conn.close()
+
+def run_all_active_pipelines():
+    """Run all active pipelines"""
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Database connection failed"}
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id FROM pipelines WHERE is_active = TRUE
+        """)
+        pipelines = cur.fetchall()
+        cur.close()
+        
+        results = []
+        for pipeline in pipelines:
+            result = run_pipeline(pipeline['id'])
+            results.append({
+                "pipeline_id": pipeline['id'],
+                "result": result
+            })
+        
+        return {
+            "message": f"Ran {len(pipelines)} pipelines",
+            "results": results
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        conn.close()
 
 # ============== ROUTES ==============
 
@@ -726,16 +1041,13 @@ def upload_cookies():
                     username = value.split(':')[0]
                 break
 
-        # Get persistent user_id (from cookie or create new)
         user_id = get_user_id()
         
-        # Save to database
         success = save_cookies_to_db(cookies_data, username or 'Instagram User')
         
         if not success:
             return jsonify({"error": "Failed to save cookies to database", "status": "error"}), 500
 
-        # Save in session
         encrypted = encrypt_credentials(json.dumps(cookies_data), "instagram_cookies")
         if encrypted:
             session['instagram_encrypted'] = encrypted
@@ -745,18 +1057,16 @@ def upload_cookies():
         session['cookies_data'] = cookies_data
         session['username'] = username or 'Instagram User'
 
-        # Create response with user_id cookie
         response = jsonify({
             "status": "success",
             "message": "Cookies uploaded and saved to database!",
             "username": username or 'Instagram User'
         })
         
-        # Set the user_id cookie
         response.set_cookie(
             'user_id',
             user_id,
-            max_age=30*24*60*60,  # 30 days
+            max_age=30*24*60*60,
             path='/',
             secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
             httponly=True,
@@ -869,7 +1179,6 @@ def scrape_proxy():
     data = request.get_json(silent=True) or {}
     usernames = data.get("usernames", [])
     
-    # Log the usernames being scraped
     app.logger.info(f"📝 Scraping usernames: {usernames}")
     
     cookies = None
@@ -917,11 +1226,9 @@ def scrape_proxy():
         
         app.logger.info(f"Proxy: Render responded with status {response.status_code}")
         
-        # If successful, store the results in database
         if response.status_code == 200:
             result_data = response.json()
             if result_data.get('job_id') and result_data.get('results'):
-                # Extract usernames from results if not already in response
                 results = result_data.get('results', [])
                 extracted_usernames = []
                 for profile in results:
@@ -930,17 +1237,8 @@ def scrape_proxy():
                         if username:
                             extracted_usernames.append(username)
                 
-                # Store with usernames
-                store_url = f"{request.host_url}api/scraped/store"
-                store_payload = {
-                    "job_id": result_data.get('job_id'),
-                    "results": results,
-                    "usernames": extracted_usernames or usernames
-                }
-                
-                # Make internal request to store data
                 with app.test_request_context():
-                    store_response = store_scraped_data()
+                    store_scraped_data()
                     app.logger.info(f"✅ Auto-stored scraped data for job {result_data.get('job_id')} with usernames: {extracted_usernames or usernames}")
         
         return jsonify(response.json()), response.status_code
@@ -975,7 +1273,6 @@ def store_scraped_data_internal(job_id, results, usernames, status='completed'):
         return False
     
     try:
-        # Calculate stats
         total_profiles = len(results)
         total_reels = 0
         for profile in results:
@@ -1030,7 +1327,6 @@ def store_scraped_data():
         return jsonify({"error": "Database connection failed"}), 500
     
     try:
-        # Extract usernames from results if not provided
         if not usernames:
             usernames = []
             for profile in results:
@@ -1039,14 +1335,12 @@ def store_scraped_data():
                     if username:
                         usernames.append(username)
         
-        # Calculate stats
         total_profiles = len(results)
         total_reels = 0
         for profile in results:
             if profile.get('reels'):
                 total_reels += len(profile.get('reels', []))
         
-        # Get user_id
         user_id = get_user_id()
         
         cur = conn.cursor()
@@ -1100,7 +1394,6 @@ def get_scraped_data():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Get ALL scraped data
         cur.execute("""
             SELECT 
                 results,
@@ -1115,7 +1408,6 @@ def get_scraped_data():
         all_results = cur.fetchall()
         
         if all_results:
-            # Combine ALL profiles from ALL jobs
             combined_results = []
             seen_usernames = set()
             total_profiles = 0
@@ -1127,7 +1419,6 @@ def get_scraped_data():
                     for profile in results:
                         username = profile.get('username')
                         if username:
-                            # Check if we already have this username
                             if username not in seen_usernames:
                                 seen_usernames.add(username)
                                 combined_results.append({
@@ -1138,7 +1429,6 @@ def get_scraped_data():
                                 total_profiles += 1
                                 total_reels += len(profile.get('reels', []))
                             else:
-                                # Merge reels for existing username
                                 for existing in combined_results:
                                     if existing.get('username') == username:
                                         existing_reels = existing.get('reels', [])
@@ -1149,10 +1439,8 @@ def get_scraped_data():
                                         total_reels += len(new_reels)
                                         break
             
-            # Sort by number of reels (most first)
             combined_results.sort(key=lambda x: len(x.get('reels', [])), reverse=True)
             
-            # Get all usernames from the database
             all_usernames = []
             cur.execute("SELECT DISTINCT unnest(usernames) as username FROM scraped_reels WHERE usernames IS NOT NULL AND array_length(usernames, 1) > 0")
             username_rows = cur.fetchall()
@@ -1200,7 +1488,6 @@ def delete_scraped_by_username():
     try:
         cur = conn.cursor()
         
-        # Count how many jobs will be deleted (NO user_id filter)
         cur.execute("""
             SELECT COUNT(*) FROM scraped_reels 
             WHERE EXISTS (
@@ -1212,7 +1499,6 @@ def delete_scraped_by_username():
         
         app.logger.info(f"📊 Found {jobs_count} jobs containing username: {username}")
         
-        # Delete all jobs that contain this username (NO user_id filter)
         cur.execute("""
             DELETE FROM scraped_reels 
             WHERE EXISTS (
@@ -1710,7 +1996,6 @@ def zernio_publish():
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
     
-    # If account_id is provided, publish to that account only
     if account_id:
         result = publish_to_facebook(
             video_url=video_url,
@@ -1721,7 +2006,6 @@ def zernio_publish():
         )
         return jsonify(result)
     
-    # Otherwise publish to all accounts
     results = publish_video_to_all_accounts(
         video_url=video_url,
         text=text,
@@ -1734,9 +2018,6 @@ def zernio_publish():
         "message": f"Published to {len(results)} accounts",
         "results": results
     })
-
-
-
 
 @app.route('/api/zernio/status', methods=['GET'])
 def zernio_status():
@@ -1758,6 +2039,263 @@ def zernio_status():
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route('/api/zernio/accounts', methods=['GET'])
+def zernio_list_accounts():
+    """List all connected Zernio Facebook accounts (dynamic from API)"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {ZERNIO_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            accounts = data.get('accounts', [])
+            
+            facebook_accounts = []
+            for account in accounts:
+                if account.get('platform') == 'facebook':
+                    facebook_accounts.append({
+                        "id": account.get('_id'),
+                        "name": account.get('displayName', 'Unknown'),
+                        "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                        "username": account.get('username', 'N/A'),
+                        "status": account.get('platformStatus', 'unknown')
+                    })
+            
+            return jsonify({
+                "status": "success",
+                "accounts": facebook_accounts,
+                "total": len(facebook_accounts)
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"Zernio API returned {response.status_code}",
+                "accounts": []
+            }), 500
+            
+    except Exception as e:
+        app.logger.error(f"Error fetching Zernio accounts: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "accounts": []
+        }), 500
+
+# ============== PIPELINE API ROUTES ==============
+
+@app.route('/api/pipelines', methods=['GET'])
+def get_pipelines():
+    """Get all pipelines"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                p.*,
+                COUNT(pr.id) as total_posted_count,
+                SUM(CASE WHEN pr.status = 'success' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN pr.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                MAX(pr.posted_at) as last_post_time
+            FROM pipelines p
+            LEFT JOIN posted_reels pr ON p.id = pr.pipeline_id
+            GROUP BY p.id
+            ORDER BY p.created_at DESC
+        """)
+        pipelines = cur.fetchall()
+        
+        return jsonify({
+            "status": "success",
+            "pipelines": pipelines
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/pipelines', methods=['POST'])
+def create_pipeline():
+    """Create a new pipeline"""
+    data = request.get_json(silent=True) or {}
+    
+    name = data.get('name')
+    profile_username = data.get('profile_username')
+    facebook_account_id = data.get('facebook_account_id')
+    daily_limit = data.get('daily_limit', 2)
+    
+    if not name or not profile_username or not facebook_account_id:
+        return jsonify({"error": "name, profile_username, and facebook_account_id are required"}), 400
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO pipelines (id, name, profile_username, facebook_account_id, daily_limit, is_active)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE)
+            RETURNING id
+        """, (name, profile_username, facebook_account_id, daily_limit))
+        
+        pipeline_id = cur.fetchone()[0]
+        conn.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Pipeline created",
+            "pipeline_id": pipeline_id
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/pipelines/<pipeline_id>', methods=['PUT'])
+def update_pipeline(pipeline_id):
+    """Update a pipeline"""
+    data = request.get_json(silent=True) or {}
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        updates = []
+        params = []
+        
+        if 'name' in data:
+            updates.append("name = %s")
+            params.append(data['name'])
+        if 'profile_username' in data:
+            updates.append("profile_username = %s")
+            params.append(data['profile_username'])
+        if 'facebook_account_id' in data:
+            updates.append("facebook_account_id = %s")
+            params.append(data['facebook_account_id'])
+        if 'daily_limit' in data:
+            updates.append("daily_limit = %s")
+            params.append(data['daily_limit'])
+        if 'is_active' in data:
+            updates.append("is_active = %s")
+            params.append(data['is_active'])
+        
+        if not updates:
+            return jsonify({"error": "No fields to update"}), 400
+        
+        updates.append("updated_at = NOW()")
+        params.append(pipeline_id)
+        
+        cur = conn.cursor()
+        cur.execute(f"""
+            UPDATE pipelines 
+            SET {', '.join(updates)}
+            WHERE id = %s
+        """, params)
+        conn.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Pipeline updated"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/pipelines/<pipeline_id>/run', methods=['POST'])
+def run_pipeline_endpoint(pipeline_id):
+    """Run a single pipeline"""
+    result = run_pipeline(pipeline_id)
+    if result.get('error'):
+        return jsonify(result), 500
+    return jsonify(result)
+
+@app.route('/api/pipelines/run-all', methods=['POST'])
+def run_all_pipelines_endpoint():
+    """Run all active pipelines"""
+    result = run_all_active_pipelines()
+    if result.get('error'):
+        return jsonify(result), 500
+    return jsonify(result)
+
+@app.route('/api/pipelines/<pipeline_id>/reset', methods=['POST'])
+def reset_pipeline(pipeline_id):
+    """Reset posted status for a pipeline (for testing)"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
+        cur.execute("""
+            UPDATE pipelines 
+            SET total_posted = 0,
+                updated_at = NOW()
+            WHERE id = %s
+        """, (pipeline_id,))
+        conn.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Pipeline reset - all reels marked as unposted"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/pipelines/<pipeline_id>/posted', methods=['GET'])
+def get_posted_reels(pipeline_id):
+    """Get posted reels for a pipeline"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                reel_url,
+                facebook_post_id,
+                facebook_post_url,
+                posted_at,
+                status,
+                error_message
+            FROM posted_reels
+            WHERE pipeline_id = %s
+            ORDER BY posted_at DESC
+            LIMIT 50
+        """, (pipeline_id,))
+        posted = cur.fetchall()
+        
+        return jsonify({
+            "status": "success",
+            "posted": posted,
+            "count": len(posted)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
 
 # ============== PROCESS REELS ==============
 
@@ -1851,10 +2389,8 @@ def init_session():
     user_id = FIXED_USER_ID
     session['user_id'] = user_id
     
-    # Get cookies from database
     db_cookies = get_cookies_from_db()
     
-    # Auto-sync cookies from database to session
     if db_cookies and not session.get('instagram_encrypted'):
         cookies_data = db_cookies.get('cookie_data', [])
         username = db_cookies.get('username', 'Instagram User')
@@ -1870,74 +2406,15 @@ def init_session():
     return jsonify({
         "status": "success",
         "user_id": user_id,
-        "has_cookies": True  # Always true since we have cookies in DB
+        "has_cookies": True
     })
-
-
-
-
-
-
-
-
-@app.route('/api/zernio/accounts', methods=['GET'])
-def zernio_list_accounts():
-    """List all connected Zernio Facebook accounts (dynamic from API)"""
-    try:
-        headers = {
-            "Authorization": f"Bearer {ZERNIO_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        # Fetch accounts from Zernio API
-        response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            accounts = data.get('accounts', [])
-            
-            # Filter Facebook accounts and format response
-            facebook_accounts = []
-            for account in accounts:
-                if account.get('platform') == 'facebook':
-                    facebook_accounts.append({
-                        "id": account.get('_id'),
-                        "name": account.get('displayName', 'Unknown'),
-                        "page_id": account.get('profileData', {}).get('id', 'N/A'),
-                        "username": account.get('username', 'N/A'),
-                        "status": account.get('platformStatus', 'unknown')
-                    })
-            
-            return jsonify({
-                "status": "success",
-                "accounts": facebook_accounts,
-                "total": len(facebook_accounts)
-            })
-        else:
-            return jsonify({
-                "status": "error",
-                "message": f"Zernio API returned {response.status_code}",
-                "accounts": []
-            }), 500
-            
-    except Exception as e:
-        app.logger.error(f"Error fetching Zernio accounts: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-            "accounts": []
-        }), 500
-
-
-
-
 
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     cookie_status = "configured" if get_cookie_file() else "not configured"
     return jsonify({
         "status": "running",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "cookies": cookie_status,
         "zernio_connected": bool(ZERNIO_API_KEY),
         "download_history_count": 0,
@@ -1949,11 +2426,10 @@ def api_status():
 @app.after_request
 def after_request(response):
     """Ensure user_id cookie is set on every response."""
-    # Always set the fixed user_id cookie
     response.set_cookie(
         'user_id',
         FIXED_USER_ID,
-        max_age=30*24*60*60,  # 30 days
+        max_age=30*24*60*60,
         path='/',
         secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
         httponly=True,

@@ -77,6 +77,17 @@ const zernioScheduleBtn = document.getElementById('zernio-schedule-btn');
 const zernioStatus = document.getElementById('zernio-status');
 const zernioStatusBadge = document.getElementById('zernio-status-badge');
 
+// Pipeline elements
+const pipelinesList = document.getElementById('pipelines-list');
+const pipelinesStatus = document.getElementById('pipelines-status');
+const runAllPipelinesBtn = document.getElementById('run-all-pipelines-btn');
+const refreshPipelinesBtn = document.getElementById('refresh-pipelines-btn');
+const createPipelineBtn = document.getElementById('create-pipeline-btn');
+const pipelineName = document.getElementById('pipeline-name');
+const pipelineUsername = document.getElementById('pipeline-username');
+const pipelineFacebookAccount = document.getElementById('pipeline-facebook-account');
+const pipelineDailyLimit = document.getElementById('pipeline-daily-limit');
+
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
@@ -641,6 +652,7 @@ async function loadZernioAccounts() {
     if (data.status === 'success' && data.accounts) {
       zernioAccounts = data.accounts;
       populateZernioAccountSelect(zernioAccounts);
+      populatePipelineFacebookAccounts(zernioAccounts);
       zernioAccountsLoaded = true;
       console.log('✅ Loaded Zernio accounts:', zernioAccounts);
       
@@ -698,6 +710,28 @@ function populateZernioAccountSelect(accounts) {
   if (accounts.length === 1) {
     zernioAccountSelect.value = accounts[0].id;
   }
+}
+
+function populatePipelineFacebookAccounts(accounts) {
+  if (!pipelineFacebookAccount) return;
+  
+  pipelineFacebookAccount.innerHTML = '';
+  
+  if (accounts.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No Facebook accounts found';
+    option.disabled = true;
+    pipelineFacebookAccount.appendChild(option);
+    return;
+  }
+  
+  accounts.forEach(account => {
+    const option = document.createElement('option');
+    option.value = account.id;
+    option.textContent = account.name;
+    pipelineFacebookAccount.appendChild(option);
+  });
 }
 
 // ==================== PUBLISH FUNCTIONS ====================
@@ -982,6 +1016,7 @@ document.getElementById('refresh-zernio-btn')?.addEventListener('click', async f
     if (data.status === 'success' && data.accounts) {
       zernioAccounts = data.accounts;
       populateZernioAccountSelect(zernioAccounts);
+      populatePipelineFacebookAccounts(zernioAccounts);
       zernioAccountsLoaded = true;
       showZernioStatus(`✅ Refreshed ${data.accounts.length} accounts`, 'success');
       
@@ -1691,6 +1726,251 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
+// ==================== PIPELINE FUNCTIONS ====================
+
+function showPipelinesStatus(message, type) {
+  if (!pipelinesStatus) return;
+  pipelinesStatus.textContent = message;
+  pipelinesStatus.className = 'status-message ' + type;
+  pipelinesStatus.style.display = 'block';
+  setTimeout(() => {
+    pipelinesStatus.style.display = 'none';
+  }, 8000);
+}
+
+async function loadPipelines() {
+  try {
+    const response = await fetch('/api/pipelines', { 
+      credentials: 'same-origin' 
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      renderPipelines(data.pipelines);
+    } else {
+      console.error('Failed to load pipelines:', data.error);
+    }
+  } catch (error) {
+    console.error('Failed to load pipelines:', error);
+  }
+}
+
+function renderPipelines(pipelines) {
+  if (!pipelinesList) return;
+  
+  if (!pipelines || pipelines.length === 0) {
+    pipelinesList.innerHTML = `<div class="empty-state">No pipelines created yet.</div>`;
+    return;
+  }
+  
+  let html = `<div class="pipelines-grid">`;
+  
+  pipelines.forEach(p => {
+    const statusClass = p.is_active ? 'active' : 'inactive';
+    const statusText = p.is_active ? '🟢 Active' : '🔴 Inactive';
+    
+    html += `
+      <div class="pipeline-card">
+        <div class="pipeline-card-header">
+          <div class="pipeline-card-title">
+            <span class="pipeline-name">${escapeHtml(p.name)}</span>
+            <span class="pipeline-status ${statusClass}">${statusText}</span>
+          </div>
+          <div class="pipeline-card-actions">
+            <button class="btn btn-sm btn-success run-pipeline-btn" data-id="${p.id}">▶ Run</button>
+            <button class="btn btn-sm btn-danger reset-pipeline-btn" data-id="${p.id}">↺ Reset</button>
+            <button class="btn btn-sm btn-ghost toggle-pipeline-btn" data-id="${p.id}" data-active="${p.is_active}">
+              ${p.is_active ? '⏸' : '▶'}
+            </button>
+          </div>
+        </div>
+        <div class="pipeline-card-body">
+          <div class="pipeline-detail">
+            <span class="pipeline-label">Profile:</span>
+            <span class="pipeline-value">@${escapeHtml(p.profile_username)}</span>
+          </div>
+          <div class="pipeline-detail">
+            <span class="pipeline-label">Facebook:</span>
+            <span class="pipeline-value">${escapeHtml(p.facebook_page_name || p.facebook_account_id)}</span>
+          </div>
+          <div class="pipeline-detail">
+            <span class="pipeline-label">Daily Limit:</span>
+            <span class="pipeline-value">${p.daily_limit}</span>
+          </div>
+          <div class="pipeline-detail">
+            <span class="pipeline-label">Total Posted:</span>
+            <span class="pipeline-value">${p.total_posted || 0}</span>
+          </div>
+          <div class="pipeline-detail">
+            <span class="pipeline-label">Last Run:</span>
+            <span class="pipeline-value">${p.last_run ? new Date(p.last_run).toLocaleString() : 'Never'}</span>
+          </div>
+          ${p.last_post_time ? `
+          <div class="pipeline-detail">
+            <span class="pipeline-label">Last Post:</span>
+            <span class="pipeline-value">${new Date(p.last_post_time).toLocaleString()}</span>
+          </div>` : ''}
+          <div class="pipeline-stats">
+            <span class="stat-success">✅ ${p.success_count || 0}</span>
+            <span class="stat-failed">❌ ${p.failed_count || 0}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  });
+  
+  html += `</div>`;
+  pipelinesList.innerHTML = html;
+  
+  // Add event listeners
+  document.querySelectorAll('.run-pipeline-btn').forEach(btn => {
+    btn.addEventListener('click', () => runPipeline(btn.dataset.id));
+  });
+  
+  document.querySelectorAll('.reset-pipeline-btn').forEach(btn => {
+    btn.addEventListener('click', () => resetPipeline(btn.dataset.id));
+  });
+  
+  document.querySelectorAll('.toggle-pipeline-btn').forEach(btn => {
+    btn.addEventListener('click', () => togglePipeline(btn.dataset.id, btn.dataset.active === 'true'));
+  });
+}
+
+async function runPipeline(pipelineId) {
+  showPipelinesStatus('⏳ Running pipeline...', 'info');
+  
+  try {
+    const response = await fetch(`/api/pipelines/${pipelineId}/run`, {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (response.ok) {
+      showPipelinesStatus(`✅ ${data.message}`, 'success');
+    } else {
+      showPipelinesStatus(`❌ ${data.error || 'Failed to run pipeline'}`, 'error');
+    }
+  } catch (error) {
+    showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    setTimeout(loadPipelines, 2000);
+  }
+}
+
+async function runAllPipelines() {
+  showPipelinesStatus('⏳ Running all pipelines...', 'info');
+  
+  try {
+    const response = await fetch('/api/pipelines/run-all', {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (response.ok) {
+      showPipelinesStatus(`✅ ${data.message}`, 'success');
+    } else {
+      showPipelinesStatus(`❌ ${data.error || 'Failed to run pipelines'}`, 'error');
+    }
+  } catch (error) {
+    showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    setTimeout(loadPipelines, 2000);
+  }
+}
+
+async function resetPipeline(pipelineId) {
+  if (!confirm('⚠️ Reset will mark ALL reels as unposted. Are you sure?')) return;
+  
+  try {
+    const response = await fetch(`/api/pipelines/${pipelineId}/reset`, {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (response.ok) {
+      showPipelinesStatus(`✅ ${data.message}`, 'success');
+    } else {
+      showPipelinesStatus(`❌ ${data.error || 'Failed to reset'}`, 'error');
+    }
+  } catch (error) {
+    showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    setTimeout(loadPipelines, 1500);
+  }
+}
+
+async function togglePipeline(pipelineId, currentActive) {
+  try {
+    const response = await fetch(`/api/pipelines/${pipelineId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ is_active: !currentActive })
+    });
+    const data = await response.json();
+    
+    if (response.ok) {
+      showPipelinesStatus(`✅ Pipeline ${!currentActive ? 'activated' : 'deactivated'}`, 'success');
+    } else {
+      showPipelinesStatus(`❌ ${data.error || 'Failed to toggle'}`, 'error');
+    }
+  } catch (error) {
+    showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    setTimeout(loadPipelines, 1000);
+  }
+}
+
+// ==================== CREATE PIPELINE ====================
+
+createPipelineBtn?.addEventListener('click', async function() {
+  const name = pipelineName?.value.trim();
+  const username = pipelineUsername?.value.trim();
+  const accountId = pipelineFacebookAccount?.value;
+  const dailyLimit = parseInt(pipelineDailyLimit?.value) || 2;
+  
+  if (!name || !username || !accountId) {
+    showPipelinesStatus('❌ Please fill in all fields', 'error');
+    return;
+  }
+  
+  this.disabled = true;
+  this.textContent = 'Creating...';
+  
+  try {
+    const response = await fetch('/api/pipelines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        name,
+        profile_username: username,
+        facebook_account_id: accountId,
+        daily_limit: dailyLimit
+      })
+    });
+    const data = await response.json();
+    
+    if (response.ok) {
+      showPipelinesStatus(`✅ Pipeline "${name}" created!`, 'success');
+      if (pipelineName) pipelineName.value = '';
+      if (pipelineUsername) pipelineUsername.value = '';
+      if (pipelineDailyLimit) pipelineDailyLimit.value = '2';
+      loadPipelines();
+    } else {
+      showPipelinesStatus(`❌ ${data.error || 'Failed to create pipeline'}`, 'error');
+    }
+  } catch (error) {
+    showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.textContent = 'Create Pipeline';
+  }
+});
+
 // ==================== AUTO-LOAD ON PAGE LOAD ====================
 
 async function autoLoadScrapedResults() {
@@ -1743,6 +2023,7 @@ initSession().then(() => {
     checkBlueskyStatus();
     checkZernioStatus();
     loadZernioAccounts();
+    loadPipelines();
     setTimeout(autoLoadScrapedResults, 1000);
 });
 
@@ -1751,3 +2032,22 @@ document.addEventListener('visibilitychange', function() {
     autoLoadScrapedResults();
   }
 });
+
+// ==================== PIPELINE EVENT LISTENERS ====================
+
+runAllPipelinesBtn?.addEventListener('click', runAllPipelines);
+refreshPipelinesBtn?.addEventListener('click', loadPipelines);
+
+// ==================== REFRESH STATUS BUTTON ====================
+
+document.getElementById('refresh-status-btn')?.addEventListener('click', function() {
+  checkInstagramStatus();
+  checkBlueskyStatus();
+  checkZernioStatus();
+  loadZernioAccounts();
+  loadPipelines();
+  autoLoadScrapedResults();
+  showCookieStatus('🔄 Status refreshed', 'info');
+});
+
+console.log('✅ Fetchgram loaded successfully!');

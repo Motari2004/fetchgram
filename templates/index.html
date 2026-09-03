@@ -192,9 +192,12 @@
       
       <!-- Results Grid - This is where the reels will be displayed -->
       <div id="scraped-reels-content">
-        <div class="loading-state">
-          <div class="loading-spinner"></div>
-          <p style="color: var(--text-muted); margin-top: 12px;">Loading scraped data...</p>
+        <div class="empty-state">
+          <div style="font-size: 32px; margin-bottom: 12px;">📭</div>
+          <strong>No scraped data found</strong>
+          <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+            Enter usernames below and click "Start Scraping" to begin.
+          </p>
         </div>
       </div>
     </div>
@@ -336,88 +339,106 @@
       </div>
     </div>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-<!-- ============ ZERNIO (FACEBOOK) SECTION ============ -->
-<div id="zernio-section" class="zernio-section premium-card">
-  <div class="zernio-header">
-    <div class="zernio-header-left">
-      <span class="zernio-icon">📱</span>
-      <h3>Publish to Facebook</h3>
+    <!-- ============ ZERNIO (FACEBOOK) SECTION ============ -->
+    <div id="zernio-section" class="zernio-section premium-card">
+      <div class="zernio-header">
+        <div class="zernio-header-left">
+          <span class="zernio-icon">📱</span>
+          <h3>Publish to Facebook</h3>
+        </div>
+        <div class="zernio-header-right">
+          <span class="badge" id="zernio-status-badge">Loading...</span>
+          <button id="refresh-zernio-btn" class="btn btn-sm btn-ghost" title="Refresh accounts">
+            🔄
+          </button>
+        </div>
+      </div>
+      
+      <div class="zernio-body">
+        <div class="form-group">
+          <label>Select Account</label>
+          <select id="zernio-account-select" class="input-field">
+            <option value="">Loading accounts...</option>
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="zernio-text">Post Text</label>
+          <textarea id="zernio-text" class="zernio-textarea" rows="3" placeholder="What would you like to post?">Check out this video! 🎬</textarea>
+        </div>
+        
+        <div class="form-group">
+          <label for="zernio-schedule">Schedule Post (optional)</label>
+          <input type="datetime-local" id="zernio-schedule" class="input-field" />
+        </div>
+        
+        <div class="zernio-actions">
+          <button id="zernio-publish-btn" class="btn btn-primary">
+            <span class="btn-content">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Publish Now
+            </span>
+          </button>
+          <button id="zernio-schedule-btn" class="btn btn-ghost">
+            <span class="btn-content">📅 Schedule</span>
+          </button>
+        </div>
+        
+        <div id="zernio-status" class="status-message" hidden></div>
+      </div>
     </div>
-    <div class="zernio-header-right">
-      <span class="badge" id="zernio-status-badge">Loading...</span>
-      <button id="refresh-zernio-btn" class="btn btn-sm btn-ghost" title="Refresh accounts">
-        🔄
-      </button>
+
+    <!-- ============ PIPELINES SECTION ============ -->
+    <div class="pipelines-section premium-card" id="pipelines-section">
+      <div class="pipelines-header">
+        <div class="pipelines-title">
+          <span class="pipelines-icon">🤖</span>
+          <h3>Autonomous Posting Pipelines</h3>
+        </div>
+        <div class="pipelines-actions">
+          <button id="run-all-pipelines-btn" class="btn btn-sm btn-primary">▶ Run All</button>
+          <button id="refresh-pipelines-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+        </div>
+      </div>
+      
+      <div id="pipelines-status" class="status-message" hidden></div>
+      
+      <!-- Create Pipeline -->
+      <div class="pipeline-create">
+        <details>
+          <summary>➕ Create New Pipeline</summary>
+          <div class="pipeline-create-form">
+            <div class="form-group">
+              <label>Pipeline Name</label>
+              <input type="text" id="pipeline-name" class="input-field" placeholder="My Instagram Pipeline" />
+            </div>
+            <div class="form-group">
+              <label>Profile Username</label>
+              <input type="text" id="pipeline-username" class="input-field" placeholder="elenaajoyce" />
+            </div>
+            <div class="form-group">
+              <label>Facebook Account ID</label>
+              <select id="pipeline-facebook-account" class="input-field">
+                <option value="">Select Facebook account...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Daily Post Limit</label>
+              <input type="number" id="pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />
+            </div>
+            <button id="create-pipeline-btn" class="btn btn-primary">Create Pipeline</button>
+          </div>
+        </details>
+      </div>
+      
+      <!-- Pipelines List -->
+      <div id="pipelines-list">
+        <div class="empty-state">No pipelines created yet.</div>
+      </div>
     </div>
-  </div>
-  
-  <div class="zernio-body">
-    <div class="form-group">
-      <label>Select Account</label>
-      <select id="zernio-account-select" class="input-field">
-        <option value="">Loading accounts...</option>
-      </select>
-    </div>
-    
-    <div class="form-group">
-      <label for="zernio-text">Post Text</label>
-      <textarea id="zernio-text" class="zernio-textarea" rows="3" placeholder="What would you like to post?">Check out this video! 🎬</textarea>
-    </div>
-    
-    <div class="form-group">
-      <label for="zernio-schedule">Schedule Post (optional)</label>
-      <input type="datetime-local" id="zernio-schedule" class="input-field" />
-    </div>
-    
-    <div class="zernio-actions">
-      <button id="zernio-publish-btn" class="btn btn-primary">
-        <span class="btn-content">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          Publish Now
-        </span>
-      </button>
-      <button id="zernio-schedule-btn" class="btn btn-ghost">
-        <span class="btn-content">📅 Schedule</span>
-      </button>
-    </div>
-    
-    <div id="zernio-status" class="status-message" hidden></div>
-  </div>
-</div>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
     <!-- ============ BLUESKY CONFIGURATION MODAL ============ -->
     <div id="bluesky-modal" class="modal-overlay" hidden>
       <div class="modal-content premium-card">
