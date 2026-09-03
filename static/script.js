@@ -537,12 +537,6 @@ function showScrapedStatus(message, type) {
   }, 8000);
 }
 
-
-
-
-
-
-
 // ==================== ZERNIO (FACEBOOK) FUNCTIONS ====================
 
 function showZernioStatus(message, type) {
