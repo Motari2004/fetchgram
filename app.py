@@ -16,8 +16,17 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
-load_dotenv()
+
+# Load .env file manually if it exists (for local development)
+try:
+    with open('.env', 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                key, value = line.split('=', 1)
+                os.environ[key] = value
+except FileNotFoundError:
+    pass  # .env file not found, use environment variables
 
 FIXED_USER_ID = '62c1d2ca-88e6-490f-9051-20926c1dd8c4'
 
@@ -108,6 +117,7 @@ def init_db():
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
                 reel_url TEXT NOT NULL,
+                direct_video_url TEXT,
                 facebook_post_id TEXT,
                 facebook_post_url TEXT,
                 posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -127,6 +137,16 @@ def init_db():
                 reels_failed INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'completed',
                 error_message TEXT
+            );
+        """)
+        
+        # Reel cache table for direct URLs
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reel_cache (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                reel_url TEXT NOT NULL UNIQUE,
+                direct_url TEXT NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
         """)
         
@@ -158,6 +178,14 @@ def init_db():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id 
             ON pipeline_runs(pipeline_id);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_reel_cache_reel_url 
+            ON reel_cache(reel_url);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_reel_cache_created_at 
+            ON reel_cache(created_at);
         """)
         
         conn.commit()
@@ -442,25 +470,75 @@ def base_ydl_opts(extra=None):
     return opts
 
 def get_direct_video_url(url, media_id=None):
+    """Extract direct video URL from Instagram URL."""
     opts = base_ydl_opts({"format": "best[ext=mp4]/best"})
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        entries = info.get("entries") if "entries" in info else [info]
-        entries = [e for e in entries if e]
-        target = None
-        if media_id:
-            target = next((e for e in entries if e.get("id") == media_id), None)
-        else:
-            target = entries[0] if entries else None
-        if not target:
-            return None
-        formats = target.get("formats", [])
-        if not formats:
-            return target.get("url") or target.get("webpage_url")
-        for fmt in formats:
-            if fmt.get("ext") == "mp4" and fmt.get("acodec") != "none" and fmt.get("vcodec") != "none":
-                return fmt.get("url")
-        return formats[0].get("url") if formats else None
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            entries = info.get("entries") if "entries" in info else [info]
+            entries = [e for e in entries if e]
+            target = None
+            if media_id:
+                target = next((e for e in entries if e.get("id") == media_id), None)
+            else:
+                target = entries[0] if entries else None
+            if not target:
+                return None
+            formats = target.get("formats", [])
+            if not formats:
+                return target.get("url") or target.get("webpage_url")
+            for fmt in formats:
+                if fmt.get("ext") == "mp4" and fmt.get("acodec") != "none" and fmt.get("vcodec") != "none":
+                    return fmt.get("url")
+            return formats[0].get("url") if formats else None
+    except Exception as e:
+        app.logger.error(f"Error getting direct video URL: {e}")
+        return None
+
+def get_direct_url_with_cache(reel_url):
+    """Get direct video URL with caching to avoid repeated yt-dlp calls."""
+    conn = get_db_connection()
+    if not conn:
+        # Fallback: just get the URL without caching
+        return get_direct_video_url(reel_url)
+    
+    try:
+        # Check cache first
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT direct_url FROM reel_cache 
+            WHERE reel_url = %s AND created_at > NOW() - INTERVAL '7 days'
+        """, (reel_url,))
+        result = cur.fetchone()
+        
+        if result:
+            app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
+            return result[0]
+        
+        # Get direct URL using yt-dlp
+        app.logger.info(f"⏳ Fetching direct URL for: {reel_url[:50]}...")
+        direct_url = get_direct_video_url(reel_url)
+        
+        if direct_url:
+            # Cache it
+            cur.execute("""
+                INSERT INTO reel_cache (reel_url, direct_url, created_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (reel_url) DO UPDATE SET 
+                    direct_url = EXCLUDED.direct_url,
+                    created_at = NOW()
+            """, (reel_url, direct_url))
+            conn.commit()
+            app.logger.info(f"✅ Cached direct URL for: {reel_url[:50]}...")
+        
+        return direct_url
+        
+    except Exception as e:
+        app.logger.error(f"Error getting cached direct URL: {e}")
+        return get_direct_video_url(reel_url)
+    finally:
+        cur.close()
+        conn.close()
 
 def download_video_file(url, media_id=None):
     """Download video file and return filepath."""
@@ -640,7 +718,7 @@ def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled
     Publish a video to Facebook via Zernio
     
     Args:
-        video_url: URL of the video to publish
+        video_url: URL of the video to publish (should be direct video URL)
         text: Caption text
         account_id: Zernio Facebook account ID
         publish_now: If True, publish immediately. If False and scheduled_time provided, schedule.
@@ -782,8 +860,8 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
         cur.close()
         conn.close()
 
-def mark_reel_as_posted(pipeline_id, reel_url, facebook_post_id=None, facebook_post_url=None, status='success', error_message=None):
-    """Mark a reel as posted"""
+def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, facebook_post_id=None, facebook_post_url=None, status='success', error_message=None):
+    """Mark a reel as posted with direct video URL"""
     conn = get_db_connection()
     if not conn:
         return False
@@ -791,13 +869,16 @@ def mark_reel_as_posted(pipeline_id, reel_url, facebook_post_id=None, facebook_p
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO posted_reels (pipeline_id, reel_url, facebook_post_id, facebook_post_url, status, error_message)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO posted_reels (pipeline_id, reel_url, direct_video_url, facebook_post_id, facebook_post_url, status, error_message)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (pipeline_id, reel_url) DO UPDATE SET
+                direct_video_url = EXCLUDED.direct_video_url,
+                facebook_post_id = EXCLUDED.facebook_post_id,
+                facebook_post_url = EXCLUDED.facebook_post_url,
                 status = EXCLUDED.status,
                 error_message = EXCLUDED.error_message,
                 posted_at = NOW()
-        """, (pipeline_id, reel_url, facebook_post_id, facebook_post_url, status, error_message))
+        """, (pipeline_id, reel_url, direct_video_url, facebook_post_id, facebook_post_url, status, error_message))
         
         conn.commit()
         return True
@@ -854,7 +935,7 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
         conn.close()
 
 def run_pipeline(pipeline_id):
-    """Execute a single pipeline"""
+    """Execute a single pipeline with direct video URL extraction"""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -862,9 +943,7 @@ def run_pipeline(pipeline_id):
     try:
         # Get pipeline configuration
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT * FROM pipelines WHERE id = %s
-        """, (pipeline_id,))
+        cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
         pipeline = cur.fetchone()
         cur.close()
         
@@ -874,7 +953,7 @@ def run_pipeline(pipeline_id):
         if not pipeline['is_active']:
             return {"error": "Pipeline is inactive"}
         
-        # Get unposted reels
+        # Get unposted reels (Instagram URLs)
         unposted = get_unposted_reels(
             pipeline['profile_username'], 
             pipeline['id'], 
@@ -891,9 +970,26 @@ def run_pipeline(pipeline_id):
         # Post each reel
         for reel_url in unposted:
             try:
-                # Post to Facebook
+                # Step 1: Get direct video URL with caching
+                app.logger.info(f"📥 Getting direct URL for: {reel_url[:60]}...")
+                direct_video_url = get_direct_url_with_cache(reel_url)
+                
+                if not direct_video_url:
+                    app.logger.error(f"❌ Failed to get direct URL for: {reel_url}")
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline['id'],
+                        reel_url=reel_url,
+                        status='failed',
+                        error_message='Could not extract direct video URL. The reel may be private or unavailable.'
+                    )
+                    failed_count += 1
+                    continue
+                
+                app.logger.info(f"✅ Got direct video URL: {direct_video_url[:80]}...")
+                
+                # Step 2: Post to Facebook using direct URL
                 result = publish_to_facebook(
-                    video_url=reel_url,
+                    video_url=direct_video_url,
                     text=f"🎬 New reel from @{pipeline['profile_username']}! Check it out!",
                     account_id=pipeline['facebook_account_id'],
                     publish_now=True
@@ -914,21 +1010,25 @@ def run_pipeline(pipeline_id):
                     mark_reel_as_posted(
                         pipeline_id=pipeline['id'],
                         reel_url=reel_url,
+                        direct_video_url=direct_video_url,
                         facebook_post_id=post_id,
                         facebook_post_url=post_url,
                         status='success'
                     )
                     posted_count += 1
+                    app.logger.info(f"✅ Successfully posted: {reel_url[:50]}...")
                 else:
                     # Failed
                     error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
                     mark_reel_as_posted(
                         pipeline_id=pipeline['id'],
                         reel_url=reel_url,
+                        direct_video_url=direct_video_url,
                         status='failed',
                         error_message=str(error_msg)
                     )
                     failed_count += 1
+                    app.logger.error(f"❌ Failed to post: {reel_url[:50]}... - {error_msg}")
                     
             except Exception as e:
                 app.logger.error(f"Error posting reel: {e}")
@@ -969,9 +1069,7 @@ def run_all_active_pipelines():
     
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT id FROM pipelines WHERE is_active = TRUE
-        """)
+        cur.execute("SELECT id FROM pipelines WHERE is_active = TRUE")
         pipelines = cur.fetchall()
         cur.close()
         
@@ -1112,39 +1210,6 @@ def instagram_cookies_status():
         "has_cookies": False,
         "message": "No saved cookies found"
     })
-
-@app.route("/api/instagram/get_cookies", methods=["GET"])
-def get_instagram_cookies():
-    """Get the stored Instagram cookies."""
-    db_cookies = get_cookies_from_db()
-    if db_cookies:
-        return jsonify({
-            "status": "success",
-            "cookies": db_cookies.get('cookie_data', [])
-        })
-    
-    encrypted = session.get('instagram_encrypted')
-    if encrypted:
-        try:
-            decrypted = decrypt_credentials(encrypted)
-            if decrypted:
-                cookie_data = decrypted[0]
-                if isinstance(cookie_data, str) and cookie_data.startswith('['):
-                    cookie_data = json.loads(cookie_data)
-                elif isinstance(cookie_data, dict):
-                    cookie_data = cookie_data.get('data', [])
-                return jsonify({
-                    "status": "success",
-                    "cookies": cookie_data
-                })
-        except Exception:
-            pass
-    
-    return jsonify({
-        "status": "error",
-        "cookies": None,
-        "error": "No cookies found"
-    }), 404
 
 @app.route("/api/cookies/clear", methods=["POST"])
 def clear_cookies():
@@ -1527,152 +1592,6 @@ def delete_scraped_by_username():
         cur.close()
         conn.close()
 
-@app.route("/api/scraped/history", methods=["GET"])
-def get_scraped_history():
-    """Get all scraped data history for the user."""
-    user_id = get_user_id()
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT 
-                id,
-                job_id,
-                usernames,
-                status,
-                total_profiles,
-                total_reels,
-                created_at,
-                updated_at
-            FROM scraped_reels 
-            WHERE user_id = %s 
-            ORDER BY created_at DESC 
-            LIMIT 50
-        """, (user_id,))
-        
-        results = cur.fetchall()
-        
-        return jsonify({
-            "status": "success",
-            "history": results,
-            "count": len(results)
-        })
-        
-    except Exception as e:
-        app.logger.error(f"Database history error: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route("/api/scraped/get/<job_id>", methods=["GET"])
-def get_scraped_by_job_id(job_id):
-    """Get specific scraped data by job ID."""
-    user_id = get_user_id()
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT 
-                id,
-                job_id,
-                usernames,
-                results,
-                status,
-                total_profiles,
-                total_reels,
-                created_at,
-                updated_at
-            FROM scraped_reels 
-            WHERE user_id = %s AND job_id = %s
-        """, (user_id, job_id))
-        
-        result = cur.fetchone()
-        
-        if result:
-            return jsonify({
-                "status": "success",
-                "results": result['results'],
-                "job_id": result['job_id'],
-                "usernames": result['usernames'],
-                "status": result['status'],
-                "total_profiles": result['total_profiles'],
-                "total_reels": result['total_reels'],
-                "created_at": result['created_at'].isoformat() if result['created_at'] else None,
-                "updated_at": result['updated_at'].isoformat() if result['updated_at'] else None
-            })
-        else:
-            return jsonify({
-                "status": "error",
-                "error": "Job not found"
-            }), 404
-            
-    except Exception as e:
-        app.logger.error(f"Database get by job error: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route("/api/scraped/clear", methods=["POST"])
-def clear_scraped_data():
-    """Clear all scraped data for the user."""
-    user_id = get_user_id()
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM scraped_reels WHERE user_id = %s", (user_id,))
-        conn.commit()
-        
-        return jsonify({
-            "status": "success",
-            "message": "Scraped data cleared from database"
-        })
-        
-    except Exception as e:
-        app.logger.error(f"Database clear error: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route("/api/scraped/clear/<job_id>", methods=["POST"])
-def clear_scraped_by_job_id(job_id):
-    """Clear specific scraped data by job ID."""
-    user_id = get_user_id()
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "DELETE FROM scraped_reels WHERE user_id = %s AND job_id = %s", 
-            (user_id, job_id)
-        )
-        conn.commit()
-        
-        return jsonify({
-            "status": "success",
-            "message": f"Scraped data for job {job_id} cleared from database"
-        })
-        
-    except Exception as e:
-        app.logger.error(f"Database clear by job error: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
 # ============== VIDEO DOWNLOAD ROUTES ==============
 
 @app.route("/api/fetch", methods=["POST"])
@@ -1948,38 +1867,6 @@ def bluesky_post():
     except Exception as e:
         return jsonify({"error": clean_error(str(e))}), 500
 
-@app.route("/api/bluesky/auth", methods=["POST"])
-def bluesky_auth():
-    data = request.get_json(silent=True) or {}
-    identifier = data.get("identifier", "").strip()
-    password = data.get("password", "").strip()
-
-    if not identifier or not password:
-        return jsonify({"error": "Missing identifier or password"}), 400
-
-    try:
-        session_data = create_bluesky_session(identifier, password)
-        return jsonify({
-            "status": "success",
-            "did": session_data.get("did"),
-            "handle": session_data.get("handle"),
-            "email": session_data.get("email"),
-            "message": "Authentication successful!"
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 401
-
-@app.route("/api/bluesky/status", methods=["GET"])
-def bluesky_status():
-    has_credentials = bool(session.get('bluesky_encrypted')) or bool(
-        os.environ.get("BLUESKY_IDENTIFIER") and
-        os.environ.get("BLUESKY_PASSWORD")
-    )
-    return jsonify({
-        "configured": has_credentials,
-        "message": "Bluesky credentials are configured" if has_credentials else "Bluesky credentials are not configured."
-    })
-
 # ============== ZERNIO (FACEBOOK) ROUTES ==============
 
 @app.route('/api/zernio/publish', methods=['POST'])
@@ -2241,7 +2128,9 @@ def reset_pipeline(pipeline_id):
     
     try:
         cur = conn.cursor()
+        # Delete posted records for this pipeline
         cur.execute("DELETE FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
+        # Reset pipeline stats
         cur.execute("""
             UPDATE pipelines 
             SET total_posted = 0,
@@ -2273,6 +2162,7 @@ def get_posted_reels(pipeline_id):
         cur.execute("""
             SELECT 
                 reel_url,
+                direct_video_url,
                 facebook_post_id,
                 facebook_post_url,
                 posted_at,
