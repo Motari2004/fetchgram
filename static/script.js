@@ -1848,7 +1848,6 @@ initSession().then(() => {
     checkInstagramStatus();
     checkBlueskyStatus();
     checkZernioStatus();
-    loadZernioAccounts(); // <-- Add this line to load accounts on page load
     setTimeout(autoLoadScrapedResults, 1000);
 });
 
