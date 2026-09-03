@@ -1151,6 +1151,173 @@ def get_direct_url_from_cache_only(reel_url):
         
         
         
+        
+        
+        
+        
+        
+def run_pipeline(pipeline_id):
+    """Execute a single pipeline - auto-converts URLs to CDN URLs."""
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Database connection failed"}
+    
+    try:
+        # Get pipeline configuration
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
+        pipeline = cur.fetchone()
+        cur.close()
+        
+        if not pipeline:
+            return {"error": "Pipeline not found"}
+        
+        if not pipeline['is_active']:
+            return {"error": "Pipeline is inactive"}
+        
+        # Get unposted reels with captions
+        unposted = get_unposted_reels(
+            pipeline['profile_username'], 
+            pipeline['id'], 
+            pipeline['daily_limit']
+        )
+        
+        if not unposted:
+            log_pipeline_run(pipeline['id'], 0, 0, 'completed', 'No unposted reels found')
+            return {"message": "No unposted reels to post", "posted": 0}
+        
+        posted_count = 0
+        failed_count = 0
+        
+        # Post each reel
+        for reel in unposted:
+            try:
+                reel_url = reel['url']
+                caption = reel.get('caption', '')
+                
+                # If no caption, use fallback
+                if not caption or caption.strip() == '':
+                    caption = f"🎬 New reel from @{pipeline['profile_username']}!"
+                    app.logger.info(f"📝 Using fallback caption for: {reel_url[:50]}...")
+                
+                # Truncate caption if too long
+                if len(caption) > 5000:
+                    caption = caption[:4997] + "..."
+                
+                # 🔥 Get direct CDN URL (auto-convert using yt-dlp)
+                app.logger.info(f"📥 Converting to CDN URL: {reel_url[:60]}...")
+                direct_video_url = get_direct_video_url(reel_url)
+                
+                if not direct_video_url:
+                    app.logger.error(f"❌ Failed to convert: {reel_url}")
+                    
+                    # Try cache as fallback
+                    direct_video_url = get_direct_url_from_cache_only(reel_url)
+                    
+                    if not direct_video_url:
+                        mark_reel_as_posted(
+                            pipeline_id=pipeline['id'],
+                            reel_url=reel_url,
+                            caption=caption,
+                            status='failed',
+                            error_message='Could not convert Instagram URL to CDN URL'
+                        )
+                        failed_count += 1
+                        continue
+                    else:
+                        app.logger.info(f"✅ Using cached CDN URL for: {reel_url[:50]}...")
+                else:
+                    # Cache the URL for future use
+                    cache_direct_url(reel_url, direct_video_url, caption)
+                    app.logger.info(f"✅ Converted to CDN URL: {direct_video_url[:60]}...")
+                
+                # Post to Facebook using the CDN URL
+                result = publish_to_facebook(
+                    video_url=direct_video_url,
+                    text=caption,
+                    account_id=pipeline['facebook_account_id'],
+                    publish_now=True
+                )
+                
+                if result and not result.get('error'):
+                    # Success
+                    post_id = result.get('post', {}).get('_id') or result.get('post_id')
+                    post_url = None
+                    
+                    platforms = result.get('post', {}).get('platforms', [])
+                    for platform in platforms:
+                        if platform.get('platform') == 'facebook':
+                            post_url = platform.get('publishedUrl')
+                            break
+                    
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline['id'],
+                        reel_url=reel_url,
+                        direct_video_url=direct_video_url,
+                        caption=caption,
+                        facebook_post_id=post_id,
+                        facebook_post_url=post_url,
+                        status='success'
+                    )
+                    posted_count += 1
+                    app.logger.info(f"✅ Successfully posted: {reel_url[:50]}...")
+                else:
+                    # Failed
+                    error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline['id'],
+                        reel_url=reel_url,
+                        direct_video_url=direct_video_url,
+                        caption=caption,
+                        status='failed',
+                        error_message=str(error_msg)
+                    )
+                    failed_count += 1
+                    app.logger.error(f"❌ Failed to post: {reel_url[:50]}... - {error_msg}")
+                    
+            except Exception as e:
+                app.logger.error(f"Error posting reel: {e}")
+                mark_reel_as_posted(
+                    pipeline_id=pipeline['id'],
+                    reel_url=reel.get('url', 'unknown'),
+                    caption=reel.get('caption', ''),
+                    status='failed',
+                    error_message=str(e)
+                )
+                failed_count += 1
+        
+        # Update pipeline stats
+        update_pipeline_stats(pipeline['id'], posted_count, failed_count)
+        
+        # Log the run
+        log_pipeline_run(pipeline['id'], posted_count, failed_count, 
+                        'completed' if failed_count == 0 else 'partial')
+        
+        return {
+            "message": f"Posted {posted_count} reels, {failed_count} failed",
+            "posted": posted_count,
+            "failed": failed_count,
+            "total": len(unposted)
+        }
+        
+    except Exception as e:
+        app.logger.error(f"Pipeline execution error: {e}")
+        log_pipeline_run(pipeline_id, 0, 0, 'error', str(e))
+        return {"error": str(e)}
+    finally:
+        conn.close()    
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
 
 def run_all_active_pipelines():
     """Run all active pipelines"""
