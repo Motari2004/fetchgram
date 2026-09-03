@@ -1874,6 +1874,65 @@ def init_session():
         "has_cookies": True  # Always true since we have cookies in DB
     })
 
+
+
+
+
+
+
+
+@app.route('/api/zernio/accounts', methods=['GET'])
+def zernio_list_accounts():
+    """List all connected Zernio Facebook accounts (dynamic from API)"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {ZERNIO_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        # Fetch accounts from Zernio API
+        response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            accounts = data.get('accounts', [])
+            
+            # Filter Facebook accounts and format response
+            facebook_accounts = []
+            for account in accounts:
+                if account.get('platform') == 'facebook':
+                    facebook_accounts.append({
+                        "id": account.get('_id'),
+                        "name": account.get('displayName', 'Unknown'),
+                        "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                        "username": account.get('username', 'N/A'),
+                        "status": account.get('platformStatus', 'unknown')
+                    })
+            
+            return jsonify({
+                "status": "success",
+                "accounts": facebook_accounts,
+                "total": len(facebook_accounts)
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"Zernio API returned {response.status_code}",
+                "accounts": []
+            }), 500
+            
+    except Exception as e:
+        app.logger.error(f"Error fetching Zernio accounts: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "accounts": []
+        }), 500
+
+
+
+
+
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     cookie_status = "configured" if get_cookie_file() else "not configured"
