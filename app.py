@@ -2702,8 +2702,8 @@ def init_session():
 @app.route("/api/sync-captions", methods=["POST"])
 def sync_captions():
     """
-    Sync captions for a specific username.
-    Fetches captions for ALL reels of that profile using the caption service.
+    Sync captions for a specific username - FIRE AND FORGET.
+    Returns immediately, processes in background.
     """
     data = request.get_json(silent=True) or {}
     username = data.get("username", "").strip()
@@ -2711,168 +2711,158 @@ def sync_captions():
     if not username:
         return jsonify({"error": "Username is required"}), 400
     
-    app.logger.info(f"📝 Syncing captions for @{username}")
+    app.logger.info(f"📝 Starting captions sync for @{username}")
     
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
+    # Generate a job ID
+    job_id = str(uuid.uuid4())
     
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Get the latest scraped data for this username
-        cur.execute("""
-            SELECT id, results FROM scraped_reels 
-            WHERE EXISTS (
-                SELECT 1 FROM jsonb_array_elements(results) AS elem
-                WHERE elem->>'username' = %s
-            )
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (username,))
-        
-        result = cur.fetchone()
-        if not result:
-            return jsonify({
-                "error": f"No scraped data found for @{username}",
-                "message": f"Please scrape @{username} first"
-            }), 404
-        
-        results = result['results']
-        updated = False
-        total_reels = 0
-        captions_fetched = 0
-        captions_skipped = 0
-        errors = 0
-        
-        # Process each profile
-        for profile_idx, profile in enumerate(results):
-            if profile.get('username') == username:
-                reels = profile.get('reels', [])
-                total_reels = len(reels)
+    # 🔥 FIRE AND FORGET: Run in background
+    def run_sync():
+        try:
+            conn = get_db_connection()
+            if not conn:
+                app.logger.error("Database connection failed")
+                return
+            
+            try:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
                 
-                app.logger.info(f"📹 Processing {total_reels} reels for @{username}")
+                # Get the latest scraped data
+                cur.execute("""
+                    SELECT id, results FROM scraped_reels 
+                    WHERE EXISTS (
+                        SELECT 1 FROM jsonb_array_elements(results) AS elem
+                        WHERE elem->>'username' = %s
+                    )
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (username,))
                 
-                # 🔥 FIX: Collect all URLs that need captions
-                urls_to_fetch = []
-                reel_indices = []
+                result = cur.fetchone()
+                if not result:
+                    app.logger.error(f"No scraped data found for @{username}")
+                    return
                 
-                for reel_idx, reel in enumerate(reels):
-                    if isinstance(reel, dict):
-                        reel_url = reel.get('url')
-                        existing_caption = reel.get('caption', '')
-                        if existing_caption and existing_caption.strip():
-                            captions_skipped += 1
-                            continue
-                        if reel_url:
-                            urls_to_fetch.append(reel_url)
-                            reel_indices.append(reel_idx)
-                    else:
-                        # Convert string to dict
-                        reel_url = str(reel)
-                        urls_to_fetch.append(reel_url)
-                        reel_indices.append(reel_idx)
+                results = result['results']
+                updated = False
+                total_reels = 0
+                captions_fetched = 0
+                captions_skipped = 0
+                errors = 0
                 
-                # 🔥 FIX: Fetch ALL captions in one batch
-                if urls_to_fetch:
-                    app.logger.info(f"📤 Fetching {len(urls_to_fetch)} captions in batch...")
-                    
-                    # Use the batch endpoint
-                    try:
-                        response = requests.post(
-                            f"{CAPTION_SERVICE_URL}/batch",
-                            json={"urls": urls_to_fetch},
-                            timeout=60 * len(urls_to_fetch),  # 60 seconds per URL
-                            headers={"Content-Type": "application/json"}
-                        )
+                for profile_idx, profile in enumerate(results):
+                    if profile.get('username') == username:
+                        reels = profile.get('reels', [])
+                        total_reels = len(reels)
                         
-                        if response.status_code == 200:
-                            data = response.json()
-                            if data.get('success'):
-                                captions_map = {}
-                                for item in data.get('results', []):
-                                    if item.get('success'):
-                                        captions_map[item['url']] = item.get('caption', '')
-                                
-                                # Update each reel with its caption
-                                for reel_idx, reel_url in zip(reel_indices, urls_to_fetch):
-                                    caption = captions_map.get(reel_url, '')
-                                    if caption:
-                                        results[profile_idx]['reels'][reel_idx]['caption'] = caption
-                                        captions_fetched += 1
-                                        updated = True
-                                    else:
-                                        results[profile_idx]['reels'][reel_idx]['caption'] = ''
-                                        errors += 1
+                        app.logger.info(f"📹 Processing {total_reels} reels for @{username}")
+                        
+                        urls_to_fetch = []
+                        reel_indices = []
+                        
+                        for reel_idx, reel in enumerate(reels):
+                            if isinstance(reel, dict):
+                                reel_url = reel.get('url')
+                                existing_caption = reel.get('caption', '')
+                                if existing_caption and existing_caption.strip():
+                                    captions_skipped += 1
+                                    continue
+                                if reel_url:
+                                    urls_to_fetch.append(reel_url)
+                                    reel_indices.append(reel_idx)
                             else:
-                                app.logger.error("Batch API returned error")
+                                reel_url = str(reel)
+                                urls_to_fetch.append(reel_url)
+                                reel_indices.append(reel_idx)
+                        
+                        if urls_to_fetch:
+                            app.logger.info(f"📤 Fetching {len(urls_to_fetch)} captions in batch...")
+                            
+                            try:
+                                response = requests.post(
+                                    CAPTION_SERVICE_URL,
+                                    json={"urls": urls_to_fetch},
+                                    timeout=120,
+                                    headers={"Content-Type": "application/json"}
+                                )
+                                
+                                if response.status_code == 200:
+                                    data = response.json()
+                                    if data.get('success'):
+                                        captions_map = {}
+                                        for item in data.get('results', []):
+                                            if item.get('success'):
+                                                captions_map[item['url']] = item.get('caption', '')
+                                        
+                                        for reel_idx, reel_url in zip(reel_indices, urls_to_fetch):
+                                            caption = captions_map.get(reel_url, '')
+                                            if caption:
+                                                results[profile_idx]['reels'][reel_idx]['caption'] = caption
+                                                captions_fetched += 1
+                                                updated = True
+                                            else:
+                                                results[profile_idx]['reels'][reel_idx]['caption'] = ''
+                                                errors += 1
+                                    else:
+                                        errors += len(urls_to_fetch)
+                                else:
+                                    errors += len(urls_to_fetch)
+                                    
+                            except Exception as e:
+                                app.logger.error(f"Batch API error: {e}")
                                 errors += len(urls_to_fetch)
                         else:
-                            app.logger.error(f"Batch API error: {response.status_code}")
-                            errors += len(urls_to_fetch)
-                            
-                    except requests.exceptions.Timeout:
-                        app.logger.error("Batch API timeout")
-                        errors += len(urls_to_fetch)
-                    except Exception as e:
-                        app.logger.error(f"Batch API error: {e}")
-                        errors += len(urls_to_fetch)
-                else:
-                    app.logger.info("No URLs need caption fetching")
+                            app.logger.info("No URLs need caption fetching")
+                        
+                        break
                 
-                break
-        
-        if updated:
-            # Save back to database
-            cur.execute("""
-                UPDATE scraped_reels 
-                SET results = %s, updated_at = NOW()
-                WHERE id = %s
-            """, (json.dumps(results), result['id']))
-            conn.commit()
-            
-            # Also update reel_cache
-            for profile in results:
-                for reel in profile.get('reels', []):
-                    if isinstance(reel, dict):
-                        reel_url = reel.get('url')
-                        caption = reel.get('caption', '')
-                        if reel_url and caption:
-                            cur.execute("""
-                                INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
-                                VALUES (%s, '', %s, NOW())
-                                ON CONFLICT (reel_url) DO UPDATE SET 
-                                    caption = EXCLUDED.caption,
-                                    created_at = NOW()
-                            """, (reel_url, caption))
-            conn.commit()
-            
-            return jsonify({
-                "status": "success",
-                "message": f"Synced captions for @{username}",
-                "total_reels": total_reels,
-                "captions_fetched": captions_fetched,
-                "captions_skipped": captions_skipped,
-                "errors": errors,
-                "username": username
-            })
-        else:
-            return jsonify({
-                "status": "success",
-                "message": f"No new captions needed for @{username}",
-                "total_reels": total_reels,
-                "captions_fetched": 0,
-                "captions_skipped": captions_skipped,
-                "errors": errors,
-                "username": username
-            })
-        
-    except Exception as e:
-        app.logger.error(f"Sync captions error: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
+                if updated:
+                    cur.execute("""
+                        UPDATE scraped_reels 
+                        SET results = %s, updated_at = NOW()
+                        WHERE id = %s
+                    """, (json.dumps(results), result['id']))
+                    conn.commit()
+                    
+                    # Update reel_cache
+                    for profile in results:
+                        for reel in profile.get('reels', []):
+                            if isinstance(reel, dict):
+                                reel_url = reel.get('url')
+                                caption = reel.get('caption', '')
+                                if reel_url and caption:
+                                    cur.execute("""
+                                        INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+                                        VALUES (%s, '', %s, NOW())
+                                        ON CONFLICT (reel_url) DO UPDATE SET 
+                                            caption = EXCLUDED.caption,
+                                            created_at = NOW()
+                                    """, (reel_url, caption))
+                    conn.commit()
+                    
+                    app.logger.info(f"✅ Synced {captions_fetched} captions for @{username}")
+                    
+            except Exception as e:
+                app.logger.error(f"Sync error: {e}")
+            finally:
+                cur.close()
+                conn.close()
+                
+        except Exception as e:
+            app.logger.error(f"Background sync error: {e}")
+    
+    # 🔥 Run in background thread
+    import threading
+    thread = threading.Thread(target=run_sync)
+    thread.start()
+    
+    # Return immediately
+    return jsonify({
+        "status": "accepted",
+        "job_id": job_id,
+        "message": f"Caption sync started for @{username}. Results will be updated in the background.",
+        "username": username
+    }), 202
 
 def update_reel_cache(cur, results):
     """Helper function to update reel_cache with captions."""
