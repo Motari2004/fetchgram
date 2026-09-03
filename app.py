@@ -2350,6 +2350,59 @@ def get_pipeline(pipeline_id):
 
 
 
+@app.route('/api/pipelines/<pipeline_id>', methods=['DELETE'])
+def delete_pipeline(pipeline_id):
+    """Delete a pipeline and all its associated data."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        
+        # First, check if pipeline exists
+        cur.execute("SELECT id, name FROM pipelines WHERE id = %s", (pipeline_id,))
+        pipeline = cur.fetchone()
+        
+        if not pipeline:
+            return jsonify({"error": "Pipeline not found"}), 404
+        
+        pipeline_name = pipeline[1]
+        
+        # Delete associated posted_reels (cascade will handle this if set)
+        cur.execute("DELETE FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
+        posted_deleted = cur.rowcount
+        
+        # Delete associated pipeline_runs
+        cur.execute("DELETE FROM pipeline_runs WHERE pipeline_id = %s", (pipeline_id,))
+        runs_deleted = cur.rowcount
+        
+        # Delete the pipeline itself
+        cur.execute("DELETE FROM pipelines WHERE id = %s", (pipeline_id,))
+        
+        conn.commit()
+        
+        app.logger.info(f"🗑️ Deleted pipeline '{pipeline_name}' (ID: {pipeline_id}) with {posted_deleted} posted reels and {runs_deleted} runs")
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Pipeline '{pipeline_name}' deleted successfully",
+            "deleted": {
+                "pipeline_id": pipeline_id,
+                "pipeline_name": pipeline_name,
+                "posted_reels_deleted": posted_deleted,
+                "runs_deleted": runs_deleted
+            }
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Delete pipeline error: {e}")
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
 
 
 

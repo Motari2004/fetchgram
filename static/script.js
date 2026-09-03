@@ -1762,7 +1762,6 @@ async function loadPipelines() {
 
 
 
-
 function renderPipelines(pipelines) {
   if (!pipelinesList) return;
   
@@ -1787,6 +1786,9 @@ function renderPipelines(pipelines) {
           <div class="pipeline-card-actions">
             <button class="btn btn-sm btn-ghost edit-pipeline-btn" data-id="${p.id}" title="Edit Pipeline">
               ✏️
+            </button>
+            <button class="btn btn-sm btn-danger delete-pipeline-btn" data-id="${p.id}" data-name="${escapeHtml(p.name)}" title="Delete Pipeline">
+              🗑️
             </button>
             <button class="btn btn-sm btn-success run-pipeline-btn" data-id="${p.id}">▶ Run</button>
             <button class="btn btn-sm btn-danger reset-pipeline-btn" data-id="${p.id}">↺ Reset</button>
@@ -1846,11 +1848,52 @@ function renderPipelines(pipelines) {
     btn.addEventListener('click', () => togglePipeline(btn.dataset.id, btn.dataset.active === 'true'));
   });
   
-  // 🔥 NEW: Edit button event listeners
   document.querySelectorAll('.edit-pipeline-btn').forEach(btn => {
     btn.addEventListener('click', () => editPipeline(btn.dataset.id));
   });
+  
+  // 🔥 NEW: Delete button event listeners
+  document.querySelectorAll('.delete-pipeline-btn').forEach(btn => {
+    btn.addEventListener('click', () => deletePipeline(btn.dataset.id, btn.dataset.name));
+  });
 }
+
+
+
+// ==================== DELETE PIPELINE ====================
+
+async function deletePipeline(pipelineId, pipelineName) {
+  // Confirmation dialog
+  if (!confirm(`⚠️ Are you sure you want to delete the pipeline "${pipelineName}"?\n\nThis will also delete:\n• All posted reels history for this pipeline\n• All pipeline run logs\n\nThis action cannot be undone!`)) {
+    return;
+  }
+  
+  showPipelinesStatus(`🗑️ Deleting pipeline "${pipelineName}"...`, 'info');
+  
+  try {
+    const response = await fetch(`/api/pipelines/${pipelineId}`, {
+      method: 'DELETE',
+      credentials: 'same-origin'
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok && data.status === 'success') {
+      showPipelinesStatus(
+        `✅ ${data.message} (${data.deleted.posted_reels_deleted} posted reels, ${data.deleted.runs_deleted} run logs removed)`,
+        'success'
+      );
+      // Refresh the pipelines list
+      setTimeout(loadPipelines, 1000);
+    } else {
+      showPipelinesStatus(`❌ Failed to delete pipeline: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (error) {
+    console.error('Delete pipeline error:', error);
+    showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
+  }
+}
+
 
 
 
