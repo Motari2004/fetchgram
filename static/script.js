@@ -1755,6 +1755,14 @@ async function loadPipelines() {
   }
 }
 
+
+
+
+
+
+
+
+
 function renderPipelines(pipelines) {
   if (!pipelinesList) return;
   
@@ -1777,6 +1785,9 @@ function renderPipelines(pipelines) {
             <span class="pipeline-status ${statusClass}">${statusText}</span>
           </div>
           <div class="pipeline-card-actions">
+            <button class="btn btn-sm btn-ghost edit-pipeline-btn" data-id="${p.id}" title="Edit Pipeline">
+              ✏️
+            </button>
             <button class="btn btn-sm btn-success run-pipeline-btn" data-id="${p.id}">▶ Run</button>
             <button class="btn btn-sm btn-danger reset-pipeline-btn" data-id="${p.id}">↺ Reset</button>
             <button class="btn btn-sm btn-ghost toggle-pipeline-btn" data-id="${p.id}" data-active="${p.is_active}">
@@ -1834,7 +1845,171 @@ function renderPipelines(pipelines) {
   document.querySelectorAll('.toggle-pipeline-btn').forEach(btn => {
     btn.addEventListener('click', () => togglePipeline(btn.dataset.id, btn.dataset.active === 'true'));
   });
+  
+  // 🔥 NEW: Edit button event listeners
+  document.querySelectorAll('.edit-pipeline-btn').forEach(btn => {
+    btn.addEventListener('click', () => editPipeline(btn.dataset.id));
+  });
 }
+
+
+
+
+
+
+
+
+// ==================== EDIT PIPELINE FUNCTIONS ====================
+
+// Open edit modal with pipeline data
+async function editPipeline(pipelineId) {
+  const modal = document.getElementById('edit-pipeline-modal');
+  const status = document.getElementById('edit-pipeline-status');
+  
+  modal.hidden = false;
+  status.style.display = 'none';
+  status.className = 'status-message';
+  
+  try {
+    // Fetch pipeline data
+    const response = await fetch(`/api/pipelines/${pipelineId}`, {
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success' && data.pipeline) {
+      const pipeline = data.pipeline;
+      
+      // Populate form fields
+      document.getElementById('edit-pipeline-id').value = pipeline.id;
+      document.getElementById('edit-pipeline-name').value = pipeline.name || '';
+      document.getElementById('edit-pipeline-username').value = pipeline.profile_username || '';
+      document.getElementById('edit-pipeline-daily-limit').value = pipeline.daily_limit || 2;
+      document.getElementById('edit-pipeline-active').checked = pipeline.is_active;
+      
+      // Populate Facebook accounts dropdown
+      await populateEditFacebookAccounts(pipeline.facebook_account_id);
+    } else {
+      showEditPipelineStatus('❌ Failed to load pipeline data', 'error');
+    }
+  } catch (error) {
+    console.error('Error loading pipeline:', error);
+    showEditPipelineStatus(`❌ Error: ${error.message}`, 'error');
+  }
+}
+
+// Populate Facebook accounts in edit modal
+async function populateEditFacebookAccounts(selectedId) {
+  const select = document.getElementById('edit-pipeline-facebook-account');
+  
+  try {
+    const response = await fetch('/api/zernio/accounts', {
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    select.innerHTML = '';
+    
+    if (data.status === 'success' && data.accounts && data.accounts.length > 0) {
+      data.accounts.forEach(account => {
+        const option = document.createElement('option');
+        option.value = account.id;
+        option.textContent = account.name;
+        if (account.id === selectedId) {
+          option.selected = true;
+        }
+        select.appendChild(option);
+      });
+    } else {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No Facebook accounts found';
+      option.disabled = true;
+      select.appendChild(option);
+    }
+  } catch (error) {
+    console.error('Error loading Facebook accounts:', error);
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Error loading accounts';
+    option.disabled = true;
+    select.appendChild(option);
+  }
+}
+
+// Show status message in edit modal
+function showEditPipelineStatus(message, type) {
+  const status = document.getElementById('edit-pipeline-status');
+  status.textContent = message;
+  status.className = 'status-message ' + type;
+  status.style.display = 'block';
+}
+
+// Save pipeline edits
+document.getElementById('save-pipeline-edit-btn')?.addEventListener('click', async function() {
+  const pipelineId = document.getElementById('edit-pipeline-id').value;
+  const name = document.getElementById('edit-pipeline-name').value.trim();
+  const username = document.getElementById('edit-pipeline-username').value.trim();
+  const accountId = document.getElementById('edit-pipeline-facebook-account').value;
+  const dailyLimit = parseInt(document.getElementById('edit-pipeline-daily-limit').value) || 2;
+  const isActive = document.getElementById('edit-pipeline-active').checked;
+  
+  if (!name || !username || !accountId) {
+    showEditPipelineStatus('❌ Please fill in all fields', 'error');
+    return;
+  }
+  
+  this.disabled = true;
+  this.textContent = 'Saving...';
+  
+  try {
+    const response = await fetch(`/api/pipelines/${pipelineId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        name,
+        profile_username: username,
+        facebook_account_id: accountId,
+        daily_limit: dailyLimit,
+        is_active: isActive
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok) {
+      showEditPipelineStatus(`✅ Pipeline "${name}" updated successfully!`, 'success');
+      setTimeout(() => {
+        document.getElementById('edit-pipeline-modal').hidden = true;
+        loadPipelines(); // Refresh the pipelines list
+      }, 1500);
+    } else {
+      showEditPipelineStatus(`❌ ${data.error || 'Failed to update pipeline'}`, 'error');
+    }
+  } catch (error) {
+    showEditPipelineStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.textContent = 'Save Changes';
+  }
+});
+
+// Close edit modal
+document.getElementById('edit-pipeline-modal-close')?.addEventListener('click', function() {
+  document.getElementById('edit-pipeline-modal').hidden = true;
+});
+
+document.getElementById('edit-pipeline-modal')?.addEventListener('click', function(e) {
+  if (e.target === this) {
+    this.hidden = true;
+  }
+});
+
+
+
+
+
 
 async function runPipeline(pipelineId) {
   showPipelinesStatus('⏳ Running pipeline...', 'info');

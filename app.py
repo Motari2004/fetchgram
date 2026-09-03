@@ -2304,6 +2304,56 @@ def init_session():
         "has_cookies": True
     })
 
+
+
+
+# Add this new endpoint to get a single pipeline
+@app.route('/api/pipelines/<pipeline_id>', methods=['GET'])
+def get_pipeline(pipeline_id):
+    """Get a single pipeline by ID"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                p.*,
+                COUNT(pr.id) as total_posted_count,
+                SUM(CASE WHEN pr.status = 'success' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN pr.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                MAX(pr.posted_at) as last_post_time
+            FROM pipelines p
+            LEFT JOIN posted_reels pr ON p.id = pr.pipeline_id
+            WHERE p.id = %s
+            GROUP BY p.id
+        """, (pipeline_id,))
+        
+        pipeline = cur.fetchone()
+        
+        if not pipeline:
+            return jsonify({"error": "Pipeline not found"}), 404
+        
+        return jsonify({
+            "status": "success",
+            "pipeline": pipeline
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
+
+
+
+
+
+
+
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     cookie_status = "configured" if get_cookie_file() else "not configured"
@@ -2331,6 +2381,9 @@ def after_request(response):
         samesite='Lax'
     )
     return response
+
+
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

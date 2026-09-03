@@ -439,6 +439,65 @@
       </div>
     </div>
 
+
+
+
+
+<!-- ============ EDIT PIPELINE MODAL ============ -->
+<div id="edit-pipeline-modal" class="modal-overlay" hidden>
+  <div class="modal-content premium-card">
+    <div class="modal-header">
+      <h3>✏️ Edit Pipeline</h3>
+      <button id="edit-pipeline-modal-close" class="modal-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-desc">Update your pipeline configuration.</p>
+      
+      <input type="hidden" id="edit-pipeline-id" />
+      
+      <div class="form-group">
+        <label for="edit-pipeline-name">Pipeline Name</label>
+        <input type="text" id="edit-pipeline-name" class="input-field" placeholder="My Pipeline" />
+      </div>
+      
+      <div class="form-group">
+        <label for="edit-pipeline-username">Profile Username</label>
+        <input type="text" id="edit-pipeline-username" class="input-field" placeholder="nasa" />
+      </div>
+      
+      <div class="form-group">
+        <label for="edit-pipeline-facebook-account">Facebook Account ID</label>
+        <select id="edit-pipeline-facebook-account" class="input-field">
+          <option value="">Select Facebook account...</option>
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label for="edit-pipeline-daily-limit">Daily Post Limit</label>
+        <input type="number" id="edit-pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />
+      </div>
+      
+      <div class="form-group checkbox-group">
+        <label class="checkbox-label">
+          <input type="checkbox" id="edit-pipeline-active" checked />
+          <span>Active</span>
+        </label>
+      </div>
+      
+      <div class="form-group">
+        <button id="save-pipeline-edit-btn" class="btn btn-primary btn-block">Save Changes</button>
+      </div>
+      
+      <div id="edit-pipeline-status" class="status-message" hidden></div>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
     <!-- ============ BLUESKY CONFIGURATION MODAL ============ -->
     <div id="bluesky-modal" class="modal-overlay" hidden>
       <div class="modal-content premium-card">
