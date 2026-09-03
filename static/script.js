@@ -68,6 +68,16 @@ const cookieUploadStatus = document.getElementById('cookie-upload-status');
 const allUsernamesSection = document.getElementById('all-usernames-section');
 const allUsernamesList = document.getElementById('all-usernames-list');
 
+// Sync elements
+const syncControls = document.getElementById('sync-controls');
+const syncUsernameSelect = document.getElementById('sync-username-select');
+const syncExecuteBtn = document.getElementById('sync-execute-btn');
+const syncStatus = document.getElementById('sync-status');
+const syncProgress = document.getElementById('sync-progress');
+const syncProgressBar = document.getElementById('sync-progress-bar');
+const syncProgressText = document.getElementById('sync-progress-text');
+const syncCaptionsBtn = document.getElementById('sync-captions-btn');
+
 // Zernio (Facebook) elements
 const zernioAccountSelect = document.getElementById('zernio-account-select');
 const zernioText = document.getElementById('zernio-text');
@@ -551,6 +561,128 @@ function showScrapedStatus(message, type) {
     statusEl.style.display = 'none';
   }, 8000);
 }
+
+// ==================== SYNC CAPTIONS FUNCTIONS ====================
+
+function showSyncControls(usernames) {
+  if (!syncControls || !syncUsernameSelect) return;
+  
+  if (usernames && usernames.length > 0) {
+    syncControls.style.display = 'block';
+    syncUsernameSelect.innerHTML = '';
+    
+    usernames.forEach(username => {
+      const option = document.createElement('option');
+      option.value = username;
+      option.textContent = `@${username}`;
+      syncUsernameSelect.appendChild(option);
+    });
+    
+    if (usernames.length === 1) {
+      syncUsernameSelect.value = usernames[0];
+    }
+  } else {
+    syncControls.style.display = 'none';
+  }
+}
+
+function showSyncStatus(message, type) {
+  if (!syncStatus) return;
+  
+  syncStatus.textContent = message;
+  syncStatus.className = type || '';
+  syncStatus.style.display = 'block';
+  
+  if (type === 'success' || type === 'error') {
+    setTimeout(() => {
+      syncStatus.style.display = 'none';
+    }, 8000);
+  }
+}
+
+// Sync Captions Button - opens sync controls
+syncCaptionsBtn?.addEventListener('click', function() {
+  // If sync controls are hidden, show them
+  if (syncControls.style.display === 'none' || syncControls.style.display === '') {
+    // Load available profiles first
+    const usernames = window.allUsernames || [];
+    if (usernames.length > 0) {
+      showSyncControls(usernames);
+      showSyncStatus('Select a profile and click "Sync Captions"', 'info');
+      // Scroll to sync controls
+      syncControls.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+      showSyncStatus('No profiles found. Load results first.', 'error');
+    }
+  } else {
+    // Toggle visibility
+    syncControls.style.display = syncControls.style.display === 'none' ? 'block' : 'none';
+  }
+});
+
+// Execute Sync
+syncExecuteBtn?.addEventListener('click', async function() {
+  const username = syncUsernameSelect?.value;
+  
+  if (!username) {
+    showSyncStatus('❌ Please select a profile', 'error');
+    return;
+  }
+  
+  if (!confirm(`🔄 Fetch captions for all reels of @${username}?\n\nThis may take a few moments depending on the number of reels.`)) {
+    return;
+  }
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Syncing...';
+  
+  if (syncProgress) syncProgress.style.display = 'block';
+  if (syncProgressBar) syncProgressBar.style.width = '10%';
+  if (syncProgressText) syncProgressText.textContent = 'Starting...';
+  
+  showSyncStatus(`⏳ Fetching captions for @${username}...`, 'info');
+  
+  try {
+    const response = await fetch('/api/sync-captions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username })
+    });
+    
+    const data = await response.json();
+    
+    if (syncProgressBar) syncProgressBar.style.width = '100%';
+    if (syncProgressText) syncProgressText.textContent = 'Complete!';
+    
+    if (response.ok && data.status === 'success') {
+      showSyncStatus(
+        `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
+        'success'
+      );
+      
+      // Refresh the scraped results to show new captions
+      setTimeout(() => {
+        autoLoadScrapedResults();
+      }, 1000);
+      
+    } else {
+      showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
+    }
+    
+  } catch (error) {
+    console.error('Sync error:', error);
+    showSyncStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
+    
+    setTimeout(() => {
+      if (syncProgress) syncProgress.style.display = 'none';
+      if (syncProgressBar) syncProgressBar.style.width = '0%';
+    }, 3000);
+  }
+});
 
 // ==================== ZERNIO (FACEBOOK) FUNCTIONS ====================
 
@@ -1086,181 +1218,6 @@ async function deleteProfile(username) {
   }
 }
 
-
-
-
-
-
-
-
-// ==================== SYNC CAPTIONS ====================
-
-// Show sync controls after loading results
-function showSyncControls(usernames) {
-  const controls = document.getElementById('sync-controls');
-  const select = document.getElementById('sync-username-select');
-  
-  if (!controls || !select) return;
-  
-  if (usernames && usernames.length > 0) {
-    controls.style.display = 'block';
-    select.innerHTML = '';
-    
-    usernames.forEach(username => {
-      const option = document.createElement('option');
-      option.value = username;
-      option.textContent = `@${username}`;
-      select.appendChild(option);
-    });
-    
-    // If only one username, auto-select it
-    if (usernames.length === 1) {
-      select.value = usernames[0];
-    }
-  } else {
-    controls.style.display = 'none';
-  }
-}
-
-// Sync captions for selected profile
-document.getElementById('sync-execute-btn')?.addEventListener('click', async function() {
-  const select = document.getElementById('sync-username-select');
-  const username = select?.value;
-  const status = document.getElementById('sync-status');
-  const progress = document.getElementById('sync-progress');
-  const progressBar = document.getElementById('sync-progress-bar');
-  const progressText = document.getElementById('sync-progress-text');
-  
-  if (!username) {
-    showSyncStatus('❌ Please select a profile', 'error');
-    return;
-  }
-  
-  // Confirm before syncing
-  if (!confirm(`🔄 Fetch captions for all reels of @${username}?\n\nThis may take a few moments depending on the number of reels.`)) {
-    return;
-  }
-  
-  this.disabled = true;
-  this.innerHTML = '<span class="btn-spinner"></span> Syncing...';
-  
-  // Show progress
-  progress.style.display = 'block';
-  progressBar.style.width = '10%';
-  progressText.textContent = 'Starting...';
-  
-  showSyncStatus(`⏳ Fetching captions for @${username}...`, 'info');
-  
-  try {
-    const response = await fetch('/api/sync-captions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ username })
-    });
-    
-    const data = await response.json();
-    
-    progressBar.style.width = '100%';
-    progressText.textContent = 'Complete!';
-    
-    if (response.ok && data.status === 'success') {
-      showSyncStatus(
-        `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped} already had captions, ${data.errors} errors)`,
-        'success'
-      );
-      
-      // Refresh the scraped results to show new captions
-      setTimeout(() => {
-        autoLoadScrapedResults();
-      }, 1000);
-      
-    } else {
-      showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
-    }
-    
-  } catch (error) {
-    console.error('Sync error:', error);
-    showSyncStatus(`❌ Error: ${error.message}`, 'error');
-  } finally {
-    this.disabled = false;
-    this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
-    
-    setTimeout(() => {
-      progress.style.display = 'none';
-      progressBar.style.width = '0%';
-    }, 3000);
-  }
-});
-
-function showSyncStatus(message, type) {
-  const status = document.getElementById('sync-status');
-  if (!status) return;
-  
-  status.textContent = message;
-  status.className = type || 'info';
-  status.style.display = 'block';
-  
-  if (type === 'success' || type === 'error') {
-    setTimeout(() => {
-      status.style.display = 'none';
-    }, 8000);
-  }
-}
-
-// Update the renderScrapedResults function to show sync controls
-// Add this at the end of the function
-function renderScrapedResults(results, stats, isLoading = false) {
-  // ... existing code ...
-  
-  // Show sync controls with available usernames
-  if (results && results.length > 0) {
-    const usernames = results.map(p => p.username);
-    showSyncControls(usernames);
-  } else {
-    showSyncControls([]);
-  }
-  
-  // ... rest of existing code ...
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ==================== SCRAPED REELS FUNCTIONS ====================
 
 function renderScrapedResults(results, stats, isLoading = false) {
@@ -1274,9 +1231,19 @@ function renderScrapedResults(results, stats, isLoading = false) {
       const usernames = results.map(p => `@${p.username}`).join(', ');
       allUsernamesList.textContent = usernames;
       allUsernamesSection.hidden = false;
+      window.allUsernames = usernames;
     } else {
       allUsernamesSection.hidden = true;
+      window.allUsernames = [];
     }
+  }
+  
+  // Show sync controls if we have results
+  if (results && results.length > 0) {
+    const usernames = results.map(p => p.username);
+    showSyncControls(usernames);
+  } else {
+    showSyncControls([]);
   }
   
   if (isLoading) {
@@ -1360,7 +1327,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
     if (reelCount > 0) {
       const reelsToShow = profile.reels.slice(0, 50);
       reelsToShow.forEach((reel, idx) => {
-        // 🔥 Handle both string URLs and objects with captions
         let reelUrl = reel;
         let reelCaption = '';
         if (typeof reel === 'object') {
@@ -1415,39 +1381,6 @@ function renderScrapedResults(results, stats, isLoading = false) {
     });
   });
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ==================== SCRAPED REELS HELPER FUNCTIONS ====================
 
@@ -1972,13 +1905,6 @@ async function loadPipelines() {
   }
 }
 
-
-
-
-
-
-
-
 function renderPipelines(pipelines) {
   if (!pipelinesList) return;
   
@@ -2069,18 +1995,14 @@ function renderPipelines(pipelines) {
     btn.addEventListener('click', () => editPipeline(btn.dataset.id));
   });
   
-  // 🔥 NEW: Delete button event listeners
   document.querySelectorAll('.delete-pipeline-btn').forEach(btn => {
     btn.addEventListener('click', () => deletePipeline(btn.dataset.id, btn.dataset.name));
   });
 }
 
-
-
 // ==================== DELETE PIPELINE ====================
 
 async function deletePipeline(pipelineId, pipelineName) {
-  // Confirmation dialog
   if (!confirm(`⚠️ Are you sure you want to delete the pipeline "${pipelineName}"?\n\nThis will also delete:\n• All posted reels history for this pipeline\n• All pipeline run logs\n\nThis action cannot be undone!`)) {
     return;
   }
@@ -2100,7 +2022,6 @@ async function deletePipeline(pipelineId, pipelineName) {
         `✅ ${data.message} (${data.deleted.posted_reels_deleted} posted reels, ${data.deleted.runs_deleted} run logs removed)`,
         'success'
       );
-      // Refresh the pipelines list
       setTimeout(loadPipelines, 1000);
     } else {
       showPipelinesStatus(`❌ Failed to delete pipeline: ${data.error || 'Unknown error'}`, 'error');
@@ -2111,17 +2032,8 @@ async function deletePipeline(pipelineId, pipelineName) {
   }
 }
 
-
-
-
-
-
-
-
-
 // ==================== EDIT PIPELINE FUNCTIONS ====================
 
-// Open edit modal with pipeline data
 async function editPipeline(pipelineId) {
   const modal = document.getElementById('edit-pipeline-modal');
   const status = document.getElementById('edit-pipeline-status');
@@ -2131,7 +2043,6 @@ async function editPipeline(pipelineId) {
   status.className = 'status-message';
   
   try {
-    // Fetch pipeline data
     const response = await fetch(`/api/pipelines/${pipelineId}`, {
       credentials: 'same-origin'
     });
@@ -2140,14 +2051,12 @@ async function editPipeline(pipelineId) {
     if (data.status === 'success' && data.pipeline) {
       const pipeline = data.pipeline;
       
-      // Populate form fields
       document.getElementById('edit-pipeline-id').value = pipeline.id;
       document.getElementById('edit-pipeline-name').value = pipeline.name || '';
       document.getElementById('edit-pipeline-username').value = pipeline.profile_username || '';
       document.getElementById('edit-pipeline-daily-limit').value = pipeline.daily_limit || 2;
       document.getElementById('edit-pipeline-active').checked = pipeline.is_active;
       
-      // Populate Facebook accounts dropdown
       await populateEditFacebookAccounts(pipeline.facebook_account_id);
     } else {
       showEditPipelineStatus('❌ Failed to load pipeline data', 'error');
@@ -2158,7 +2067,6 @@ async function editPipeline(pipelineId) {
   }
 }
 
-// Populate Facebook accounts in edit modal
 async function populateEditFacebookAccounts(selectedId) {
   const select = document.getElementById('edit-pipeline-facebook-account');
   
@@ -2197,7 +2105,6 @@ async function populateEditFacebookAccounts(selectedId) {
   }
 }
 
-// Show status message in edit modal
 function showEditPipelineStatus(message, type) {
   const status = document.getElementById('edit-pipeline-status');
   status.textContent = message;
@@ -2205,7 +2112,6 @@ function showEditPipelineStatus(message, type) {
   status.style.display = 'block';
 }
 
-// Save pipeline edits
 document.getElementById('save-pipeline-edit-btn')?.addEventListener('click', async function() {
   const pipelineId = document.getElementById('edit-pipeline-id').value;
   const name = document.getElementById('edit-pipeline-name').value.trim();
@@ -2242,7 +2148,7 @@ document.getElementById('save-pipeline-edit-btn')?.addEventListener('click', asy
       showEditPipelineStatus(`✅ Pipeline "${name}" updated successfully!`, 'success');
       setTimeout(() => {
         document.getElementById('edit-pipeline-modal').hidden = true;
-        loadPipelines(); // Refresh the pipelines list
+        loadPipelines();
       }, 1500);
     } else {
       showEditPipelineStatus(`❌ ${data.error || 'Failed to update pipeline'}`, 'error');
@@ -2255,7 +2161,6 @@ document.getElementById('save-pipeline-edit-btn')?.addEventListener('click', asy
   }
 });
 
-// Close edit modal
 document.getElementById('edit-pipeline-modal-close')?.addEventListener('click', function() {
   document.getElementById('edit-pipeline-modal').hidden = true;
 });
@@ -2265,11 +2170,6 @@ document.getElementById('edit-pipeline-modal')?.addEventListener('click', functi
     this.hidden = true;
   }
 });
-
-
-
-
-
 
 async function runPipeline(pipelineId) {
   showPipelinesStatus('⏳ Running pipeline...', 'info');
