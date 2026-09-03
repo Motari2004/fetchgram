@@ -111,7 +111,7 @@ def init_db():
             );
         """)
         
-        # Posted reels table - ADDED caption column
+        # Posted reels table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS posted_reels (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -128,7 +128,7 @@ def init_db():
             );
         """)
         
-        # Add columns if they don't exist (for existing databases)
+        # Add columns if they don't exist
         cur.execute("""
             ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;
         """)
@@ -149,17 +149,18 @@ def init_db():
             );
         """)
         
-        # Reel cache table for direct URLs
+        # Reel cache table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS reel_cache (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 reel_url TEXT NOT NULL UNIQUE,
                 direct_url TEXT NOT NULL,
+                caption TEXT,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
         """)
         
-        # Create indexes for faster queries
+        # Create indexes
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id 
             ON scraped_reels(user_id);
@@ -207,6 +208,68 @@ def init_db():
 
 # Initialize database on startup
 init_db()
+
+# ============== CAPTION SERVICE INTEGRATION ==============
+
+CAPTION_SERVICE_URL = os.environ.get('CAPTION_SERVICE_URL', 'https://copytxt-caption-automation.onrender.com/api/caption')
+
+def fetch_captions_batch(reel_urls):
+    """Fetch captions from the caption service."""
+    if not reel_urls:
+        return {}
+    
+    try:
+        response = requests.post(
+            f"{CAPTION_SERVICE_URL}/batch",
+            json={"urls": reel_urls},
+            timeout=60,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                results = {}
+                for item in data.get('results', []):
+                    if item.get('success'):
+                        results[item['url']] = item.get('caption', '')
+                return results
+        return {}
+    except Exception as e:
+        app.logger.error(f"Caption service error: {e}")
+        return {}
+
+def process_reels_with_captions(reels):
+    """Process reels - fetch captions for those without them."""
+    urls_to_fetch = []
+    processed_reels = []
+    
+    for reel in reels:
+        if isinstance(reel, str):
+            urls_to_fetch.append(reel)
+            processed_reels.append({"url": reel, "caption": ""})
+        elif isinstance(reel, dict):
+            url = reel.get('url')
+            caption = reel.get('caption', '')
+            if url:
+                if caption and caption.strip():
+                    processed_reels.append(reel)
+                else:
+                    urls_to_fetch.append(url)
+                    processed_reels.append({"url": url, "caption": ""})
+            else:
+                processed_reels.append(reel)
+        else:
+            processed_reels.append({"url": str(reel), "caption": ""})
+    
+    if urls_to_fetch:
+        app.logger.info(f"📝 Fetching {len(urls_to_fetch)} captions...")
+        captions_map = fetch_captions_batch(urls_to_fetch)
+        for reel in processed_reels:
+            if reel.get('url') in captions_map:
+                reel['caption'] = captions_map[reel['url']] or ''
+    
+    return processed_reels
 
 # ============== COOKIE STORAGE FUNCTIONS ==============
 
@@ -920,15 +983,13 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
         """, (pipeline_id,))
         posted_urls = {row[0] for row in cur.fetchall()}
         
-        # Filter unposted reels - handle both string URLs and dict objects with captions
+        # Filter unposted reels
         unposted = []
         for reel in profile_reels:
             if isinstance(reel, str):
-                # Old format: just a URL string
                 if reel not in posted_urls:
                     unposted.append({"url": reel, "caption": ""})
             elif isinstance(reel, dict):
-                # New format: object with url and caption
                 reel_url = reel.get('url')
                 if reel_url and reel_url not in posted_urls:
                     unposted.append({
@@ -936,12 +997,10 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
                         "caption": reel.get('caption', '')
                     })
             else:
-                # Fallback
                 reel_url = str(reel)
                 if reel_url not in posted_urls:
                     unposted.append({"url": reel_url, "caption": ""})
         
-        # Limit to daily_limit
         return unposted[:limit]
         
     except Exception as e:
@@ -1083,15 +1142,15 @@ def run_pipeline(pipeline_id):
                 if not caption or caption.strip() == '':
                     caption = f"🎬 New reel from @{pipeline['profile_username']}!"
                 
-                # Truncate caption if too long (Facebook max 5,000 characters)
+                # Truncate caption if too long
                 if len(caption) > 5000:
                     caption = caption[:4997] + "..."
                 
-                # Get direct video URL with caching (also gets caption)
+                # Get direct video URL with caching
                 app.logger.info(f"📥 Getting direct URL for: {reel_url[:60]}...")
                 direct_video_url, cached_caption = get_direct_url_with_caption_cache(reel_url)
                 
-                # Use cached caption if available and we don't have one
+                # Use cached caption if available
                 if cached_caption and (not caption or caption == f"🎬 New reel from @{pipeline['profile_username']}!"):
                     caption = cached_caption
                     if len(caption) > 5000:
@@ -1366,11 +1425,13 @@ def clear_cookies():
 
 @app.route("/api/scrape/proxy", methods=["POST"])
 def scrape_proxy():
-    """Proxy endpoint that retrieves cookies from Neon PostgreSQL or session."""
+    """Proxy endpoint that retrieves cookies and fetches captions."""
     data = request.get_json(silent=True) or {}
     usernames = data.get("usernames", [])
+    fetch_captions = data.get("fetch_captions", True)
     
     app.logger.info(f"📝 Scraping usernames: {usernames}")
+    app.logger.info(f"📝 Fetch captions: {fetch_captions}")
     
     cookies = None
     db_cookies = get_cookies_from_db()
@@ -1421,6 +1482,18 @@ def scrape_proxy():
             result_data = response.json()
             if result_data.get('job_id') and result_data.get('results'):
                 results = result_data.get('results', [])
+                
+                # 🔥 NEW: Process captions on Vercel side
+                if fetch_captions:
+                    app.logger.info("📝 Processing captions on Vercel...")
+                    for profile in results:
+                        if isinstance(profile, dict):
+                            reels = profile.get('reels', [])
+                            if reels:
+                                profile['reels'] = process_reels_with_captions(reels)
+                                with_captions = sum(1 for r in profile['reels'] if r.get('caption') and r['caption'].strip())
+                                app.logger.info(f"  @{profile.get('username')}: {with_captions}/{len(reels)} captions")
+                
                 extracted_usernames = []
                 for profile in results:
                     if isinstance(profile, dict):
@@ -1527,7 +1600,7 @@ def store_scraped_data():
                     if username:
                         usernames.append(username)
         
-        # Process results to ensure each reel has a caption field
+        # Process results - PRESERVE captions
         processed_results = []
         for profile in results:
             if isinstance(profile, dict):
@@ -1536,14 +1609,15 @@ def store_scraped_data():
                 processed_reels = []
                 for reel in reels:
                     if isinstance(reel, str):
-                        # Old format: just URL - try to fetch caption
                         processed_reels.append({
                             "url": reel,
                             "caption": ""
                         })
                     elif isinstance(reel, dict):
-                        # New format: already has caption
-                        processed_reels.append(reel)
+                        processed_reels.append({
+                            "url": reel.get('url', ''),
+                            "caption": reel.get('caption', '')
+                        })
                     else:
                         processed_reels.append({
                             "url": str(reel),
@@ -1602,6 +1676,8 @@ def store_scraped_data():
     finally:
         cur.close()
         conn.close()
+
+# ============== REST OF ROUTES (unchanged) ==============
 
 @app.route("/api/scraped/latest", methods=["GET"])
 def get_scraped_data():
