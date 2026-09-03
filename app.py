@@ -1527,7 +1527,7 @@ def store_scraped_data():
                     if username:
                         usernames.append(username)
         
-        # Process results to ensure each reel has a caption field
+        # 🔥 Process results - PRESERVE captions from Render
         processed_results = []
         for profile in results:
             if isinstance(profile, dict):
@@ -1536,14 +1536,17 @@ def store_scraped_data():
                 processed_reels = []
                 for reel in reels:
                     if isinstance(reel, str):
-                        # Old format: just URL - try to fetch caption
+                        # Fallback: just URL, no caption
                         processed_reels.append({
                             "url": reel,
                             "caption": ""
                         })
                     elif isinstance(reel, dict):
-                        # New format: already has caption
-                        processed_reels.append(reel)
+                        # ✅ Preserve existing caption from Render
+                        processed_reels.append({
+                            "url": reel.get('url', ''),
+                            "caption": reel.get('caption', '')
+                        })
                     else:
                         processed_reels.append({
                             "url": str(reel),
