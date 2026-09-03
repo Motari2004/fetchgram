@@ -111,7 +111,7 @@ init_db()
 def get_user_id():
     """
     Get or create a persistent user ID.
-    Uses a browser cookie (which survives page refreshes) instead of Flask session.
+    Uses a fixed user_id from database instead of creating new ones per device.
     """
     # First try to get from request cookies (persistent)
     user_id = request.cookies.get('user_id')
@@ -120,9 +120,28 @@ def get_user_id():
     if not user_id:
         user_id = session.get('user_id')
     
+    # If still not found, check if there's already a user in the database
+    if not user_id:
+        conn = get_db_connection()
+        if conn:
+            try:
+                cur = conn.cursor()
+                # Get the first user_id from the database
+                cur.execute("SELECT user_id FROM user_cookies LIMIT 1")
+                result = cur.fetchone()
+                if result:
+                    user_id = result[0]
+                    app.logger.info(f"✅ Using existing user_id from database: {user_id}")
+                cur.close()
+            except Exception as e:
+                app.logger.error(f"Error getting user_id from database: {e}")
+            finally:
+                conn.close()
+    
     # If still not found, create new one
     if not user_id:
         user_id = str(uuid.uuid4())
+        app.logger.info(f"🆕 Created new user_id: {user_id}")
     
     # Store in session for this request
     session['user_id'] = user_id
