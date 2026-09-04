@@ -683,7 +683,7 @@ syncExecuteBtn?.addEventListener('click', async function() {
     if (syncProgressBar) syncProgressBar.style.width = '100%';
     if (syncProgressText) syncProgressText.textContent = 'Complete!';
     
-    if (response.ok && data.status === 'success') {
+    if (response.ok && (data.status === 'accepted' || data.status === 'success')) {
       showSyncStatus(
         `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
         'success'
