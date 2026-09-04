@@ -234,6 +234,9 @@ def init_db():
 # Initialize database on startup
 init_db()
 
+# ============== CAPTION FETCH TRACKING ==============
+CAPTION_FETCH_STATUS = {}
+
 # ============== CAPTION SERVICE INTEGRATION ==============
 
 CAPTION_SERVICE_URL = os.environ.get('CAPTION_SERVICE_URL', 'https://copytxt-caption-automation.onrender.com/api/caption')
@@ -1257,13 +1260,118 @@ def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_t
     
     return results
 
-# ============== ENSURE CAPTION FOR REEL ==============
+# ============== ASYNC CAPTION FETCH FUNCTIONS ==============
+
+def trigger_caption_fetch_async(reel_url, pipeline_id, profile_username):
+    """
+    Trigger caption fetch without waiting for response.
+    This is serverless-friendly - returns immediately.
+    
+    Args:
+        reel_url: Instagram reel URL
+        pipeline_id: ID of the pipeline
+        profile_username: Instagram username
+    
+    Returns:
+        dict: Status of the trigger request
+    """
+    import threading
+    import uuid
+    from datetime import datetime
+    
+    job_id = str(uuid.uuid4())
+    
+    app.logger.info(f"📤 [Job {job_id}] Triggering async caption fetch for: {reel_url[:50]}...")
+    
+    # Track the job status
+    CAPTION_FETCH_STATUS[reel_url] = {
+        'status': 'pending',
+        'job_id': job_id,
+        'pipeline_id': pipeline_id,
+        'profile_username': profile_username,
+        'message': 'Caption fetch queued',
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    
+    def fetch_in_background():
+        """Background thread to call caption service."""
+        try:
+            app.logger.info(f"📞 [Job {job_id}] Calling caption service...")
+            
+            # Call the caption service WITHOUT waiting for full response
+            response = requests.post(
+                CAPTION_SERVICE_URL,
+                json={
+                    "url": reel_url,
+                    "job_id": job_id,
+                    "pipeline_id": pipeline_id,
+                    "profile_username": profile_username,
+                    "webhook_url": f"https://fetchgram-one.vercel.app/api/webhook/caption"
+                },
+                timeout=5,  # Short timeout - just trigger, don't wait
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code == 200:
+                app.logger.info(f"✅ [Job {job_id}] Caption fetch triggered successfully")
+                CAPTION_FETCH_STATUS[reel_url]['status'] = 'processing'
+                CAPTION_FETCH_STATUS[reel_url]['message'] = 'Caption service is processing'
+            else:
+                app.logger.error(f"❌ [Job {job_id}] Failed to trigger: {response.status_code}")
+                CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+                CAPTION_FETCH_STATUS[reel_url]['message'] = f'Service error: {response.status_code}'
+                CAPTION_FETCH_STATUS[reel_url]['error'] = response.text[:200] if response.text else 'Unknown error'
+                
+        except requests.exceptions.Timeout:
+            # Timeout is expected - we don't wait for the full response
+            app.logger.info(f"⏰ [Job {job_id}] Request sent (timeout expected - service is processing)")
+            CAPTION_FETCH_STATUS[reel_url]['status'] = 'processing'
+            CAPTION_FETCH_STATUS[reel_url]['message'] = 'Service started (timeout expected)'
+            
+        except requests.exceptions.ConnectionError as e:
+            app.logger.error(f"❌ [Job {job_id}] Connection error: {e}")
+            CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+            CAPTION_FETCH_STATUS[reel_url]['message'] = f'Connection error: {str(e)}'
+            
+        except Exception as e:
+            app.logger.error(f"❌ [Job {job_id}] Background fetch error: {e}")
+            CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+            CAPTION_FETCH_STATUS[reel_url]['message'] = str(e)
+    
+    # Start background thread
+    thread = threading.Thread(target=fetch_in_background)
+    thread.daemon = True
+    thread.start()
+    
+    return {
+        'status': 'accepted',
+        'job_id': job_id,
+        'message': 'Caption fetch started in background'
+    }
+
+def get_caption_fetch_status(reel_url):
+    """
+    Get the status of a caption fetch job.
+    
+    Args:
+        reel_url: Instagram reel URL
+    
+    Returns:
+        dict: Status information
+    """
+    status = CAPTION_FETCH_STATUS.get(reel_url)
+    if status:
+        return status
+    return {
+        'status': 'not_found',
+        'message': 'No caption fetch job found for this URL'
+    }
 
 def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
     """
-    Ensure a reel has a caption.
-    If it exists in database, return it.
-    If not, fetch from caption service and store.
+    Ensure a reel has a caption - uses async fetch if missing.
+    
+    Priority: 1. scraped_reels → 2. posted_reels → 3. Async caption service
     """
     conn = get_db_connection()
     if not conn:
@@ -1272,18 +1380,7 @@ def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
     try:
         cur = conn.cursor()
         
-        # 1. Check if caption already exists in posted_reels
-        cur.execute("""
-            SELECT caption FROM posted_reels 
-            WHERE pipeline_id = %s AND reel_url = %s
-        """, (pipeline_id, reel_url))
-        result = cur.fetchone()
-        
-        if result and result[0] and result[0].strip():
-            app.logger.info(f"📝 Using existing caption from posted_reels")
-            return result[0]
-        
-        # 2. Check if caption exists in scraped_reels
+        # 1. Check scraped_reels first (fastest)
         cur.execute("""
             SELECT results FROM scraped_reels 
             WHERE EXISTS (
@@ -1305,32 +1402,24 @@ def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
                             if reel.get('url') == reel_url:
                                 caption = reel.get('caption', '')
                                 if caption and caption.strip():
-                                    app.logger.info(f"📝 Found caption in scraped data")
-                                    # Store in posted_reels for future use
-                                    cur.execute("""
-                                        UPDATE posted_reels 
-                                        SET caption = %s 
-                                        WHERE pipeline_id = %s AND reel_url = %s
-                                    """, (caption, pipeline_id, reel_url))
-                                    conn.commit()
+                                    app.logger.info(f"📝 Found caption in scraped_reels")
                                     return caption
         
-        # 3. Fetch from caption service
-        app.logger.info(f"🔥 Fetching caption from service for: {reel_url[:50]}...")
-        caption = fetch_caption_from_service(reel_url)
+        # 2. Check posted_reels
+        cur.execute("""
+            SELECT caption FROM posted_reels 
+            WHERE pipeline_id = %s AND reel_url = %s
+        """, (pipeline_id, reel_url))
+        result = cur.fetchone()
+        if result and result[0] and result[0].strip():
+            app.logger.info(f"📝 Found caption in posted_reels")
+            return result[0]
         
-        if caption and caption.strip():
-            app.logger.info(f"✅ Got caption: {caption[:50]}...")
-            # Store in posted_reels
-            cur.execute("""
-                UPDATE posted_reels 
-                SET caption = %s 
-                WHERE pipeline_id = %s AND reel_url = %s
-            """, (caption, pipeline_id, reel_url))
-            conn.commit()
-            return caption
+        # 3. Trigger async caption fetch (doesn't block!)
+        app.logger.info(f"🔥 Caption not found, triggering async fetch for: {reel_url[:50]}...")
+        trigger_caption_fetch_async(reel_url, pipeline_id, profile_username)
         
-        app.logger.warning(f"⚠️ No caption found for: {reel_url[:50]}...")
+        # Return None for now - webhook will update later
         return None
         
     except Exception as e:
@@ -1546,7 +1635,7 @@ def get_direct_url_from_cache_only(reel_url):
         conn.close()
 
 def run_pipeline(pipeline_id):
-    """Execute a single pipeline - auto-fetches captions if missing."""
+    """Execute a single pipeline - uses async caption fetch if missing."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -1583,13 +1672,19 @@ def run_pipeline(pipeline_id):
             try:
                 reel_url = reel['url']
                 
-                # 🔥 STEP 1: Ensure caption exists
+                # 🔥 STEP 1: Ensure caption exists (async if missing)
                 app.logger.info(f"📝 Processing: {reel_url[:50]}...")
                 caption = ensure_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
                 
-                # If no caption, use fallback
+                # If no caption yet (async pending), use fallback for now
                 if not caption or caption.strip() == '':
-                    caption = f"🎬 New reel from @{pipeline['profile_username']}!"
+                    # Check if async fetch is pending
+                    status = get_caption_fetch_status(reel_url)
+                    if status.get('status') in ('pending', 'processing'):
+                        app.logger.info(f"⏳ Caption is being fetched asynchronously for: {reel_url[:50]}...")
+                        caption = f"🎬 New reel from @{pipeline['profile_username']}! (Caption loading...)"
+                    else:
+                        caption = f"🎬 New reel from @{pipeline['profile_username']}!"
                     app.logger.info(f"📝 Using fallback caption for: {reel_url[:50]}...")
                 
                 # Truncate caption if too long
@@ -1651,6 +1746,10 @@ def run_pipeline(pipeline_id):
                     )
                     posted_count += 1
                     app.logger.info(f"✅ Successfully posted: {reel_url[:50]}...")
+                    
+                    # If caption was async, webhook will update it later
+                    if status and status.get('status') in ('pending', 'processing'):
+                        app.logger.info(f"📝 Caption will be updated via webhook when ready")
                 else:
                     # Failed
                     error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
@@ -1921,7 +2020,7 @@ def scrape_proxy():
     data['cookies'] = cookies
     
     try:
-        # 🔥 Get existing URLs before scraping
+        # Get existing URLs before scraping
         existing_urls = {}
         for username in usernames:
             existing_urls[username] = get_existing_reel_urls(username)
@@ -1940,7 +2039,7 @@ def scrape_proxy():
             result_data = response.json()
             results = result_data.get('results', [])
             
-            # 🔥 Filter out already existing reels
+            # Filter out already existing reels
             new_results = []
             total_new_reels = 0
             
@@ -1973,7 +2072,7 @@ def scrape_proxy():
                 else:
                     app.logger.info(f"ℹ️ @{username}: No new reels found")
             
-            # 🔥 Store only new reels
+            # Store only new reels
             if new_results:
                 with app.test_request_context():
                     store_scraped_data()
@@ -2138,7 +2237,7 @@ def store_scraped_data():
             if username:
                 all_usernames.append(username)
             
-            # 🔥 Get existing reels for this username
+            # Get existing reels for this username
             existing_urls = get_existing_reel_urls(username)
             
             # Get new reels
@@ -2822,6 +2921,158 @@ def sync_captions():
         "message": f"Caption sync started for @{username}. Check /api/sync-status/{username} for progress.",
         "username": username
     }), 202
+
+# ============== CAPTION WEBHOOK ==============
+
+@app.route("/api/webhook/caption", methods=["POST"])
+def webhook_caption():
+    """
+    Webhook endpoint for caption service to call back with the caption.
+    This is called by the caption service when it finishes processing.
+    """
+    data = request.get_json(silent=True) or {}
+    reel_url = data.get('reel_url')
+    caption = data.get('caption')
+    job_id = data.get('job_id')
+    status = data.get('status', 'completed')
+    error = data.get('error')
+    profile_username = data.get('profile_username')
+    pipeline_id = data.get('pipeline_id')
+    
+    app.logger.info(f"📥 [Job {job_id}] Webhook received for: {reel_url[:50] if reel_url else 'unknown'}...")
+    app.logger.info(f"   Caption: {caption[:50] if caption else 'None'}...")
+    app.logger.info(f"   Status: {status}")
+    
+    if not reel_url:
+        return jsonify({"status": "error", "message": "reel_url required"}), 400
+    
+    # Update status in tracking
+    if reel_url in CAPTION_FETCH_STATUS:
+        CAPTION_FETCH_STATUS[reel_url]['status'] = status
+        CAPTION_FETCH_STATUS[reel_url]['message'] = 'Webhook received'
+        CAPTION_FETCH_STATUS[reel_url]['completed_at'] = datetime.utcnow().isoformat()
+        
+        if caption:
+            CAPTION_FETCH_STATUS[reel_url]['caption'] = caption[:200]
+            CAPTION_FETCH_STATUS[reel_url]['caption_length'] = len(caption)
+    
+    # Store caption in database if successful
+    if status == 'completed' and caption:
+        try:
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                
+                # 1. Update posted_reels with caption
+                cur.execute("""
+                    UPDATE posted_reels 
+                    SET caption = %s 
+                    WHERE reel_url = %s AND caption IS NULL
+                """, (caption, reel_url))
+                updated_rows = cur.rowcount
+                conn.commit()
+                
+                if updated_rows > 0:
+                    app.logger.info(f"💾 [Job {job_id}] Caption stored in posted_reels")
+                else:
+                    app.logger.info(f"💾 [Job {job_id}] Caption already existed in posted_reels")
+                
+                # 2. Also update scraped_reels if we have profile username
+                if profile_username:
+                    cur.execute("""
+                        SELECT results FROM scraped_reels 
+                        WHERE EXISTS (
+                            SELECT 1 FROM jsonb_array_elements(results) AS elem
+                            WHERE elem->>'username' = %s
+                        )
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """, (profile_username,))
+                    
+                    result = cur.fetchone()
+                    if result:
+                        results = result[0]
+                        updated = False
+                        
+                        for profile_idx, profile in enumerate(results):
+                            if profile.get('username') == profile_username:
+                                reels = profile.get('reels', [])
+                                for reel_idx, reel in enumerate(reels):
+                                    if isinstance(reel, dict):
+                                        if reel.get('url') == reel_url:
+                                            results[profile_idx]['reels'][reel_idx]['caption'] = caption
+                                            updated = True
+                                            break
+                                break
+                        
+                        if updated:
+                            cur.execute("""
+                                UPDATE scraped_reels 
+                                SET results = %s, updated_at = NOW()
+                                WHERE id = %s
+                            """, (json.dumps(results), result.get('id')))
+                            conn.commit()
+                            app.logger.info(f"💾 [Job {job_id}] Caption stored in scraped_reels")
+                
+                # 3. Update reel_cache
+                cur.execute("""
+                    UPDATE reel_cache 
+                    SET caption = %s, created_at = NOW()
+                    WHERE reel_url = %s
+                """, (caption, reel_url))
+                conn.commit()
+                
+                cur.close()
+                conn.close()
+                
+                return jsonify({
+                    "status": "success",
+                    "message": "Caption stored successfully",
+                    "job_id": job_id,
+                    "stored": True
+                })
+                
+        except Exception as e:
+            app.logger.error(f"❌ [Job {job_id}] Failed to store caption: {e}")
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to store caption: {str(e)}",
+                "job_id": job_id
+            }), 500
+    
+    elif status == 'failed':
+        app.logger.warning(f"⚠️ [Job {job_id}] Caption fetch failed: {error}")
+        
+        if reel_url in CAPTION_FETCH_STATUS:
+            CAPTION_FETCH_STATUS[reel_url]['error'] = error
+    
+    return jsonify({
+        "status": "success",
+        "message": "Webhook received",
+        "job_id": job_id
+    })
+
+# ============== CAPTION STATUS ROUTES ==============
+
+@app.route("/api/caption-status/<path:reel_url>", methods=["GET"])
+def get_caption_status(reel_url):
+    """Get caption fetch status for a specific reel."""
+    decoded_url = re.sub(r'^/(.+)$', r'\1', reel_url)
+    status = get_caption_fetch_status(decoded_url)
+    return jsonify({
+        "status": "success",
+        "reel_url": decoded_url,
+        "fetch_status": status
+    })
+
+@app.route("/api/caption-status", methods=["GET"])
+def get_all_caption_status():
+    """Get all caption fetch statuses."""
+    return jsonify({
+        "status": "success",
+        "total": len(CAPTION_FETCH_STATUS),
+        "statuses": CAPTION_FETCH_STATUS
+    })
 
 # ============== PIPELINE API ROUTES ==============
 
