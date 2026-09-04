@@ -3360,3 +3360,39 @@ html, body {
     min-width: 50px;
   }
 }
+
+
+
+
+
+
+@keyframes syncPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.sync-indicator {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(108, 99, 255, 0.1);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  display: inline-block;
+  animation: syncPulse 1.5s ease-in-out infinite;
+}
+
+.sync-indicator.completed {
+  border-color: var(--success);
+  color: var(--success);
+  background: var(--success-bg);
+  animation: none;
+}
+
+.sync-indicator.error {
+  border-color: var(--error);
+  color: var(--error);
+  background: var(--error-bg);
+  animation: none;
+}

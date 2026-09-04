@@ -160,6 +160,23 @@ def init_db():
             );
         """)
         
+        # Sync status table for tracking caption sync progress
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sync_status (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                username TEXT NOT NULL UNIQUE,
+                status TEXT DEFAULT 'idle',
+                total_reels INTEGER DEFAULT 0,
+                captions_fetched INTEGER DEFAULT 0,
+                captions_skipped INTEGER DEFAULT 0,
+                errors INTEGER DEFAULT 0,
+                started_at TIMESTAMP WITH TIME ZONE,
+                completed_at TIMESTAMP WITH TIME ZONE,
+                last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                job_id TEXT
+            );
+        """)
+        
         # Create indexes
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id 
@@ -196,6 +213,14 @@ def init_db():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_reel_cache_created_at 
             ON reel_cache(created_at);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sync_status_username 
+            ON sync_status(username);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sync_status_status 
+            ON sync_status(status);
         """)
         
         conn.commit()
@@ -270,6 +295,222 @@ def process_reels_with_captions(reels):
                 reel['caption'] = captions_map[reel['url']] or ''
     
     return processed_reels
+
+# ============== SYNC STATUS FUNCTIONS ==============
+
+def update_sync_status(username, status, total_reels=0, captions_fetched=0, captions_skipped=0, errors=0, job_id=None):
+    """Update sync status in the database."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO sync_status (username, status, total_reels, captions_fetched, captions_skipped, errors, job_id, last_updated, started_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (username) DO UPDATE SET
+                status = EXCLUDED.status,
+                total_reels = EXCLUDED.total_reels,
+                captions_fetched = EXCLUDED.captions_fetched,
+                captions_skipped = EXCLUDED.captions_skipped,
+                errors = EXCLUDED.errors,
+                job_id = EXCLUDED.job_id,
+                last_updated = NOW(),
+                started_at = CASE WHEN sync_status.status = 'idle' OR sync_status.started_at IS NULL THEN NOW() ELSE sync_status.started_at END,
+                completed_at = CASE WHEN EXCLUDED.status IN ('completed', 'error', 'partial') THEN NOW() ELSE NULL END
+        """, (username, status, total_reels, captions_fetched, captions_skipped, errors, job_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        app.logger.error(f"Failed to update sync status: {e}")
+
+def get_sync_status(username):
+    """Get sync status for a username."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                username,
+                status,
+                total_reels,
+                captions_fetched,
+                captions_skipped,
+                errors,
+                started_at,
+                completed_at,
+                last_updated,
+                job_id
+            FROM sync_status
+            WHERE username = %s
+        """, (username,))
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        return result
+    except Exception as e:
+        app.logger.error(f"Failed to get sync status: {e}")
+        return None
+
+# ============== BACKGROUND SYNC FUNCTION ==============
+
+def sync_captions_background(username):
+    """Trigger caption sync in background for a username with status tracking."""
+    import threading
+    
+    def run_sync():
+        with app.app_context():
+            job_id = str(uuid.uuid4())
+            try:
+                app.logger.info(f"[Job {job_id}] Background sync started for @{username}")
+                update_sync_status(username, 'syncing', job_id=job_id)
+                
+                conn = get_db_connection()
+                if not conn:
+                    update_sync_status(username, 'error', errors=1)
+                    return
+                
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute("""
+                    SELECT id, results FROM scraped_reels 
+                    WHERE EXISTS (
+                        SELECT 1 FROM jsonb_array_elements(results) AS elem
+                        WHERE elem->>'username' = %s
+                    )
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (username,))
+                
+                result = cur.fetchone()
+                if not result:
+                    app.logger.error(f"[Job {job_id}] No scraped data found for @{username}")
+                    update_sync_status(username, 'error', errors=1)
+                    cur.close()
+                    conn.close()
+                    return
+                
+                results = result['results']
+                updated = False
+                total_reels = 0
+                captions_fetched = 0
+                captions_skipped = 0
+                errors = 0
+                
+                for profile_idx, profile in enumerate(results):
+                    if profile.get('username') == username:
+                        reels = profile.get('reels', [])
+                        total_reels = len(reels)
+                        update_sync_status(username, 'syncing', total_reels, 0, 0, 0, job_id)
+                        
+                        urls_to_fetch = []
+                        reel_indices = []
+                        
+                        for reel_idx, reel in enumerate(reels):
+                            if isinstance(reel, dict):
+                                reel_url = reel.get('url')
+                                existing_caption = reel.get('caption', '')
+                                if existing_caption and existing_caption.strip():
+                                    captions_skipped += 1
+                                    continue
+                                if reel_url:
+                                    urls_to_fetch.append(reel_url)
+                                    reel_indices.append(reel_idx)
+                            else:
+                                reel_url = str(reel)
+                                urls_to_fetch.append(reel_url)
+                                reel_indices.append(reel_idx)
+                        
+                        if urls_to_fetch:
+                            app.logger.info(f"[Job {job_id}] Fetching {len(urls_to_fetch)} captions...")
+                            
+                            try:
+                                response = requests.post(
+                                    CAPTION_SERVICE_URL,
+                                    json={"urls": urls_to_fetch},
+                                    timeout=120,
+                                    headers={"Content-Type": "application/json"}
+                                )
+                                
+                                if response.status_code == 200:
+                                    data = response.json()
+                                    if data.get('success'):
+                                        captions_map = {}
+                                        for item in data.get('results', []):
+                                            if item.get('success'):
+                                                captions_map[item['url']] = item.get('caption', '')
+                                        
+                                        for reel_idx, reel_url in zip(reel_indices, urls_to_fetch):
+                                            caption = captions_map.get(reel_url, '')
+                                            if caption:
+                                                results[profile_idx]['reels'][reel_idx]['caption'] = caption
+                                                captions_fetched += 1
+                                                updated = True
+                                                # Update progress periodically
+                                                if captions_fetched % 3 == 0:
+                                                    update_sync_status(username, 'syncing', total_reels, captions_fetched, captions_skipped, errors, job_id)
+                                            else:
+                                                errors += 1
+                                    else:
+                                        errors += len(urls_to_fetch)
+                                else:
+                                    errors += len(urls_to_fetch)
+                                    
+                            except Exception as e:
+                                app.logger.error(f"[Job {job_id}] Caption service error: {e}")
+                                errors += len(urls_to_fetch)
+                        else:
+                            app.logger.info(f"[Job {job_id}] No URLs need caption fetching")
+                        
+                        break
+                
+                if updated:
+                    cur.execute("""
+                        UPDATE scraped_reels 
+                        SET results = %s, updated_at = NOW()
+                        WHERE id = %s
+                    """, (json.dumps(results), result['id']))
+                    conn.commit()
+                    
+                    # Update reel_cache
+                    for profile in results:
+                        for reel in profile.get('reels', []):
+                            if isinstance(reel, dict):
+                                reel_url = reel.get('url')
+                                caption = reel.get('caption', '')
+                                if reel_url and caption:
+                                    cur.execute("""
+                                        INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+                                        VALUES (%s, '', %s, NOW())
+                                        ON CONFLICT (reel_url) DO UPDATE SET 
+                                            caption = EXCLUDED.caption,
+                                            created_at = NOW()
+                                    """, (reel_url, caption))
+                    conn.commit()
+                    
+                    status = 'completed' if errors == 0 else 'partial'
+                    update_sync_status(username, status, total_reels, captions_fetched, captions_skipped, errors, job_id)
+                    app.logger.info(f"[Job {job_id}] ✅ Synced {captions_fetched} captions for @{username}")
+                else:
+                    update_sync_status(username, 'completed', total_reels, 0, captions_skipped, 0, job_id)
+                    app.logger.info(f"[Job {job_id}] No new captions needed for @{username}")
+                
+                cur.close()
+                conn.close()
+                
+            except Exception as e:
+                app.logger.error(f"[Job {job_id}] Background sync error: {e}")
+                import traceback
+                app.logger.error(traceback.format_exc())
+                update_sync_status(username, 'error', errors=1, job_id=job_id)
+    
+    thread = threading.Thread(target=run_sync)
+    thread.start()
+    return job_id
 
 # ============== COOKIE STORAGE FUNCTIONS ==============
 
@@ -1116,11 +1357,7 @@ def cache_direct_url(reel_url, direct_url, caption=''):
     finally:
         cur.close()
         conn.close()
-        
-        
-        
-        
-        
+
 def get_direct_url_from_cache_only(reel_url):
     """Get direct URL from cache ONLY - no external requests."""
     conn = get_db_connection()
@@ -1147,15 +1384,8 @@ def get_direct_url_from_cache_only(reel_url):
         return None
     finally:
         cur.close()
-        conn.close()      
-        
-        
-        
-        
-        
-        
-        
-        
+        conn.close()
+
 def run_pipeline(pipeline_id):
     """Execute a single pipeline - auto-converts URLs to CDN URLs."""
     conn = get_db_connection()
@@ -1204,7 +1434,7 @@ def run_pipeline(pipeline_id):
                 if len(caption) > 5000:
                     caption = caption[:4997] + "..."
                 
-                # 🔥 Get direct CDN URL (auto-convert using yt-dlp)
+                # Get direct CDN URL (auto-convert using yt-dlp)
                 app.logger.info(f"📥 Converting to CDN URL: {reel_url[:60]}...")
                 direct_video_url = get_direct_video_url(reel_url)
                 
@@ -1305,19 +1535,7 @@ def run_pipeline(pipeline_id):
         log_pipeline_run(pipeline_id, 0, 0, 'error', str(e))
         return {"error": str(e)}
     finally:
-        conn.close()    
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
+        conn.close()
 
 def run_all_active_pipelines():
     """Run all active pipelines"""
@@ -1498,7 +1716,7 @@ def clear_cookies():
 
 @app.route("/api/scrape/proxy", methods=["POST"])
 def scrape_proxy():
-    """Proxy endpoint that retrieves cookies and fetches captions."""
+    """Proxy endpoint that retrieves cookies and auto-fetches captions."""
     data = request.get_json(silent=True) or {}
     usernames = data.get("usernames", [])
     fetch_captions = data.get("fetch_captions", True)
@@ -1556,16 +1774,53 @@ def scrape_proxy():
             if result_data.get('job_id') and result_data.get('results'):
                 results = result_data.get('results', [])
                 
-                # 🔥 NEW: Process captions on Vercel side
+                # Auto-fetch captions on Vercel side
                 if fetch_captions:
-                    app.logger.info("📝 Processing captions on Vercel...")
+                    app.logger.info("📝 Auto-fetching captions for scraped reels...")
+                    
+                    all_reel_urls = []
                     for profile in results:
                         if isinstance(profile, dict):
                             reels = profile.get('reels', [])
-                            if reels:
-                                profile['reels'] = process_reels_with_captions(reels)
-                                with_captions = sum(1 for r in profile['reels'] if r.get('caption') and r['caption'].strip())
-                                app.logger.info(f"  @{profile.get('username')}: {with_captions}/{len(reels)} captions")
+                            for reel in reels:
+                                if isinstance(reel, str):
+                                    all_reel_urls.append(reel)
+                                elif isinstance(reel, dict):
+                                    url = reel.get('url')
+                                    if url:
+                                        all_reel_urls.append(url)
+                    
+                    if all_reel_urls:
+                        app.logger.info(f"📝 Fetching {len(all_reel_urls)} captions...")
+                        captions_map = fetch_captions_batch(all_reel_urls)
+                        
+                        for profile in results:
+                            if isinstance(profile, dict):
+                                reels = profile.get('reels', [])
+                                processed_reels = []
+                                for reel in reels:
+                                    if isinstance(reel, str):
+                                        reel_url = reel
+                                        caption = captions_map.get(reel_url, '')
+                                        processed_reels.append({
+                                            "url": reel_url,
+                                            "caption": caption or ''
+                                        })
+                                    elif isinstance(reel, dict):
+                                        reel_url = reel.get('url')
+                                        if reel_url:
+                                            caption = captions_map.get(reel_url, '')
+                                            processed_reels.append({
+                                                "url": reel_url,
+                                                "caption": caption or ''
+                                            })
+                                        else:
+                                            processed_reels.append(reel)
+                                    else:
+                                        processed_reels.append(reel)
+                                profile['reels'] = processed_reels
+                        
+                        app.logger.info(f"✅ Added {len(all_reel_urls)} captions")
                 
                 extracted_usernames = []
                 for profile in results:
@@ -1578,6 +1833,12 @@ def scrape_proxy():
                 with app.test_request_context():
                     store_scraped_data()
                     app.logger.info(f"✅ Auto-stored scraped data for job {result_data.get('job_id')}")
+                
+                # Auto-trigger caption sync for scraped profiles
+                if extracted_usernames:
+                    app.logger.info(f"📝 Auto-triggering caption sync for: {extracted_usernames}")
+                    for username in extracted_usernames:
+                        sync_captions_background(username)
         
         return jsonify(response.json()), response.status_code
         
@@ -1750,7 +2011,7 @@ def store_scraped_data():
         cur.close()
         conn.close()
 
-# ============== REST OF ROUTES (unchanged) ==============
+# ============== SCRAPED DATA ROUTES ==============
 
 @app.route("/api/scraped/latest", methods=["GET"])
 def get_scraped_data():
@@ -2276,6 +2537,62 @@ def zernio_list_accounts():
             "accounts": []
         }), 500
 
+# ============== SYNC STATUS ROUTE ==============
+
+@app.route("/api/sync-status/<username>", methods=["GET"])
+def get_sync_status_endpoint(username):
+    """Get the current sync status for a username."""
+    status = get_sync_status(username)
+    if status:
+        total = status['total_reels'] or 1
+        progress = min(100, int((status['captions_fetched'] / total) * 100)) if total > 0 else 0
+        
+        return jsonify({
+            "status": "success",
+            "sync": {
+                "username": status['username'],
+                "status": status['status'],
+                "total_reels": status['total_reels'],
+                "captions_fetched": status['captions_fetched'],
+                "captions_skipped": status['captions_skipped'],
+                "errors": status['errors'],
+                "progress": progress,
+                "started_at": status['started_at'],
+                "completed_at": status['completed_at'],
+                "last_updated": status['last_updated']
+            }
+        })
+    else:
+        return jsonify({
+            "status": "success",
+            "sync": None,
+            "message": "No sync status found for this username"
+        })
+
+@app.route("/api/sync-captions", methods=["POST"])
+def sync_captions():
+    """
+    Sync captions for a specific username.
+    Fetches captions for ALL reels of that profile using the caption service.
+    """
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "").strip()
+    
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+    
+    app.logger.info(f"📝 Syncing captions for @{username}")
+    
+    # Start background sync and get job ID
+    job_id = sync_captions_background(username)
+    
+    return jsonify({
+        "status": "accepted",
+        "job_id": job_id,
+        "message": f"Caption sync started for @{username}. Check /api/sync-status/{username} for progress.",
+        "username": username
+    }), 202
+
 # ============== PIPELINE API ROUTES ==============
 
 @app.route('/api/pipelines', methods=['GET'])
@@ -2697,208 +3014,6 @@ def init_session():
         "user_id": user_id,
         "has_cookies": True
     })
-
-
-@app.route("/api/sync-captions", methods=["POST"])
-def sync_captions():
-    """
-    Sync captions for a specific username.
-    Fetches captions for ALL reels of that profile using the caption service.
-    """
-    data = request.get_json(silent=True) or {}
-    username = data.get("username", "").strip()
-    
-    if not username:
-        return jsonify({"error": "Username is required"}), 400
-    
-    app.logger.info(f"📝 Syncing captions for @{username}")
-    
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Get the latest scraped data for this username
-        cur.execute("""
-            SELECT id, results FROM scraped_reels 
-            WHERE EXISTS (
-                SELECT 1 FROM jsonb_array_elements(results) AS elem
-                WHERE elem->>'username' = %s
-            )
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (username,))
-        
-        result = cur.fetchone()
-        if not result:
-            return jsonify({
-                "error": f"No scraped data found for @{username}",
-                "message": f"Please scrape @{username} first"
-            }), 404
-        
-        results = result['results']
-        updated = False
-        total_reels = 0
-        captions_fetched = 0
-        captions_skipped = 0
-        errors = 0
-        
-        # Process each profile
-        for profile_idx, profile in enumerate(results):
-            if profile.get('username') == username:
-                reels = profile.get('reels', [])
-                total_reels = len(reels)
-                
-                app.logger.info(f"📹 Processing {total_reels} reels for @{username}")
-                
-                # 🔥 FIX: Collect all URLs that need captions
-                urls_to_fetch = []
-                reel_indices = []
-                
-                for reel_idx, reel in enumerate(reels):
-                    if isinstance(reel, dict):
-                        reel_url = reel.get('url')
-                        existing_caption = reel.get('caption', '')
-                        if existing_caption and existing_caption.strip():
-                            captions_skipped += 1
-                            continue
-                        if reel_url:
-                            urls_to_fetch.append(reel_url)
-                            reel_indices.append(reel_idx)
-                    else:
-                        # Convert string to dict
-                        reel_url = str(reel)
-                        urls_to_fetch.append(reel_url)
-                        reel_indices.append(reel_idx)
-                
-                # 🔥 FIX: Fetch ALL captions in one batch
-                if urls_to_fetch:
-                    app.logger.info(f"📤 Fetching {len(urls_to_fetch)} captions in batch...")
-                    
-                    # Use the batch endpoint
-                    try:
-                        response = requests.post(
-                            f"{CAPTION_SERVICE_URL}/batch",
-                            json={"urls": urls_to_fetch},
-                            timeout=60 * len(urls_to_fetch),  # 60 seconds per URL
-                            headers={"Content-Type": "application/json"}
-                        )
-                        
-                        if response.status_code == 200:
-                            data = response.json()
-                            if data.get('success'):
-                                captions_map = {}
-                                for item in data.get('results', []):
-                                    if item.get('success'):
-                                        captions_map[item['url']] = item.get('caption', '')
-                                
-                                # Update each reel with its caption
-                                for reel_idx, reel_url in zip(reel_indices, urls_to_fetch):
-                                    caption = captions_map.get(reel_url, '')
-                                    if caption:
-                                        results[profile_idx]['reels'][reel_idx]['caption'] = caption
-                                        captions_fetched += 1
-                                        updated = True
-                                    else:
-                                        results[profile_idx]['reels'][reel_idx]['caption'] = ''
-                                        errors += 1
-                            else:
-                                app.logger.error("Batch API returned error")
-                                errors += len(urls_to_fetch)
-                        else:
-                            app.logger.error(f"Batch API error: {response.status_code}")
-                            errors += len(urls_to_fetch)
-                            
-                    except requests.exceptions.Timeout:
-                        app.logger.error("Batch API timeout")
-                        errors += len(urls_to_fetch)
-                    except Exception as e:
-                        app.logger.error(f"Batch API error: {e}")
-                        errors += len(urls_to_fetch)
-                else:
-                    app.logger.info("No URLs need caption fetching")
-                
-                break
-        
-        if updated:
-            # Save back to database
-            cur.execute("""
-                UPDATE scraped_reels 
-                SET results = %s, updated_at = NOW()
-                WHERE id = %s
-            """, (json.dumps(results), result['id']))
-            conn.commit()
-            
-            # Also update reel_cache
-            for profile in results:
-                for reel in profile.get('reels', []):
-                    if isinstance(reel, dict):
-                        reel_url = reel.get('url')
-                        caption = reel.get('caption', '')
-                        if reel_url and caption:
-                            cur.execute("""
-                                INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
-                                VALUES (%s, '', %s, NOW())
-                                ON CONFLICT (reel_url) DO UPDATE SET 
-                                    caption = EXCLUDED.caption,
-                                    created_at = NOW()
-                            """, (reel_url, caption))
-            conn.commit()
-            
-            return jsonify({
-                "status": "success",
-                "message": f"Synced captions for @{username}",
-                "total_reels": total_reels,
-                "captions_fetched": captions_fetched,
-                "captions_skipped": captions_skipped,
-                "errors": errors,
-                "username": username
-            })
-        else:
-            return jsonify({
-                "status": "success",
-                "message": f"No new captions needed for @{username}",
-                "total_reels": total_reels,
-                "captions_fetched": 0,
-                "captions_skipped": captions_skipped,
-                "errors": errors,
-                "username": username
-            })
-        
-    except Exception as e:
-        app.logger.error(f"Sync captions error: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-def update_reel_cache(cur, results):
-    """Helper function to update reel_cache with captions."""
-    for profile in results:
-        for reel in profile.get('reels', []):
-            if isinstance(reel, dict):
-                reel_url = reel.get('url')
-                caption = reel.get('caption', '')
-                if reel_url and caption:
-                    cur.execute("""
-                        UPDATE reel_cache 
-                        SET caption = %s, created_at = NOW()
-                        WHERE reel_url = %s
-                    """, (caption, reel_url))
-                    if cur.rowcount == 0:
-                        # Not in cache, insert
-                        cur.execute("""
-                            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
-                            VALUES (%s, '', %s, NOW())
-                            ON CONFLICT (reel_url) DO UPDATE SET 
-                                caption = EXCLUDED.caption,
-                                created_at = NOW()
-                        """, (reel_url, caption))
-
-
-
 
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():

@@ -2421,4 +2421,159 @@ document.getElementById('refresh-status-btn')?.addEventListener('click', functio
   showCookieStatus('🔄 Status refreshed', 'info');
 });
 
+
+
+
+
+
+
+// ==================== SYNC STATUS MONITORING ====================
+
+// Store intervals for each username
+const syncIntervals = {};
+
+async function checkAndShowSyncStatus(username) {
+    if (!username) return;
+    
+    try {
+        const response = await fetch(`/api/sync-status/${username}`, {
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        if (data.sync && data.sync.status === 'syncing') {
+            // Show syncing indicator
+            updateProfileSyncStatus(username, data.sync);
+            
+            // Poll every 2 seconds until complete
+            if (!syncIntervals[username]) {
+                syncIntervals[username] = setInterval(() => {
+                    checkAndShowSyncStatus(username);
+                }, 2000);
+            }
+        } else if (data.sync && data.sync.status === 'completed') {
+            // Clear interval
+            if (syncIntervals[username]) {
+                clearInterval(syncIntervals[username]);
+                delete syncIntervals[username];
+            }
+            // Update indicator to completed
+            updateProfileSyncStatus(username, data.sync);
+            
+            // Auto-refresh results to show captions
+            setTimeout(() => {
+                autoLoadScrapedResults();
+            }, 1000);
+        } else if (data.sync && data.sync.status === 'error') {
+            // Show error
+            updateProfileSyncStatus(username, data.sync);
+            if (syncIntervals[username]) {
+                clearInterval(syncIntervals[username]);
+                delete syncIntervals[username];
+            }
+        }
+    } catch (error) {
+        console.error('Error checking sync status:', error);
+    }
+}
+
+function updateProfileSyncStatus(username, syncData) {
+    // Find the profile card
+    const profileCards = document.querySelectorAll('.scraped-profile-card');
+    let targetCard = null;
+    
+    for (const card of profileCards) {
+        const nameEl = card.querySelector('.scraped-profile-name');
+        if (nameEl && nameEl.textContent.includes(`@${username}`)) {
+            targetCard = card;
+            break;
+        }
+    }
+    
+    if (!targetCard) return;
+    
+    // Find or create the sync indicator
+    let indicator = targetCard.querySelector('.sync-indicator');
+    if (!indicator) {
+        const header = targetCard.querySelector('.scraped-profile-header');
+        if (header) {
+            const countSpan = header.querySelector('.scraped-profile-count');
+            if (countSpan) {
+                indicator = document.createElement('span');
+                indicator.className = 'sync-indicator';
+                indicator.style.cssText = 'font-size: 11px; margin-left: 8px; padding: 2px 10px; border-radius: 12px; display: inline-block;';
+                countSpan.parentNode.insertBefore(indicator, countSpan.nextSibling);
+            }
+        }
+    }
+    
+    if (!indicator) return;
+    
+    const status = syncData.status;
+    const progress = syncData.progress || 0;
+    const total = syncData.total_reels || 0;
+    const fetched = syncData.captions_fetched || 0;
+    
+    switch (status) {
+        case 'syncing':
+            indicator.textContent = `🔄 ${progress}% (${fetched}/${total})`;
+            indicator.style.color = 'var(--accent)';
+            indicator.style.background = 'rgba(108, 99, 255, 0.1)';
+            indicator.style.border = '1px solid var(--accent)';
+            indicator.style.animation = 'syncPulse 1.5s ease-in-out infinite';
+            indicator.style.display = 'inline-block';
+            break;
+        case 'completed':
+            indicator.textContent = `✅ ${fetched}/${total}`;
+            indicator.style.color = 'var(--success)';
+            indicator.style.background = 'var(--success-bg)';
+            indicator.style.border = '1px solid var(--success)';
+            indicator.style.animation = 'none';
+            indicator.style.display = 'inline-block';
+            break;
+        case 'error':
+            indicator.textContent = `❌ Failed`;
+            indicator.style.color = 'var(--error)';
+            indicator.style.background = 'var(--error-bg)';
+            indicator.style.border = '1px solid var(--error)';
+            indicator.style.animation = 'none';
+            indicator.style.display = 'inline-block';
+            break;
+        default:
+            indicator.textContent = '';
+            indicator.style.display = 'none';
+            break;
+    }
+}
+
+// Auto-start sync monitoring when results are loaded
+function startSyncMonitoringForAllProfiles(results) {
+    if (!results || results.length === 0) return;
+    
+    const usernames = results.map(p => p.username);
+    for (const username of usernames) {
+        checkAndShowSyncStatus(username);
+    }
+}
+
+// Override the renderScrapedResults to start monitoring
+const originalRenderScrapedResults = renderScrapedResults;
+renderScrapedResults = function(results, stats, isLoading = false) {
+    // Call the original function
+    originalRenderScrapedResults(results, stats, isLoading);
+    
+    // Start sync monitoring
+    if (results && results.length > 0 && !isLoading) {
+        startSyncMonitoringForAllProfiles(results);
+    }
+};
+
+
+
+
+
+
+
+
+
 console.log('✅ Fetchgram loaded successfully!');
