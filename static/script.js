@@ -2426,7 +2426,6 @@ document.getElementById('refresh-status-btn')?.addEventListener('click', functio
 
 
 
-
 // ==================== SYNC STATUS MONITORING ====================
 
 // Store intervals for each username
@@ -2457,13 +2456,13 @@ async function checkAndShowSyncStatus(username) {
                 clearInterval(syncIntervals[username]);
                 delete syncIntervals[username];
             }
-            // Update indicator to completed
+            
+            // ✅ FIX: Update indicator to completed
             updateProfileSyncStatus(username, data.sync);
             
-            // Auto-refresh results to show captions
-            setTimeout(() => {
-                autoLoadScrapedResults();
-            }, 1000);
+            // ✅ FIX: Update captions in place WITHOUT full refresh
+            await updateCaptionsInPlace(username);
+            
         } else if (data.sync && data.sync.status === 'error') {
             // Show error
             updateProfileSyncStatus(username, data.sync);
@@ -2474,6 +2473,80 @@ async function checkAndShowSyncStatus(username) {
         }
     } catch (error) {
         console.error('Error checking sync status:', error);
+    }
+}
+
+// ✅ Update only the captions, not the whole UI
+async function updateCaptionsInPlace(username) {
+    try {
+        // Fetch fresh data for this username only
+        const response = await fetch(`/api/scraped/latest`, {
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        if (!data.results || data.results.length === 0) return;
+        
+        // Find the profile
+        const profile = data.results.find(p => p.username === username);
+        if (!profile) return;
+        
+        // Find the profile card in the UI
+        const profileCards = document.querySelectorAll('.scraped-profile-card');
+        let targetCard = null;
+        
+        for (const card of profileCards) {
+            const nameEl = card.querySelector('.scraped-profile-name');
+            if (nameEl && nameEl.textContent.includes(`@${username}`)) {
+                targetCard = card;
+                break;
+            }
+        }
+        
+        if (!targetCard) return;
+        
+        // Update the reels with captions
+        const reelsBody = targetCard.querySelector('.scraped-profile-reels');
+        if (!reelsBody) return;
+        
+        // Rebuild only the reels list with captions
+        const reels = profile.reels || [];
+        let html = '';
+        
+        reels.forEach((reel, idx) => {
+            let reelUrl = reel;
+            let reelCaption = '';
+            if (typeof reel === 'object') {
+                reelUrl = reel.url || reel;
+                reelCaption = reel.caption || '';
+            }
+            
+            html += `
+                <div class="scraped-reel-item">
+                    <span class="scraped-reel-index">#${idx + 1}</span>
+                    <span class="scraped-reel-url"><a href="${escapeHtml(reelUrl)}" target="_blank">${escapeHtml(reelUrl)}</a></span>
+                    ${reelCaption ? `<span class="scraped-reel-caption">📝 ${escapeHtml(reelCaption.substring(0, 60))}${reelCaption.length > 60 ? '...' : ''}</span>` : '<span class="scraped-reel-caption" style="color: var(--text-muted);">⏳ No caption yet. Click "Sync Captions" to fetch.</span>'}
+                    <div class="scraped-reel-actions">
+                        <button class="btn btn-sm btn-success btn-icon copy-reel-btn" data-url="${escapeHtml(reelUrl)}">📋</button>
+                        <button class="btn btn-sm btn-primary btn-icon download-reel-btn" data-url="${escapeHtml(reelUrl)}">⬇</button>
+                    </div>
+                </div>
+            `;
+        });
+        
+        reelsBody.innerHTML = html;
+        
+        // Update the reel count
+        const countSpan = targetCard.querySelector('.scraped-profile-count');
+        if (countSpan) {
+            countSpan.textContent = `📹 ${reels.length}`;
+        }
+        
+        // Show a small notification without full refresh
+        showScrapedStatus(`✅ Captions updated for @${username}`, 'success');
+        
+    } catch (error) {
+        console.error('Error updating captions in place:', error);
     }
 }
 
@@ -2545,6 +2618,9 @@ function updateProfileSyncStatus(username, syncData) {
             break;
     }
 }
+
+
+
 
 // Auto-start sync monitoring when results are loaded
 function startSyncMonitoringForAllProfiles(results) {
