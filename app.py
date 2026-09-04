@@ -1367,11 +1367,16 @@ def get_caption_fetch_status(reel_url):
         'message': 'No caption fetch job found for this URL'
     }
 
+
+
+
+
+
+
 def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
     """
-    Ensure a reel has a caption - uses async fetch if missing.
-    
-    Priority: 1. scraped_reels → 2. posted_reels → 3. Async caption service
+    Ensure a reel has a caption - checks all sources.
+    Returns caption if found, else None.
     """
     conn = get_db_connection()
     if not conn:
@@ -1415,11 +1420,16 @@ def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
             app.logger.info(f"📝 Found caption in posted_reels")
             return result[0]
         
-        # 3. Trigger async caption fetch (doesn't block!)
+        # 3. 🔥 Check if caption fetch is already in progress
+        status = get_caption_fetch_status(reel_url)
+        if status.get('status') in ('pending', 'processing'):
+            app.logger.info(f"⏳ Caption fetch already in progress for: {reel_url[:50]}...")
+            return None
+        
+        # 4. Trigger async caption fetch (only if not already pending)
         app.logger.info(f"🔥 Caption not found, triggering async fetch for: {reel_url[:50]}...")
         trigger_caption_fetch_async(reel_url, pipeline_id, profile_username)
         
-        # Return None for now - webhook will update later
         return None
         
     except Exception as e:
@@ -1428,6 +1438,15 @@ def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
     finally:
         cur.close()
         conn.close()
+        
+        
+        
+        
+        
+        
+        
+        
+        
 
 # ============== PIPELINE FUNCTIONS ==============
 
@@ -1640,8 +1659,6 @@ def get_direct_url_from_cache_only(reel_url):
 
 
 
-
-
 def run_pipeline(pipeline_id):
     """Execute a single pipeline - waits for async caption if pending."""
     conn = get_db_connection()
@@ -1680,7 +1697,7 @@ def run_pipeline(pipeline_id):
             try:
                 reel_url = reel['url']
                 
-                # 🔥 STEP 1: Check if caption exists
+                # 🔥 STEP 1: Check if caption exists (this will trigger fetch if needed)
                 app.logger.info(f"📝 Processing: {reel_url[:50]}...")
                 caption = ensure_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
                 
@@ -1691,8 +1708,7 @@ def run_pipeline(pipeline_id):
                     if status.get('status') in ('pending', 'processing'):
                         app.logger.info(f"⏳ Caption is being fetched, waiting up to 60 seconds...")
                         
-                        # Wait for caption with timeout
-                        max_wait = 60  # seconds
+                        max_wait = 60
                         wait_interval = 2
                         waited = 0
                         caption_found = False
@@ -1701,13 +1717,27 @@ def run_pipeline(pipeline_id):
                             time.sleep(wait_interval)
                             waited += wait_interval
                             
-                            # Check if caption is now in database
-                            check_caption = ensure_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
-                            if check_caption and check_caption.strip():
-                                caption = check_caption
-                                caption_found = True
-                                app.logger.info(f"✅ Got caption after waiting {waited}s: {caption[:50]}...")
-                                break
+                            # 🔥 Check if caption is now in database (DON'T trigger new fetch)
+                            # Just check posted_reels directly
+                            conn_check = get_db_connection()
+                            if conn_check:
+                                try:
+                                    cur_check = conn_check.cursor()
+                                    cur_check.execute("""
+                                        SELECT caption FROM posted_reels 
+                                        WHERE pipeline_id = %s AND reel_url = %s
+                                    """, (pipeline['id'], reel_url))
+                                    result = cur_check.fetchone()
+                                    cur_check.close()
+                                    conn_check.close()
+                                    
+                                    if result and result[0] and result[0].strip():
+                                        caption = result[0]
+                                        caption_found = True
+                                        app.logger.info(f"✅ Got caption after waiting {waited}s: {caption[:50]}...")
+                                        break
+                                except:
+                                    pass
                             
                             # Check if webhook failed
                             current_status = get_caption_fetch_status(reel_url)
@@ -1819,7 +1849,6 @@ def run_pipeline(pipeline_id):
         return {"error": str(e)}
     finally:
         conn.close()
-
 
 
 
