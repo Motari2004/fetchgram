@@ -363,18 +363,16 @@ def sync_captions_background(username):
     """Trigger caption sync in background for a username with status tracking."""
     import threading
     
-    # Generate job_id in the outer scope
-    job_id = str(uuid.uuid4())
-    
     def run_sync():
         with app.app_context():
+            job_id = str(uuid.uuid4())
             try:
-                app.logger.info(f"[Job {job_id}] 🔥 Starting sync for @{username}")
-                update_sync_status(username, 'syncing', 0, 0, 0, 0, job_id)
+                app.logger.info(f"[Job {job_id}] Background sync started for @{username}")
+                update_sync_status(username, 'syncing', job_id=job_id)
                 
                 conn = get_db_connection()
                 if not conn:
-                    update_sync_status(username, 'error', 0, 0, 0, 1, job_id)
+                    update_sync_status(username, 'error', errors=1)
                     return
                 
                 cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -390,29 +388,27 @@ def sync_captions_background(username):
                 
                 result = cur.fetchone()
                 if not result:
-                    app.logger.error(f"[Job {job_id}] No data for @{username}")
-                    update_sync_status(username, 'error', 0, 0, 0, 1, job_id)
+                    app.logger.error(f"[Job {job_id}] No scraped data found for @{username}")
+                    update_sync_status(username, 'error', errors=1)
                     cur.close()
                     conn.close()
                     return
                 
                 results = result['results']
+                updated = False
                 total_reels = 0
                 captions_fetched = 0
                 captions_skipped = 0
                 errors = 0
-                updated = False
-                urls_to_fetch = []
-                reel_positions = []
                 
-                # Find the profile and collect URLs needing captions
                 for profile_idx, profile in enumerate(results):
                     if profile.get('username') == username:
                         reels = profile.get('reels', [])
                         total_reels = len(reels)
-                        
-                        app.logger.info(f"[Job {job_id}] 📹 Found {total_reels} reels for @{username}")
                         update_sync_status(username, 'syncing', total_reels, 0, 0, 0, job_id)
+                        
+                        urls_to_fetch = []
+                        reel_indices = []
                         
                         for reel_idx, reel in enumerate(reels):
                             if isinstance(reel, dict):
@@ -423,57 +419,55 @@ def sync_captions_background(username):
                                     continue
                                 if reel_url:
                                     urls_to_fetch.append(reel_url)
-                                    reel_positions.append((profile_idx, reel_idx))
+                                    reel_indices.append(reel_idx)
                             else:
                                 reel_url = str(reel)
                                 urls_to_fetch.append(reel_url)
-                                reel_positions.append((profile_idx, reel_idx))
+                                reel_indices.append(reel_idx)
+                        
+                        if urls_to_fetch:
+                            app.logger.info(f"[Job {job_id}] Fetching {len(urls_to_fetch)} captions...")
+                            
+                            try:
+                                response = requests.post(
+                                    CAPTION_SERVICE_URL,
+                                    json={"urls": urls_to_fetch},
+                                    timeout=120,
+                                    headers={"Content-Type": "application/json"}
+                                )
+                                
+                                if response.status_code == 200:
+                                    data = response.json()
+                                    if data.get('success'):
+                                        captions_map = {}
+                                        for item in data.get('results', []):
+                                            if item.get('success'):
+                                                captions_map[item['url']] = item.get('caption', '')
+                                        
+                                        for reel_idx, reel_url in zip(reel_indices, urls_to_fetch):
+                                            caption = captions_map.get(reel_url, '')
+                                            if caption:
+                                                results[profile_idx]['reels'][reel_idx]['caption'] = caption
+                                                captions_fetched += 1
+                                                updated = True
+                                                # Update progress periodically
+                                                if captions_fetched % 3 == 0:
+                                                    update_sync_status(username, 'syncing', total_reels, captions_fetched, captions_skipped, errors, job_id)
+                                            else:
+                                                errors += 1
+                                    else:
+                                        errors += len(urls_to_fetch)
+                                else:
+                                    errors += len(urls_to_fetch)
+                                    
+                            except Exception as e:
+                                app.logger.error(f"[Job {job_id}] Caption service error: {e}")
+                                errors += len(urls_to_fetch)
+                        else:
+                            app.logger.info(f"[Job {job_id}] No URLs need caption fetching")
                         
                         break
                 
-                app.logger.info(f"[Job {job_id}] 📤 {len(urls_to_fetch)} URLs need captions")
-                
-                # Process each URL individually
-                for idx, (reel_url, (profile_idx, reel_idx)) in enumerate(zip(urls_to_fetch, reel_positions)):
-                    try:
-                        app.logger.info(f"[Job {job_id}] 📞 [{idx+1}/{len(urls_to_fetch)}] Calling caption service...")
-                        
-                        response = requests.post(
-                            CAPTION_SERVICE_URL,
-                            json={"url": reel_url},
-                            timeout=30,
-                            headers={"Content-Type": "application/json"}
-                        )
-                        
-                        if response.status_code == 200:
-                            data = response.json()
-                            if data.get('success'):
-                                caption = data.get('caption', '')
-                                if caption:
-                                    results[profile_idx]['reels'][reel_idx]['caption'] = caption
-                                    captions_fetched += 1
-                                    updated = True
-                                    app.logger.info(f"[Job {job_id}] ✅ Got caption ({len(caption)} chars)")
-                                else:
-                                    errors += 1
-                            else:
-                                errors += 1
-                        else:
-                            app.logger.error(f"[Job {job_id}] ❌ Service error: {response.status_code}")
-                            errors += 1
-                            
-                    except Exception as e:
-                        app.logger.error(f"[Job {job_id}] ❌ Service exception: {e}")
-                        errors += 1
-                    
-                    # Small delay to avoid rate limiting
-                    time.sleep(1)
-                    
-                    # Update progress every few captions
-                    if (captions_fetched + errors) % 2 == 0 or idx == len(urls_to_fetch) - 1:
-                        update_sync_status(username, 'syncing', total_reels, captions_fetched, captions_skipped, errors, job_id)
-                
-                # Save updated results
                 if updated:
                     cur.execute("""
                         UPDATE scraped_reels 
@@ -481,7 +475,6 @@ def sync_captions_background(username):
                         WHERE id = %s
                     """, (json.dumps(results), result['id']))
                     conn.commit()
-                    app.logger.info(f"[Job {job_id}] 💾 Saved {captions_fetched} captions to database")
                     
                     # Update reel_cache
                     for profile in results:
@@ -498,27 +491,25 @@ def sync_captions_background(username):
                                             created_at = NOW()
                                     """, (reel_url, caption))
                     conn.commit()
-                
-                # Final status
-                final_status = 'completed' if errors == 0 else 'partial'
-                update_sync_status(username, final_status, total_reels, captions_fetched, captions_skipped, errors, job_id)
-                app.logger.info(f"[Job {job_id}] ✅ Done: {captions_fetched} fetched, {errors} errors")
+                    
+                    status = 'completed' if errors == 0 else 'partial'
+                    update_sync_status(username, status, total_reels, captions_fetched, captions_skipped, errors, job_id)
+                    app.logger.info(f"[Job {job_id}] ✅ Synced {captions_fetched} captions for @{username}")
+                else:
+                    update_sync_status(username, 'completed', total_reels, 0, captions_skipped, 0, job_id)
+                    app.logger.info(f"[Job {job_id}] No new captions needed for @{username}")
                 
                 cur.close()
                 conn.close()
                 
             except Exception as e:
-                app.logger.error(f"[Job {job_id}] ❌ Error: {e}")
+                app.logger.error(f"[Job {job_id}] Background sync error: {e}")
                 import traceback
                 app.logger.error(traceback.format_exc())
-                update_sync_status(username, 'error', 0, 0, 0, 1, job_id)
+                update_sync_status(username, 'error', errors=1, job_id=job_id)
     
-    # Start the thread
     thread = threading.Thread(target=run_sync)
-    thread.daemon = True
     thread.start()
-    
-    # Return the job_id from the outer scope
     return job_id
 
 # ============== COOKIE STORAGE FUNCTIONS ==============
@@ -1725,11 +1716,13 @@ def clear_cookies():
 
 @app.route("/api/scrape/proxy", methods=["POST"])
 def scrape_proxy():
-    """Proxy endpoint that stores data and returns immediately."""
+    """Proxy endpoint that retrieves cookies and auto-fetches captions."""
     data = request.get_json(silent=True) or {}
     usernames = data.get("usernames", [])
+    fetch_captions = data.get("fetch_captions", True)
     
     app.logger.info(f"📝 Scraping usernames: {usernames}")
+    app.logger.info(f"📝 Fetch captions: {fetch_captions}")
     
     cookies = None
     db_cookies = get_cookies_from_db()
@@ -1778,31 +1771,74 @@ def scrape_proxy():
         
         if response.status_code == 200:
             result_data = response.json()
-            
-            # Extract usernames and results
-            extracted_usernames = []
-            results = result_data.get('results', [])
-            
-            for profile in results:
-                if isinstance(profile, dict):
-                    username = profile.get('username')
-                    if username:
-                        extracted_usernames.append(username)
-            
-            # Store scraped data in database (no captions yet)
-            with app.test_request_context():
-                store_scraped_data()
-                app.logger.info(f"✅ Stored scraped data for job {result_data.get('job_id')}")
-            
-            # Return results to frontend IMMEDIATELY (NO AUTO-SYNC)
-            return jsonify({
-                "status": "success",
-                "job_id": result_data.get('job_id'),
-                "usernames": extracted_usernames,
-                "message": f"Scraped {len(extracted_usernames)} profiles. Use 'Sync Captions' to fetch captions.",
-                "results": results,
-                "auto_sync": False  # No auto-sync
-            }), 200
+            if result_data.get('job_id') and result_data.get('results'):
+                results = result_data.get('results', [])
+                
+                # Auto-fetch captions on Vercel side
+                if fetch_captions:
+                    app.logger.info("📝 Auto-fetching captions for scraped reels...")
+                    
+                    all_reel_urls = []
+                    for profile in results:
+                        if isinstance(profile, dict):
+                            reels = profile.get('reels', [])
+                            for reel in reels:
+                                if isinstance(reel, str):
+                                    all_reel_urls.append(reel)
+                                elif isinstance(reel, dict):
+                                    url = reel.get('url')
+                                    if url:
+                                        all_reel_urls.append(url)
+                    
+                    if all_reel_urls:
+                        app.logger.info(f"📝 Fetching {len(all_reel_urls)} captions...")
+                        captions_map = fetch_captions_batch(all_reel_urls)
+                        
+                        for profile in results:
+                            if isinstance(profile, dict):
+                                reels = profile.get('reels', [])
+                                processed_reels = []
+                                for reel in reels:
+                                    if isinstance(reel, str):
+                                        reel_url = reel
+                                        caption = captions_map.get(reel_url, '')
+                                        processed_reels.append({
+                                            "url": reel_url,
+                                            "caption": caption or ''
+                                        })
+                                    elif isinstance(reel, dict):
+                                        reel_url = reel.get('url')
+                                        if reel_url:
+                                            caption = captions_map.get(reel_url, '')
+                                            processed_reels.append({
+                                                "url": reel_url,
+                                                "caption": caption or ''
+                                            })
+                                        else:
+                                            processed_reels.append(reel)
+                                    else:
+                                        processed_reels.append(reel)
+                                profile['reels'] = processed_reels
+                        
+                        app.logger.info(f"✅ Added {len(all_reel_urls)} captions")
+                
+                extracted_usernames = []
+                for profile in results:
+                    if isinstance(profile, dict):
+                        username = profile.get('username')
+                        if username:
+                            extracted_usernames.append(username)
+                
+                # Store with captions
+                with app.test_request_context():
+                    store_scraped_data()
+                    app.logger.info(f"✅ Auto-stored scraped data for job {result_data.get('job_id')}")
+                
+                # Auto-trigger caption sync for scraped profiles
+                if extracted_usernames:
+                    app.logger.info(f"📝 Auto-triggering caption sync for: {extracted_usernames}")
+                    for username in extracted_usernames:
+                        sync_captions_background(username)
         
         return jsonify(response.json()), response.status_code
         

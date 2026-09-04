@@ -620,6 +620,34 @@ syncCaptionsBtn?.addEventListener('click', function() {
   }
 });
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Execute Sync
 syncExecuteBtn?.addEventListener('click', async function() {
   const username = syncUsernameSelect?.value;
@@ -651,24 +679,20 @@ syncExecuteBtn?.addEventListener('click', async function() {
     });
     
     const data = await response.json();
-    console.log('📤 Sync response:', data);
     
     if (syncProgressBar) syncProgressBar.style.width = '100%';
     if (syncProgressText) syncProgressText.textContent = 'Complete!';
     
-    if (response.ok && data.status === 'accepted') {
+    if (response.ok && data.status === 'success') {
       showSyncStatus(
-        `✅ Sync started for @${username}! Check the profile card for progress.`,
+        `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
         'success'
       );
-      
-      // ✅ Start monitoring sync status immediately
-      checkAndShowSyncStatus(username);
       
       // Refresh the scraped results to show new captions
       setTimeout(() => {
         autoLoadScrapedResults();
-      }, 2000);
+      }, 1000);
       
     } else {
       showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
@@ -680,6 +704,14 @@ syncExecuteBtn?.addEventListener('click', async function() {
   } finally {
     this.disabled = false;
     this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
+
+
+
+
+
+
+
+
     
     setTimeout(() => {
       if (syncProgress) syncProgress.style.display = 'none';
@@ -1235,7 +1267,7 @@ function renderScrapedResults(results, stats, isLoading = false) {
       const usernames = results.map(p => `@${p.username}`).join(', ');
       allUsernamesList.textContent = usernames;
       allUsernamesSection.hidden = false;
-      window.allUsernames = results.map(p => p.username);
+      window.allUsernames = usernames;
     } else {
       allUsernamesSection.hidden = true;
       window.allUsernames = [];
@@ -1342,7 +1374,7 @@ function renderScrapedResults(results, stats, isLoading = false) {
           <div class="scraped-reel-item">
             <span class="scraped-reel-index">#${idx + 1}</span>
             <span class="scraped-reel-url"><a href="${escapeHtml(reelUrl)}" target="_blank">${escapeHtml(reelUrl)}</a></span>
-            ${reelCaption ? `<span class="scraped-reel-caption">📝 ${escapeHtml(reelCaption.substring(0, 60))}${reelCaption.length > 60 ? '...' : ''}</span>` : '<span class="scraped-reel-caption" style="color: var(--text-muted);">⏳ No caption yet. Click "Sync Captions" to fetch.</span>'}
+            ${reelCaption ? `<span class="scraped-reel-caption">📝 ${escapeHtml(reelCaption.substring(0, 60))}${reelCaption.length > 60 ? '...' : ''}</span>` : ''}
             <div class="scraped-reel-actions">
               <button class="btn btn-sm btn-success btn-icon copy-reel-btn" data-url="${escapeHtml(reelUrl)}">📋</button>
               <button class="btn btn-sm btn-primary btn-icon download-reel-btn" data-url="${escapeHtml(reelUrl)}">⬇</button>
@@ -1429,100 +1461,98 @@ async function copyToClipboard(text, btn) {
 // ==================== START SCRAPING ====================
 
 startScrapeBtn.addEventListener('click', async function() {
-    const usernames = scrapeUsernames.value
-        .split('\n')
-        .map(s => s.trim())
-        .filter(Boolean);
+  const usernames = scrapeUsernames.value
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+  
+  if (usernames.length === 0) {
+    showScrapeStatus('Please enter at least one username', 'error');
+    return;
+  }
+  
+  const maxReels = parseInt(scrapeMaxReels.value) || 50;
+  const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
+  const headless = scrapeHeadless.checked;
+  
+  try {
+    const cookieStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
+    const cookieData = await cookieStatus.json();
     
-    if (usernames.length === 0) {
-        showScrapeStatus('Please enter at least one username', 'error');
-        return;
+    if (!cookieData.has_cookies) {
+      showScrapeStatus('❌ Please upload your Instagram cookies.json file first!', 'error');
+      return;
     }
+  } catch (error) {
+    showScrapeStatus('❌ Failed to check cookie status', 'error');
+    return;
+  }
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
+  showScrapeStatus('⏳ Sending request to Render...', 'running');
+  showScrapeProgress(10, 'Connecting to Vercel proxy...');
+  
+  try {
+    const response = await fetch('/api/scrape/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        usernames: usernames,
+        maxReels: maxReels,
+        maxScrolls: maxScrolls,
+        headless: headless,
+        sendToVercel: true
+      })
+    });
     
-    const maxReels = parseInt(scrapeMaxReels.value) || 50;
-    const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
-    const headless = scrapeHeadless.checked;
+    const data = await response.json();
     
-    try {
-        const cookieStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
-        const cookieData = await cookieStatus.json();
-        
-        if (!cookieData.has_cookies) {
-            showScrapeStatus('❌ Please upload your Instagram cookies.json file first!', 'error');
-            return;
-        }
-    } catch (error) {
-        showScrapeStatus('❌ Failed to check cookie status', 'error');
-        return;
+    if (response.ok) {
+      showScrapeProgress(100, '✅ Job started!');
+      showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
+      
+      localStorage.setItem('last_scrape_job_id', data.jobId);
+      
+      scrapedReelsContent.innerHTML = `
+        <div class="empty-state" style="border-color: var(--success);">
+          <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
+          <strong>Job sent to Render!</strong>
+          <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+            Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${data.jobId}</code>
+          </p>
+          <p style="margin-top: 4px; font-size: 13px; color: var(--text-secondary);">
+            Render is scraping the profiles. Results will be sent back automatically.
+          </p>
+          <p style="margin-top: 8px; font-size: 13px; color: var(--text-muted);">
+            ⏱️ This may take a minute or two. Click <strong>"Load Results"</strong> after the job completes.
+          </p>
+        </div>
+      `;
+      
+      setTimeout(() => {
+        hideScrapeProgress();
+      }, 3000);
+      
+    } else {
+      showScrapeProgress(0, '❌ Failed');
+      showScrapeStatus(`❌ ${data.error || 'Failed to start job'}`, 'error');
     }
-    
-    this.disabled = true;
-    this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
-    showScrapeStatus('⏳ Sending request to Render...', 'running');
-    showScrapeProgress(10, 'Connecting to Vercel proxy...');
-    
-    try {
-        const response = await fetch('/api/scrape/proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                usernames: usernames,
-                maxReels: maxReels,
-                maxScrolls: maxScrolls,
-                headless: headless,
-                sendToVercel: true
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (response.ok) {
-            showScrapeProgress(100, '✅ Reels received!');
-            
-            // ✅ Results returned immediately (reels appear)
-            if (data.results && data.results.length > 0) {
-                window.scrapedData = data.results;
-                window.allUsernames = data.usernames || [];
-                
-                // ✅ Render reels in UI (with sync indicator)
-                renderScrapedResults(data.results);
-                
-                // ✅ Show that captions are available to sync
-                showScrapeStatus(`✅ Scraped ${data.results.length} profiles. Click "Sync Captions" to fetch captions.`, 'success');
-                
-                // ✅ Start sync monitoring (checks if any captions already exist)
-                startSyncMonitoringForAllProfiles(data.results);
-                
-                // ✅ Hide progress after a moment
-                setTimeout(() => {
-                    hideScrapeProgress();
-                }, 2000);
-                
-            } else {
-                // Fallback: wait for results
-                showScrapeStatus(`✅ Job started! Job ID: ${data.job_id || 'N/A'}`, 'success');
-                localStorage.setItem('last_scrape_job_id', data.job_id || '');
-            }
-            
-        } else {
-            showScrapeProgress(0, '❌ Failed');
-            showScrapeStatus(`❌ ${data.error || 'Failed to start job'}`, 'error');
-        }
-    } catch (error) {
-        console.error('Scrape error:', error);
-        showScrapeProgress(0, '❌ Error');
-        showScrapeStatus(`❌ ${error.message}`, 'error');
-    } finally {
-        this.innerHTML = `
-            <span class="btn-content">
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                    <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                Start Scraping
-            </span>
-        `;
-        this.disabled = false;
-    }
+  } catch (error) {
+    console.error('Scrape error:', error);
+    showScrapeProgress(0, '❌ Error');
+    showScrapeStatus(`❌ ${error.message}`, 'error');
+  } finally {
+    this.innerHTML = `
+      <span class="btn-content">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Start Scraping
+      </span>
+    `;
+    this.disabled = false;
+  }
 });
 
 // ==================== FETCH SCRAPED RESULTS ====================
@@ -1549,10 +1579,6 @@ async function fetchScrapedResults() {
         `✅ Loaded ${data.results.length} profiles: ${usernameList}`,
         'success'
       );
-      
-      // ✅ Start sync monitoring to show status
-      startSyncMonitoringForAllProfiles(data.results);
-      
     } else {
       showScrapedStatus('No results found. Start a new scrape job.', 'error');
       renderScrapedResults([]);
@@ -2333,13 +2359,9 @@ async function autoLoadScrapedResults() {
       
       const usernameList = data.usernames ? data.usernames.join(', ') : '';
       showScrapedStatus(
-        `✅ Loaded ${data.results.length} profiles: ${usernameList}`,
+        `✅ Auto-loaded ${data.results.length} profiles: ${usernameList}`,
         'success'
       );
-      
-      // ✅ Show sync status but DON'T auto-sync
-      startSyncMonitoringForAllProfiles(data.results);
-      
     } else {
       renderScrapedResults([]);
     }
@@ -2399,6 +2421,12 @@ document.getElementById('refresh-status-btn')?.addEventListener('click', functio
   showCookieStatus('🔄 Status refreshed', 'info');
 });
 
+
+
+
+
+
+
 // ==================== SYNC STATUS MONITORING ====================
 
 // Store intervals for each username
@@ -2429,11 +2457,13 @@ async function checkAndShowSyncStatus(username) {
                 clearInterval(syncIntervals[username]);
                 delete syncIntervals[username];
             }
-            
-            // Update captions in place
+            // Update indicator to completed
             updateProfileSyncStatus(username, data.sync);
-            updateCaptionsInPlace(username);
             
+            // Auto-refresh results to show captions
+            setTimeout(() => {
+                autoLoadScrapedResults();
+            }, 1000);
         } else if (data.sync && data.sync.status === 'error') {
             // Show error
             updateProfileSyncStatus(username, data.sync);
@@ -2447,74 +2477,8 @@ async function checkAndShowSyncStatus(username) {
     }
 }
 
-// Update only the captions, not the whole UI
-async function updateCaptionsInPlace(username) {
-    try {
-        const response = await fetch(`/api/scraped/latest`, {
-            credentials: 'same-origin'
-        });
-        const data = await response.json();
-        
-        if (!data.results || data.results.length === 0) return;
-        
-        const profile = data.results.find(p => p.username === username);
-        if (!profile) return;
-        
-        const profileCards = document.querySelectorAll('.scraped-profile-card');
-        let targetCard = null;
-        
-        for (const card of profileCards) {
-            const nameEl = card.querySelector('.scraped-profile-name');
-            if (nameEl && nameEl.textContent.includes(`@${username}`)) {
-                targetCard = card;
-                break;
-            }
-        }
-        
-        if (!targetCard) return;
-        
-        const reelsBody = targetCard.querySelector('.scraped-profile-reels');
-        if (!reelsBody) return;
-        
-        const reels = profile.reels || [];
-        let html = '';
-        
-        reels.forEach((reel, idx) => {
-            let reelUrl = reel;
-            let reelCaption = '';
-            if (typeof reel === 'object') {
-                reelUrl = reel.url || reel;
-                reelCaption = reel.caption || '';
-            }
-            
-            html += `
-                <div class="scraped-reel-item">
-                    <span class="scraped-reel-index">#${idx + 1}</span>
-                    <span class="scraped-reel-url"><a href="${escapeHtml(reelUrl)}" target="_blank">${escapeHtml(reelUrl)}</a></span>
-                    ${reelCaption ? `<span class="scraped-reel-caption">📝 ${escapeHtml(reelCaption.substring(0, 60))}${reelCaption.length > 60 ? '...' : ''}</span>` : '<span class="scraped-reel-caption" style="color: var(--text-muted);">⏳ No caption yet. Click "Sync Captions" to fetch.</span>'}
-                    <div class="scraped-reel-actions">
-                        <button class="btn btn-sm btn-success btn-icon copy-reel-btn" data-url="${escapeHtml(reelUrl)}">📋</button>
-                        <button class="btn btn-sm btn-primary btn-icon download-reel-btn" data-url="${escapeHtml(reelUrl)}">⬇</button>
-                    </div>
-                </div>
-            `;
-        });
-        
-        reelsBody.innerHTML = html;
-        
-        const countSpan = targetCard.querySelector('.scraped-profile-count');
-        if (countSpan) {
-            countSpan.textContent = `📹 ${reels.length}`;
-        }
-        
-        showScrapedStatus(`✅ Captions updated for @${username}`, 'success');
-        
-    } catch (error) {
-        console.error('Error updating captions in place:', error);
-    }
-}
-
 function updateProfileSyncStatus(username, syncData) {
+    // Find the profile card
     const profileCards = document.querySelectorAll('.scraped-profile-card');
     let targetCard = null;
     
@@ -2528,6 +2492,7 @@ function updateProfileSyncStatus(username, syncData) {
     
     if (!targetCard) return;
     
+    // Find or create the sync indicator
     let indicator = targetCard.querySelector('.sync-indicator');
     if (!indicator) {
         const header = targetCard.querySelector('.scraped-profile-header');
@@ -2594,10 +2559,21 @@ function startSyncMonitoringForAllProfiles(results) {
 // Override the renderScrapedResults to start monitoring
 const originalRenderScrapedResults = renderScrapedResults;
 renderScrapedResults = function(results, stats, isLoading = false) {
+    // Call the original function
     originalRenderScrapedResults(results, stats, isLoading);
+    
+    // Start sync monitoring
     if (results && results.length > 0 && !isLoading) {
         startSyncMonitoringForAllProfiles(results);
     }
 };
+
+
+
+
+
+
+
+
 
 console.log('✅ Fetchgram loaded successfully!');
