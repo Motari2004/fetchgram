@@ -1437,106 +1437,8 @@ def get_direct_url_from_cache_only(reel_url):
 
 
 
-
-
-
-
-def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
-    """
-    Ensure a reel has a caption.
-    If it exists in database, return it.
-    If not, fetch from caption service and store.
-    """
-    conn = get_db_connection()
-    if not conn:
-        return None
-    
-    try:
-        cur = conn.cursor()
-        
-        # 1. Check if caption already exists in posted_reels
-        cur.execute("""
-            SELECT caption FROM posted_reels 
-            WHERE pipeline_id = %s AND reel_url = %s
-        """, (pipeline_id, reel_url))
-        result = cur.fetchone()
-        
-        if result and result[0] and result[0].strip():
-            app.logger.info(f"📝 Using existing caption from posted_reels")
-            return result[0]
-        
-        # 2. Check if caption exists in scraped_reels
-        cur.execute("""
-            SELECT results FROM scraped_reels 
-            WHERE EXISTS (
-                SELECT 1 FROM jsonb_array_elements(results) AS elem
-                WHERE elem->>'username' = %s
-            )
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (profile_username,))
-        
-        result = cur.fetchone()
-        if result:
-            results = result[0]
-            for profile in results:
-                if profile.get('username') == profile_username:
-                    reels = profile.get('reels', [])
-                    for reel in reels:
-                        if isinstance(reel, dict):
-                            if reel.get('url') == reel_url:
-                                caption = reel.get('caption', '')
-                                if caption and caption.strip():
-                                    app.logger.info(f"📝 Found caption in scraped data")
-                                    # Store in posted_reels for future use
-                                    cur.execute("""
-                                        UPDATE posted_reels 
-                                        SET caption = %s 
-                                        WHERE pipeline_id = %s AND reel_url = %s
-                                    """, (caption, pipeline_id, reel_url))
-                                    conn.commit()
-                                    return caption
-        
-        # 3. Fetch from caption service
-        app.logger.info(f"🔥 Fetching caption from service for: {reel_url[:50]}...")
-        caption = fetch_caption_from_service(reel_url)
-        
-        if caption and caption.strip():
-            app.logger.info(f"✅ Got caption: {caption[:50]}...")
-            # Store in posted_reels
-            cur.execute("""
-                UPDATE posted_reels 
-                SET caption = %s 
-                WHERE pipeline_id = %s AND reel_url = %s
-            """, (caption, pipeline_id, reel_url))
-            conn.commit()
-            return caption
-        
-        app.logger.warning(f"⚠️ No caption found for: {reel_url[:50]}...")
-        return None
-        
-    except Exception as e:
-        app.logger.error(f"Error ensuring caption: {e}")
-        return None
-    finally:
-        cur.close()
-        conn.close()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def run_pipeline(pipeline_id):
-    """Execute a single pipeline - auto-fetches captions if missing."""
+    """Execute a single pipeline - auto-converts URLs to CDN URLs."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -1554,7 +1456,7 @@ def run_pipeline(pipeline_id):
         if not pipeline['is_active']:
             return {"error": "Pipeline is inactive"}
         
-        # Get unposted reels
+        # Get unposted reels with captions
         unposted = get_unposted_reels(
             pipeline['profile_username'], 
             pipeline['id'], 
@@ -1572,10 +1474,7 @@ def run_pipeline(pipeline_id):
         for reel in unposted:
             try:
                 reel_url = reel['url']
-                
-                # 🔥 STEP 1: Ensure caption exists
-                app.logger.info(f"📝 Processing: {reel_url[:50]}...")
-                caption = ensure_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
+                caption = reel.get('caption', '')
                 
                 # If no caption, use fallback
                 if not caption or caption.strip() == '':
@@ -1586,11 +1485,13 @@ def run_pipeline(pipeline_id):
                 if len(caption) > 5000:
                     caption = caption[:4997] + "..."
                 
-                # 🔥 STEP 2: Get direct video URL
+                # Get direct CDN URL (auto-convert using yt-dlp)
                 app.logger.info(f"📥 Converting to CDN URL: {reel_url[:60]}...")
                 direct_video_url = get_direct_video_url(reel_url)
                 
                 if not direct_video_url:
+                    app.logger.error(f"❌ Failed to convert: {reel_url}")
+                    
                     # Try cache as fallback
                     direct_video_url = get_direct_url_from_cache_only(reel_url)
                     
@@ -1611,7 +1512,7 @@ def run_pipeline(pipeline_id):
                     cache_direct_url(reel_url, direct_video_url, caption)
                     app.logger.info(f"✅ Converted to CDN URL: {direct_video_url[:60]}...")
                 
-                # 🔥 STEP 3: Post to Facebook
+                # Post to Facebook using the CDN URL
                 result = publish_to_facebook(
                     video_url=direct_video_url,
                     text=caption,
@@ -1866,14 +1767,13 @@ def clear_cookies():
 
 @app.route("/api/scrape/proxy", methods=["POST"])
 def scrape_proxy():
-    """Proxy endpoint that only fetches NEW reels."""
+    """Proxy endpoint that retrieves cookies and auto-fetches captions."""
     data = request.get_json(silent=True) or {}
     usernames = data.get("usernames", [])
-    max_reels = data.get("maxReels", 50)
     fetch_captions = data.get("fetch_captions", True)
     
     app.logger.info(f"📝 Scraping usernames: {usernames}")
-    app.logger.info(f"📝 Max reels: {max_reels}")
+    app.logger.info(f"📝 Fetch captions: {fetch_captions}")
     
     cookies = None
     db_cookies = get_cookies_from_db()
@@ -1911,12 +1811,6 @@ def scrape_proxy():
     data['cookies'] = cookies
     
     try:
-        # 🔥 Get existing URLs before scraping
-        existing_urls = {}
-        for username in usernames:
-            existing_urls[username] = get_existing_reel_urls(username)
-            app.logger.info(f"📊 @{username}: {len(existing_urls[username])} existing reels")
-        
         response = requests.post(
             'https://ig-reels-scraper.onrender.com/api/scrape/start',
             json=data,
@@ -1928,111 +1822,74 @@ def scrape_proxy():
         
         if response.status_code == 200:
             result_data = response.json()
-            results = result_data.get('results', [])
-            
-            # 🔥 Filter out already existing reels
-            new_results = []
-            total_new_reels = 0
-            
-            for profile in results:
-                username = profile.get('username')
-                if not username:
-                    continue
+            if result_data.get('job_id') and result_data.get('results'):
+                results = result_data.get('results', [])
                 
-                existing = existing_urls.get(username, set())
-                reels = profile.get('reels', [])
-                
-                # Filter out existing reels
-                new_reels = []
-                for reel in reels:
-                    if isinstance(reel, str):
-                        if reel not in existing:
-                            new_reels.append(reel)
-                            existing.add(reel)  # Add to set to avoid duplicates within this batch
-                    elif isinstance(reel, dict):
-                        url = reel.get('url')
-                        if url and url not in existing:
-                            new_reels.append(reel)
-                            existing.add(url)
-                
-                if new_reels:
-                    profile['reels'] = new_reels
-                    new_results.append(profile)
-                    total_new_reels += len(new_reels)
-                    app.logger.info(f"✅ @{username}: {len(new_reels)} new reels found")
-                else:
-                    app.logger.info(f"ℹ️ @{username}: No new reels found")
-            
-            # 🔥 Store only new reels
-            if new_results:
-                with app.test_request_context():
-                    store_scraped_data()
-                    app.logger.info(f"✅ Stored {total_new_reels} new reels for {len(new_results)} profiles")
-                
-                # Fetch captions only for new reels
+                # Auto-fetch captions on Vercel side
                 if fetch_captions:
-                    app.logger.info(f"📝 Auto-fetching captions for {total_new_reels} new reels...")
+                    app.logger.info("📝 Auto-fetching captions for scraped reels...")
                     
                     all_reel_urls = []
-                    for profile in new_results:
-                        reels = profile.get('reels', [])
-                        for reel in reels:
-                            if isinstance(reel, str):
-                                all_reel_urls.append(reel)
-                            elif isinstance(reel, dict):
-                                url = reel.get('url')
-                                if url:
-                                    all_reel_urls.append(url)
-                    
-                    if all_reel_urls:
-                        captions_map = fetch_captions_batch(all_reel_urls)
-                        
-                        for profile in new_results:
+                    for profile in results:
+                        if isinstance(profile, dict):
                             reels = profile.get('reels', [])
-                            processed_reels = []
                             for reel in reels:
                                 if isinstance(reel, str):
-                                    reel_url = reel
-                                    caption = captions_map.get(reel_url, '')
-                                    processed_reels.append({
-                                        "url": reel_url,
-                                        "caption": caption or ''
-                                    })
+                                    all_reel_urls.append(reel)
                                 elif isinstance(reel, dict):
-                                    reel_url = reel.get('url')
-                                    if reel_url:
+                                    url = reel.get('url')
+                                    if url:
+                                        all_reel_urls.append(url)
+                    
+                    if all_reel_urls:
+                        app.logger.info(f"📝 Fetching {len(all_reel_urls)} captions...")
+                        captions_map = fetch_captions_batch(all_reel_urls)
+                        
+                        for profile in results:
+                            if isinstance(profile, dict):
+                                reels = profile.get('reels', [])
+                                processed_reels = []
+                                for reel in reels:
+                                    if isinstance(reel, str):
+                                        reel_url = reel
                                         caption = captions_map.get(reel_url, '')
                                         processed_reels.append({
                                             "url": reel_url,
                                             "caption": caption or ''
                                         })
+                                    elif isinstance(reel, dict):
+                                        reel_url = reel.get('url')
+                                        if reel_url:
+                                            caption = captions_map.get(reel_url, '')
+                                            processed_reels.append({
+                                                "url": reel_url,
+                                                "caption": caption or ''
+                                            })
+                                        else:
+                                            processed_reels.append(reel)
                                     else:
                                         processed_reels.append(reel)
-                                else:
-                                    processed_reels.append(reel)
-                            profile['reels'] = processed_reels
+                                profile['reels'] = processed_reels
                         
-                        app.logger.info(f"✅ Added captions to {len(all_reel_urls)} new reels")
+                        app.logger.info(f"✅ Added {len(all_reel_urls)} captions")
                 
-                extracted_usernames = [p.get('username') for p in new_results if p.get('username')]
+                extracted_usernames = []
+                for profile in results:
+                    if isinstance(profile, dict):
+                        username = profile.get('username')
+                        if username:
+                            extracted_usernames.append(username)
                 
-                return jsonify({
-                    "status": "success",
-                    "job_id": result_data.get('job_id') or str(uuid.uuid4()),
-                    "usernames": extracted_usernames,
-                    "message": f"Found {total_new_reels} new reels across {len(new_results)} profiles",
-                    "results": new_results,
-                    "auto_sync": False,
-                    "new_reels": total_new_reels,
-                    "profiles_with_new": len(new_results)
-                }), 200
-            else:
-                return jsonify({
-                    "status": "success",
-                    "message": "No new reels found for the requested profiles",
-                    "usernames": usernames,
-                    "results": []
-                }), 200
+                # Store with captions
+                with app.test_request_context():
+                    store_scraped_data()
+                    app.logger.info(f"✅ Auto-stored scraped data for job {result_data.get('job_id')}")
+                
+                # Auto-trigger caption sync for scraped profiles
+                if extracted_usernames:
+                    app.logger.info(f"📝 Auto-triggering caption sync for: {extracted_usernames}")
+                    for username in extracted_usernames:
+                        sync_captions_background(username)
         
         return jsonify(response.json()), response.status_code
         
@@ -2106,10 +1963,11 @@ def store_scraped_data_internal(job_id, results, usernames, status='completed'):
 
 @app.route("/api/scraped/store", methods=["POST"])
 def store_scraped_data():
-    """Store scraped data from Render - merges with existing data."""
+    """Store scraped data from Render into PostgreSQL with usernames and captions."""
     data = request.get_json(silent=True) or {}
     results = data.get("results", [])
     job_id = data.get("job_id")
+    usernames = data.get("usernames", [])
     
     if not results:
         return jsonify({"error": "No results provided"}), 400
@@ -2119,79 +1977,49 @@ def store_scraped_data():
         return jsonify({"error": "Database connection failed"}), 500
     
     try:
-        user_id = get_user_id()
-        all_usernames = []
+        if not usernames:
+            usernames = []
+            for profile in results:
+                if isinstance(profile, dict):
+                    username = profile.get('username')
+                    if username:
+                        usernames.append(username)
+        
+        # Process results - PRESERVE captions
         processed_results = []
-        
         for profile in results:
-            username = profile.get('username')
-            if username:
-                all_usernames.append(username)
-            
-            # 🔥 Get existing reels for this username
-            existing_urls = get_existing_reel_urls(username)
-            
-            # Get new reels
-            new_reels = profile.get('reels', [])
-            
-            # Merge: Keep existing reels + add new ones
-            merged_reels = []
-            existing_reels_dict = {}
-            
-            # First, add existing reels from database
-            if existing_urls:
-                # We need to fetch the full existing data to preserve captions
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT results FROM scraped_reels 
-                    WHERE EXISTS (
-                        SELECT 1 FROM jsonb_array_elements(results) AS elem
-                        WHERE elem->>'username' = %s
-                    )
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                """, (username,))
-                result = cur.fetchone()
-                cur.close()
-                
-                if result:
-                    existing_results = result[0]
-                    for p in existing_results:
-                        if p.get('username') == username:
-                            for reel in p.get('reels', []):
-                                if isinstance(reel, dict):
-                                    url = reel.get('url')
-                                    if url:
-                                        existing_reels_dict[url] = reel
-                                elif isinstance(reel, str):
-                                    existing_reels_dict[reel] = {"url": reel, "caption": ""}
-                            break
-            
-            # Add existing reels first
-            for url, reel_data in existing_reels_dict.items():
-                merged_reels.append(reel_data)
-            
-            # Add new reels (deduplicate)
-            for reel in new_reels:
-                if isinstance(reel, dict):
-                    url = reel.get('url')
-                    if url and url not in existing_reels_dict:
-                        merged_reels.append(reel)
-                        existing_reels_dict[url] = reel
-                elif isinstance(reel, str):
-                    if reel not in existing_reels_dict:
-                        merged_reels.append({"url": reel, "caption": ""})
-                        existing_reels_dict[reel] = {"url": reel, "caption": ""}
-            
-            # Create merged profile
-            merged_profile = {
-                "username": username,
-                "reels": merged_reels,
-                "status": profile.get('status', 'ok')
-            }
-            processed_results.append(merged_profile)
+            if isinstance(profile, dict):
+                processed_profile = profile.copy()
+                reels = profile.get('reels', [])
+                processed_reels = []
+                for reel in reels:
+                    if isinstance(reel, str):
+                        processed_reels.append({
+                            "url": reel,
+                            "caption": ""
+                        })
+                    elif isinstance(reel, dict):
+                        processed_reels.append({
+                            "url": reel.get('url', ''),
+                            "caption": reel.get('caption', '')
+                        })
+                    else:
+                        processed_reels.append({
+                            "url": str(reel),
+                            "caption": ""
+                        })
+                processed_profile['reels'] = processed_reels
+                processed_results.append(processed_profile)
+            else:
+                processed_results.append(profile)
         
-        total_reels = sum(len(p.get('reels', [])) for p in processed_results)
+        total_profiles = len(processed_results)
+        total_reels = 0
+        for profile in processed_results:
+            reels = profile.get('reels', [])
+            total_reels += len(reels)
+        
+        user_id = get_user_id()
         
         cur = conn.cursor()
         cur.execute("""
@@ -2207,123 +2035,32 @@ def store_scraped_data():
                 updated_at = NOW()
         """, (
             user_id,
-            job_id or f"job_{datetime.utcnow().isoformat()}",
-            all_usernames,
+            job_id or f"job_{datetime.utcnow().isoformat()}", 
+            usernames,
             json.dumps(processed_results),
             'completed',
-            len(processed_results),
+            total_profiles,
             total_reels
         ))
         conn.commit()
         
-        app.logger.info(f"✅ Merged: {len(processed_results)} profiles with {total_reels} total reels")
+        app.logger.info(f"✅ Stored {total_profiles} profiles with {total_reels} total reels")
         
         return jsonify({
             "status": "success",
-            "message": f"Merged {len(processed_results)} profiles with {total_reels} total reels",
-            "profiles": len(processed_results),
-            "reels": total_reels
+            "message": f"Stored {total_profiles} profiles with {total_reels} total reels",
+            "count": total_profiles,
+            "reels_count": total_reels,
+            "usernames": usernames,
+            "job_id": job_id
         })
         
     except Exception as e:
-        app.logger.error(f"Storage error: {e}")
+        app.logger.error(f"Database store error: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
         conn.close()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def get_existing_reel_urls(username):
-    """Get all reel URLs already stored for a username."""
-    conn = get_db_connection()
-    if not conn:
-        return set()
-    
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT results FROM scraped_reels 
-            WHERE EXISTS (
-                SELECT 1 FROM jsonb_array_elements(results) AS elem
-                WHERE elem->>'username' = %s
-            )
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (username,))
-        
-        result = cur.fetchone()
-        if not result:
-            return set()
-        
-        results = result[0]
-        existing_urls = set()
-        
-        for profile in results:
-            if profile.get('username') == username:
-                reels = profile.get('reels', [])
-                for reel in reels:
-                    if isinstance(reel, dict):
-                        url = reel.get('url')
-                        if url:
-                            existing_urls.add(url)
-                    elif isinstance(reel, str):
-                        existing_urls.add(reel)
-                break
-        
-        return existing_urls
-        
-    except Exception as e:
-        app.logger.error(f"Error getting existing URLs: {e}")
-        return set()
-    finally:
-        cur.close()
-        conn.close()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # ============== SCRAPED DATA ROUTES ==============
 
