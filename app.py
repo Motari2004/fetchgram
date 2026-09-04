@@ -1634,8 +1634,16 @@ def get_direct_url_from_cache_only(reel_url):
         cur.close()
         conn.close()
 
+
+
+
+
+
+
+
+
 def run_pipeline(pipeline_id):
-    """Execute a single pipeline - uses async caption fetch if missing."""
+    """Execute a single pipeline - waits for async caption if pending."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -1672,31 +1680,59 @@ def run_pipeline(pipeline_id):
             try:
                 reel_url = reel['url']
                 
-                # 🔥 STEP 1: Ensure caption exists (async if missing)
+                # 🔥 STEP 1: Check if caption exists
                 app.logger.info(f"📝 Processing: {reel_url[:50]}...")
                 caption = ensure_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
                 
-                # If no caption yet (async pending), use fallback for now
+                # 🔥 STEP 2: If caption is being fetched asynchronously, WAIT for it
                 if not caption or caption.strip() == '':
-                    # Check if async fetch is pending
                     status = get_caption_fetch_status(reel_url)
+                    
                     if status.get('status') in ('pending', 'processing'):
-                        app.logger.info(f"⏳ Caption is being fetched asynchronously for: {reel_url[:50]}...")
-                        caption = f"🎬 New reel from @{pipeline['profile_username']}! (Caption loading...)"
+                        app.logger.info(f"⏳ Caption is being fetched, waiting up to 60 seconds...")
+                        
+                        # Wait for caption with timeout
+                        max_wait = 60  # seconds
+                        wait_interval = 2
+                        waited = 0
+                        caption_found = False
+                        
+                        while waited < max_wait:
+                            time.sleep(wait_interval)
+                            waited += wait_interval
+                            
+                            # Check if caption is now in database
+                            check_caption = ensure_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
+                            if check_caption and check_caption.strip():
+                                caption = check_caption
+                                caption_found = True
+                                app.logger.info(f"✅ Got caption after waiting {waited}s: {caption[:50]}...")
+                                break
+                            
+                            # Check if webhook failed
+                            current_status = get_caption_fetch_status(reel_url)
+                            if current_status.get('status') == 'failed':
+                                app.logger.warning(f"⚠️ Caption fetch failed, using fallback")
+                                break
+                            
+                            app.logger.info(f"⏳ Still waiting for caption... ({waited}s elapsed)")
+                        
+                        if not caption_found and (not caption or caption.strip() == ''):
+                            caption = f"🎬 New reel from @{pipeline['profile_username']}!"
+                            app.logger.info(f"📝 Timeout after {max_wait}s, using fallback caption")
                     else:
                         caption = f"🎬 New reel from @{pipeline['profile_username']}!"
-                    app.logger.info(f"📝 Using fallback caption for: {reel_url[:50]}...")
+                        app.logger.info(f"📝 Using fallback caption")
                 
                 # Truncate caption if too long
                 if len(caption) > 5000:
                     caption = caption[:4997] + "..."
                 
-                # 🔥 STEP 2: Get direct video URL
+                # 🔥 STEP 3: Get direct video URL
                 app.logger.info(f"📥 Converting to CDN URL: {reel_url[:60]}...")
                 direct_video_url = get_direct_video_url(reel_url)
                 
                 if not direct_video_url:
-                    # Try cache as fallback
                     direct_video_url = get_direct_url_from_cache_only(reel_url)
                     
                     if not direct_video_url:
@@ -1709,14 +1745,8 @@ def run_pipeline(pipeline_id):
                         )
                         failed_count += 1
                         continue
-                    else:
-                        app.logger.info(f"✅ Using cached CDN URL for: {reel_url[:50]}...")
-                else:
-                    # Cache the URL for future use
-                    cache_direct_url(reel_url, direct_video_url, caption)
-                    app.logger.info(f"✅ Converted to CDN URL: {direct_video_url[:60]}...")
                 
-                # 🔥 STEP 3: Post to Facebook
+                # 🔥 STEP 4: Post to Facebook
                 result = publish_to_facebook(
                     video_url=direct_video_url,
                     text=caption,
@@ -1725,7 +1755,6 @@ def run_pipeline(pipeline_id):
                 )
                 
                 if result and not result.get('error'):
-                    # Success
                     post_id = result.get('post', {}).get('_id') or result.get('post_id')
                     post_url = None
                     
@@ -1746,12 +1775,7 @@ def run_pipeline(pipeline_id):
                     )
                     posted_count += 1
                     app.logger.info(f"✅ Successfully posted: {reel_url[:50]}...")
-                    
-                    # If caption was async, webhook will update it later
-                    if status and status.get('status') in ('pending', 'processing'):
-                        app.logger.info(f"📝 Caption will be updated via webhook when ready")
                 else:
-                    # Failed
                     error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
                     mark_reel_as_posted(
                         pipeline_id=pipeline['id'],
@@ -1795,6 +1819,17 @@ def run_pipeline(pipeline_id):
         return {"error": str(e)}
     finally:
         conn.close()
+
+
+
+
+
+
+
+
+
+
+
 
 def run_all_active_pipelines():
     """Run all active pipelines"""
