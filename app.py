@@ -1437,6 +1437,105 @@ def get_direct_url_from_cache_only(reel_url):
 
 
 
+
+
+
+
+def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
+    """
+    Ensure a reel has a caption.
+    If it exists in database, return it.
+    If not, fetch from caption service and store.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        cur = conn.cursor()
+        
+        # 1. Check if caption already exists in posted_reels
+        cur.execute("""
+            SELECT caption FROM posted_reels 
+            WHERE pipeline_id = %s AND reel_url = %s
+        """, (pipeline_id, reel_url))
+        result = cur.fetchone()
+        
+        if result and result[0] and result[0].strip():
+            app.logger.info(f"📝 Using existing caption from posted_reels")
+            return result[0]
+        
+        # 2. Check if caption exists in scraped_reels
+        cur.execute("""
+            SELECT results FROM scraped_reels 
+            WHERE EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS elem
+                WHERE elem->>'username' = %s
+            )
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (profile_username,))
+        
+        result = cur.fetchone()
+        if result:
+            results = result[0]
+            for profile in results:
+                if profile.get('username') == profile_username:
+                    reels = profile.get('reels', [])
+                    for reel in reels:
+                        if isinstance(reel, dict):
+                            if reel.get('url') == reel_url:
+                                caption = reel.get('caption', '')
+                                if caption and caption.strip():
+                                    app.logger.info(f"📝 Found caption in scraped data")
+                                    # Store in posted_reels for future use
+                                    cur.execute("""
+                                        UPDATE posted_reels 
+                                        SET caption = %s 
+                                        WHERE pipeline_id = %s AND reel_url = %s
+                                    """, (caption, pipeline_id, reel_url))
+                                    conn.commit()
+                                    return caption
+        
+        # 3. Fetch from caption service
+        app.logger.info(f"🔥 Fetching caption from service for: {reel_url[:50]}...")
+        caption = fetch_caption_from_service(reel_url)
+        
+        if caption and caption.strip():
+            app.logger.info(f"✅ Got caption: {caption[:50]}...")
+            # Store in posted_reels
+            cur.execute("""
+                UPDATE posted_reels 
+                SET caption = %s 
+                WHERE pipeline_id = %s AND reel_url = %s
+            """, (caption, pipeline_id, reel_url))
+            conn.commit()
+            return caption
+        
+        app.logger.warning(f"⚠️ No caption found for: {reel_url[:50]}...")
+        return None
+        
+    except Exception as e:
+        app.logger.error(f"Error ensuring caption: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def run_pipeline(pipeline_id):
     """Execute a single pipeline - auto-converts URLs to CDN URLs."""
     conn = get_db_connection()
