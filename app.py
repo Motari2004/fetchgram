@@ -1783,54 +1783,7 @@ def scrape_proxy():
             if result_data.get('job_id') and result_data.get('results'):
                 results = result_data.get('results', [])
                 
-                # Auto-fetch captions on Vercel side
-                if fetch_captions:
-                    app.logger.info("📝 Auto-fetching captions for scraped reels...")
-                    
-                    all_reel_urls = []
-                    for profile in results:
-                        if isinstance(profile, dict):
-                            reels = profile.get('reels', [])
-                            for reel in reels:
-                                if isinstance(reel, str):
-                                    all_reel_urls.append(reel)
-                                elif isinstance(reel, dict):
-                                    url = reel.get('url')
-                                    if url:
-                                        all_reel_urls.append(url)
-                    
-                    if all_reel_urls:
-                        app.logger.info(f"📝 Fetching {len(all_reel_urls)} captions...")
-                        captions_map = fetch_captions_batch(all_reel_urls)
-                        
-                        for profile in results:
-                            if isinstance(profile, dict):
-                                reels = profile.get('reels', [])
-                                processed_reels = []
-                                for reel in reels:
-                                    if isinstance(reel, str):
-                                        reel_url = reel
-                                        caption = captions_map.get(reel_url, '')
-                                        processed_reels.append({
-                                            "url": reel_url,
-                                            "caption": caption or ''
-                                        })
-                                    elif isinstance(reel, dict):
-                                        reel_url = reel.get('url')
-                                        if reel_url:
-                                            caption = captions_map.get(reel_url, '')
-                                            processed_reels.append({
-                                                "url": reel_url,
-                                                "caption": caption or ''
-                                            })
-                                        else:
-                                            processed_reels.append(reel)
-                                    else:
-                                        processed_reels.append(reel)
-                                profile['reels'] = processed_reels
-                        
-                        app.logger.info(f"✅ Added {len(all_reel_urls)} captions")
-                
+                # ✅ STEP 1: Extract usernames from results
                 extracted_usernames = []
                 for profile in results:
                     if isinstance(profile, dict):
@@ -1838,16 +1791,28 @@ def scrape_proxy():
                         if username:
                             extracted_usernames.append(username)
                 
-                # Store with captions
+                # ✅ STEP 2: Store the scraped data first
                 with app.test_request_context():
                     store_scraped_data()
                     app.logger.info(f"✅ Auto-stored scraped data for job {result_data.get('job_id')}")
                 
-                # Auto-trigger caption sync for scraped profiles
+                # ✅ STEP 3: Auto-trigger caption sync for ALL scraped profiles
                 if extracted_usernames:
                     app.logger.info(f"📝 Auto-triggering caption sync for: {extracted_usernames}")
+                    
+                    # Start sync for each username
                     for username in extracted_usernames:
                         sync_captions_background(username)
+                        app.logger.info(f"✅ Auto-sync started for @{username}")
+                
+                # ✅ STEP 4: Return the response with sync status
+                return jsonify({
+                    "status": "success",
+                    "job_id": result_data.get('job_id'),
+                    "usernames": extracted_usernames,
+                    "message": f"Scraped {len(extracted_usernames)} profiles. Auto-sync started for: {', '.join(extracted_usernames)}",
+                    "results": results
+                }), 200
         
         return jsonify(response.json()), response.status_code
         
