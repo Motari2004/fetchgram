@@ -1725,13 +1725,11 @@ def clear_cookies():
 
 @app.route("/api/scrape/proxy", methods=["POST"])
 def scrape_proxy():
-    """Proxy endpoint that retrieves cookies and auto-fetches captions."""
+    """Proxy endpoint that stores data and returns immediately."""
     data = request.get_json(silent=True) or {}
     usernames = data.get("usernames", [])
-    fetch_captions = data.get("fetch_captions", True)
     
     app.logger.info(f"📝 Scraping usernames: {usernames}")
-    app.logger.info(f"📝 Fetch captions: {fetch_captions}")
     
     cookies = None
     db_cookies = get_cookies_from_db()
@@ -1791,27 +1789,20 @@ def scrape_proxy():
                     if username:
                         extracted_usernames.append(username)
             
-            # ✅ STEP 2: Store scraped data with initial captions (empty)
+            # ✅ STEP 2: Store scraped data in database (no captions yet)
             with app.test_request_context():
                 store_scraped_data()
                 app.logger.info(f"✅ Stored scraped data for job {result_data.get('job_id')}")
             
-            # ✅ STEP 3: Auto-trigger caption sync for ALL scraped profiles
-            if extracted_usernames:
-                app.logger.info(f"📝 Auto-triggering caption sync for: {extracted_usernames}")
-                
-                # Start sync for each username (runs in background)
-                for username in extracted_usernames:
-                    sync_captions_background(username)
-                    app.logger.info(f"✅ Auto-sync started for @{username}")
-            
-            # ✅ STEP 4: Return results immediately (UI shows reels right away)
+            # ✅ STEP 3: Return results to frontend IMMEDIATELY
+            # Frontend will handle caption fetching
             return jsonify({
                 "status": "success",
                 "job_id": result_data.get('job_id'),
                 "usernames": extracted_usernames,
-                "message": f"Scraped {len(extracted_usernames)} profiles. Auto-sync started for: {', '.join(extracted_usernames)}",
-                "results": results
+                "message": f"Scraped {len(extracted_usernames)} profiles. Captions will be fetched automatically.",
+                "results": results,
+                "auto_sync": True  # Tell frontend to auto-sync
             }), 200
         
         return jsonify(response.json()), response.status_code

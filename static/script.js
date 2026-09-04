@@ -1552,8 +1552,8 @@ startScrapeBtn.addEventListener('click', async function() {
                 
             } else {
                 // Fallback: wait for results
-                showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
-                localStorage.setItem('last_scrape_job_id', data.jobId);
+                showScrapeStatus(`✅ Job started! Job ID: ${data.job_id || 'N/A'}`, 'success');
+                localStorage.setItem('last_scrape_job_id', data.job_id);
             }
             
         } else {
