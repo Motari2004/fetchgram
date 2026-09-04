@@ -3396,3 +3396,75 @@ html, body {
   background: var(--error-bg);
   animation: none;
 }
+
+
+
+
+/* ==================== SYNC INDICATOR ANIMATIONS ==================== */
+
+@keyframes syncPulse {
+    0%, 100% { 
+        opacity: 1; 
+        transform: scale(1);
+    }
+    50% { 
+        opacity: 0.6; 
+        transform: scale(0.98);
+    }
+}
+
+@keyframes syncComplete {
+    0% {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+    50% {
+        transform: scale(1.1);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.sync-indicator {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 12px;
+    border-radius: 20px;
+    display: inline-block;
+    transition: all 0.3s ease;
+    letter-spacing: 0.3px;
+}
+
+.sync-indicator.syncing {
+    color: #6c63ff;
+    background: rgba(108, 99, 255, 0.12);
+    border: 1px solid rgba(108, 99, 255, 0.3);
+    animation: syncPulse 1.5s ease-in-out infinite;
+}
+
+.sync-indicator.completed {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    animation: syncComplete 0.6s ease-in-out;
+}
+
+.sync-indicator.partial {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.sync-indicator.error {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.sync-indicator.idle {
+    color: #9ca3af;
+    background: rgba(156, 163, 175, 0.08);
+    border: 1px solid rgba(156, 163, 175, 0.15);
+}

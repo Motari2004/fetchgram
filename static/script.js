@@ -2453,8 +2453,6 @@ document.getElementById('refresh-status-btn')?.addEventListener('click', functio
 
 
 
-
-
 // ==================== SYNC STATUS MONITORING ====================
 
 // Store intervals for each username
@@ -2486,11 +2484,22 @@ async function checkAndShowSyncStatus(username) {
                 delete syncIntervals[username];
             }
             
-            // Update indicator to completed
+            // Update indicator to completed with nice styling
             updateProfileSyncStatus(username, data.sync);
             
             // Update captions in place WITHOUT full refresh
             await updateCaptionsInPlace(username);
+            
+            // Show completion notification
+            const total = data.sync.total_reels || 0;
+            const fetched = data.sync.captions_fetched || 0;
+            if (fetched > 0 && fetched === total) {
+                showScrapedStatus(`🎉 All ${fetched} captions synced for @${username}!`, 'success');
+            } else if (fetched > 0) {
+                showScrapedStatus(`✅ ${fetched}/${total} captions synced for @${username}`, 'success');
+            } else {
+                showScrapedStatus(`ℹ️ No captions found for @${username}`, 'info');
+            }
             
         } else if (data.sync && data.sync.status === 'error') {
             // Show error
@@ -2499,6 +2508,7 @@ async function checkAndShowSyncStatus(username) {
                 clearInterval(syncIntervals[username]);
                 delete syncIntervals[username];
             }
+            showScrapedStatus(`❌ Failed to sync captions for @${username}`, 'error');
         }
     } catch (error) {
         console.error('Error checking sync status:', error);
@@ -2603,7 +2613,7 @@ function updateProfileSyncStatus(username, syncData) {
             if (countSpan) {
                 indicator = document.createElement('span');
                 indicator.className = 'sync-indicator';
-                indicator.style.cssText = 'font-size: 11px; margin-left: 8px; padding: 2px 10px; border-radius: 12px; display: inline-block;';
+                indicator.style.cssText = 'font-size: 11px; margin-left: 8px; padding: 3px 12px; border-radius: 20px; display: inline-block; font-weight: 600; transition: all 0.3s ease; letter-spacing: 0.3px;';
                 countSpan.parentNode.insertBefore(indicator, countSpan.nextSibling);
             }
         }
@@ -2616,34 +2626,73 @@ function updateProfileSyncStatus(username, syncData) {
     const total = syncData.total_reels || 0;
     const fetched = syncData.captions_fetched || 0;
     
+    // Clear previous classes
+    indicator.className = 'sync-indicator';
+    
     switch (status) {
         case 'syncing':
             indicator.textContent = `🔄 ${progress}% (${fetched}/${total})`;
-            indicator.style.color = 'var(--accent)';
-            indicator.style.background = 'rgba(108, 99, 255, 0.1)';
-            indicator.style.border = '1px solid var(--accent)';
+            indicator.style.color = '#6c63ff';
+            indicator.style.background = 'rgba(108, 99, 255, 0.12)';
+            indicator.style.border = '1px solid rgba(108, 99, 255, 0.3)';
             indicator.style.animation = 'syncPulse 1.5s ease-in-out infinite';
             indicator.style.display = 'inline-block';
+            indicator.style.boxShadow = '0 0 20px rgba(108, 99, 255, 0.08)';
+            indicator.className = 'sync-indicator syncing';
             break;
+            
         case 'completed':
-            indicator.textContent = `✅ ${fetched}/${total}`;
-            indicator.style.color = 'var(--success)';
-            indicator.style.background = 'var(--success-bg)';
-            indicator.style.border = '1px solid var(--success)';
-            indicator.style.animation = 'none';
-            indicator.style.display = 'inline-block';
+            if (fetched > 0 && fetched === total) {
+                indicator.textContent = `✅ ${fetched}/${total}`;
+                indicator.style.color = '#22c55e';
+                indicator.style.background = 'rgba(34, 197, 94, 0.12)';
+                indicator.style.border = '1px solid rgba(34, 197, 94, 0.3)';
+                indicator.style.animation = 'syncComplete 0.6s ease-in-out';
+                indicator.style.display = 'inline-block';
+                indicator.style.boxShadow = '0 0 20px rgba(34, 197, 94, 0.12)';
+                indicator.className = 'sync-indicator completed';
+                
+                // Add green border to header
+                const header = targetCard.querySelector('.scraped-profile-header');
+                if (header) {
+                    header.style.borderLeft = '3px solid #22c55e';
+                    header.style.transition = 'border-left 0.3s ease';
+                }
+            } else if (fetched > 0 && fetched < total) {
+                indicator.textContent = `⚠️ ${fetched}/${total}`;
+                indicator.style.color = '#f59e0b';
+                indicator.style.background = 'rgba(245, 158, 11, 0.12)';
+                indicator.style.border = '1px solid rgba(245, 158, 11, 0.3)';
+                indicator.style.animation = 'none';
+                indicator.style.display = 'inline-block';
+                indicator.style.boxShadow = '0 0 20px rgba(245, 158, 11, 0.08)';
+                indicator.className = 'sync-indicator partial';
+            } else {
+                indicator.textContent = `ℹ️ No captions`;
+                indicator.style.color = '#9ca3af';
+                indicator.style.background = 'rgba(156, 163, 175, 0.08)';
+                indicator.style.border = '1px solid rgba(156, 163, 175, 0.15)';
+                indicator.style.animation = 'none';
+                indicator.style.display = 'inline-block';
+                indicator.className = 'sync-indicator idle';
+            }
             break;
+            
         case 'error':
             indicator.textContent = `❌ Failed`;
-            indicator.style.color = 'var(--error)';
-            indicator.style.background = 'var(--error-bg)';
-            indicator.style.border = '1px solid var(--error)';
+            indicator.style.color = '#ef4444';
+            indicator.style.background = 'rgba(239, 68, 68, 0.12)';
+            indicator.style.border = '1px solid rgba(239, 68, 68, 0.3)';
             indicator.style.animation = 'none';
             indicator.style.display = 'inline-block';
+            indicator.style.boxShadow = '0 0 20px rgba(239, 68, 68, 0.08)';
+            indicator.className = 'sync-indicator error';
             break;
+            
         default:
             indicator.textContent = '';
             indicator.style.display = 'none';
+            indicator.className = 'sync-indicator';
             break;
     }
 }
