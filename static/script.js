@@ -684,41 +684,71 @@ syncExecuteBtn?.addEventListener('click', async function() {
     if (syncProgressText) syncProgressText.textContent = 'Complete!';
     
     if (response.ok && (data.status === 'accepted' || data.status === 'success')) {
+
+
+
       showSyncStatus(
         `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
         'success'
       );
-      
-      // Refresh the scraped results to show new captions
-      setTimeout(() => {
-        autoLoadScrapedResults();
-      }, 1000);
-      
-    } else {
-      showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
+            // ✅ FIX: Show correct message for background sync
+            if (data.status === 'accepted') {
+                showSyncStatus(
+                    `✅ Sync started for @${username}! Check the profile card for progress.`,
+                    'success'
+                );
+            } else {
+                // Only show count if sync completed immediately (unlikely)
+                showSyncStatus(
+                    `✅ Synced ${data.captions_fetched || 0} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
+                    'success'
+                );
+            }
+            
+            // Start monitoring sync status immediately
+            checkAndShowSyncStatus(username);
+            
+            // Refresh after a moment to show captions
+            setTimeout(() => {
+                autoLoadScrapedResults();
+            }, 3000);
+            
+        } else {
+            showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
+            if (syncProgressBar) syncProgressBar.style.width = '0%';
+            if (syncProgressText) syncProgressText.textContent = 'Failed';
+        }
+        
+    } catch (error) {
+        console.error('❌ Sync error:', error);
+        showSyncStatus(`❌ Error: ${error.message}`, 'error');
+        if (syncProgressBar) syncProgressBar.style.width = '0%';
+        if (syncProgressText) syncProgressText.textContent = 'Failed';
+    } finally {
+        this.disabled = false;
+        this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
+        
+        setTimeout(() => {
+            if (syncProgress) syncProgress.style.display = 'none';
+            if (syncProgressBar) syncProgressBar.style.width = '0%';
+        }, 3000);
     }
-    
-  } catch (error) {
-    console.error('Sync error:', error);
-    showSyncStatus(`❌ Error: ${error.message}`, 'error');
-  } finally {
-    this.disabled = false;
-    this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
-
-
-
-
-
-
-
-
-    
-    setTimeout(() => {
-      if (syncProgress) syncProgress.style.display = 'none';
-      if (syncProgressBar) syncProgressBar.style.width = '0%';
-    }, 3000);
-  }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ==================== ZERNIO (FACEBOOK) FUNCTIONS ====================
 
