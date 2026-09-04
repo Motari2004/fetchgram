@@ -1780,39 +1780,39 @@ def scrape_proxy():
         
         if response.status_code == 200:
             result_data = response.json()
-            if result_data.get('job_id') and result_data.get('results'):
-                results = result_data.get('results', [])
+            
+            # ✅ STEP 1: Extract usernames and results
+            extracted_usernames = []
+            results = result_data.get('results', [])
+            
+            for profile in results:
+                if isinstance(profile, dict):
+                    username = profile.get('username')
+                    if username:
+                        extracted_usernames.append(username)
+            
+            # ✅ STEP 2: Store scraped data with initial captions (empty)
+            with app.test_request_context():
+                store_scraped_data()
+                app.logger.info(f"✅ Stored scraped data for job {result_data.get('job_id')}")
+            
+            # ✅ STEP 3: Auto-trigger caption sync for ALL scraped profiles
+            if extracted_usernames:
+                app.logger.info(f"📝 Auto-triggering caption sync for: {extracted_usernames}")
                 
-                # ✅ STEP 1: Extract usernames from results
-                extracted_usernames = []
-                for profile in results:
-                    if isinstance(profile, dict):
-                        username = profile.get('username')
-                        if username:
-                            extracted_usernames.append(username)
-                
-                # ✅ STEP 2: Store the scraped data first
-                with app.test_request_context():
-                    store_scraped_data()
-                    app.logger.info(f"✅ Auto-stored scraped data for job {result_data.get('job_id')}")
-                
-                # ✅ STEP 3: Auto-trigger caption sync for ALL scraped profiles
-                if extracted_usernames:
-                    app.logger.info(f"📝 Auto-triggering caption sync for: {extracted_usernames}")
-                    
-                    # Start sync for each username
-                    for username in extracted_usernames:
-                        sync_captions_background(username)
-                        app.logger.info(f"✅ Auto-sync started for @{username}")
-                
-                # ✅ STEP 4: Return the response with sync status
-                return jsonify({
-                    "status": "success",
-                    "job_id": result_data.get('job_id'),
-                    "usernames": extracted_usernames,
-                    "message": f"Scraped {len(extracted_usernames)} profiles. Auto-sync started for: {', '.join(extracted_usernames)}",
-                    "results": results
-                }), 200
+                # Start sync for each username (runs in background)
+                for username in extracted_usernames:
+                    sync_captions_background(username)
+                    app.logger.info(f"✅ Auto-sync started for @{username}")
+            
+            # ✅ STEP 4: Return results immediately (UI shows reels right away)
+            return jsonify({
+                "status": "success",
+                "job_id": result_data.get('job_id'),
+                "usernames": extracted_usernames,
+                "message": f"Scraped {len(extracted_usernames)} profiles. Auto-sync started for: {', '.join(extracted_usernames)}",
+                "results": results
+            }), 200
         
         return jsonify(response.json()), response.status_code
         

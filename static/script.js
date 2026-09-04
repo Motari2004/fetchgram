@@ -1510,29 +1510,51 @@ startScrapeBtn.addEventListener('click', async function() {
     
     if (response.ok) {
       showScrapeProgress(100, '✅ Job started!');
-      showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
       
-      localStorage.setItem('last_scrape_job_id', data.jobId);
-      
-      scrapedReelsContent.innerHTML = `
-        <div class="empty-state" style="border-color: var(--success);">
-          <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
-          <strong>Job sent to Render!</strong>
-          <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-            Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${data.jobId}</code>
-          </p>
-          <p style="margin-top: 4px; font-size: 13px; color: var(--text-secondary);">
-            Render is scraping the profiles. Results will be sent back automatically.
-          </p>
-          <p style="margin-top: 8px; font-size: 13px; color: var(--text-muted);">
-            ⏱️ This may take a minute or two. Click <strong>"Load Results"</strong> after the job completes.
-          </p>
-        </div>
-      `;
-      
-      setTimeout(() => {
-        hideScrapeProgress();
-      }, 3000);
+      // ✅ STEP 1: If results are returned immediately, render them
+      if (data.results && data.results.length > 0) {
+        window.scrapedData = data.results;
+        window.allUsernames = data.usernames || [];
+        renderScrapedResults(data.results);
+        
+        // ✅ STEP 2: Show that auto-sync is starting
+        showScrapeStatus(`🔄 Auto-syncing captions for: ${data.usernames.join(', ')}`, 'running');
+        
+        // ✅ STEP 3: Start monitoring sync progress
+        startSyncMonitoringForAllProfiles(data.results);
+        
+        // ✅ STEP 4: Hide progress after a moment
+        setTimeout(() => {
+          hideScrapeProgress();
+          showScrapeStatus('✅ Auto-sync started! Watch the profile cards for progress.', 'success');
+        }, 2000);
+      } else {
+        // Fallback: wait for results
+        showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
+        showScrapeProgress(100, '✅ Job started!');
+        
+        localStorage.setItem('last_scrape_job_id', data.jobId);
+        
+        scrapedReelsContent.innerHTML = `
+          <div class="empty-state" style="border-color: var(--success);">
+            <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
+            <strong>Job sent to Render!</strong>
+            <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+              Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${data.jobId}</code>
+            </p>
+            <p style="margin-top: 4px; font-size: 13px; color: var(--text-secondary);">
+              Render is scraping the profiles. Results will be sent back automatically.
+            </p>
+            <p style="margin-top: 8px; font-size: 13px; color: var(--text-muted);">
+              ⏱️ This may take a minute or two. Click <strong>"Load Results"</strong> after the job completes.
+            </p>
+          </div>
+        `;
+        
+        setTimeout(() => {
+          hideScrapeProgress();
+        }, 3000);
+      }
       
     } else {
       showScrapeProgress(0, '❌ Failed');
@@ -2359,9 +2381,13 @@ async function autoLoadScrapedResults() {
       
       const usernameList = data.usernames ? data.usernames.join(', ') : '';
       showScrapedStatus(
-        `✅ Auto-loaded ${data.results.length} profiles: ${usernameList}`,
+        `✅ Loaded ${data.results.length} profiles: ${usernameList}`,
         'success'
       );
+      
+      // ✅ Show sync status but DON'T auto-sync
+      startSyncMonitoringForAllProfiles(data.results);
+      
     } else {
       renderScrapedResults([]);
     }
