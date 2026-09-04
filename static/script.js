@@ -1461,120 +1461,120 @@ async function copyToClipboard(text, btn) {
 // ==================== START SCRAPING ====================
 
 startScrapeBtn.addEventListener('click', async function() {
-    const usernames = scrapeUsernames.value
-        .split('\n')
-        .map(s => s.trim())
-        .filter(Boolean);
+  const usernames = scrapeUsernames.value
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+  
+  if (usernames.length === 0) {
+    showScrapeStatus('Please enter at least one username', 'error');
+    return;
+  }
+  
+  const maxReels = parseInt(scrapeMaxReels.value) || 50;
+  const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
+  const headless = scrapeHeadless.checked;
+  
+  try {
+    const cookieStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
+    const cookieData = await cookieStatus.json();
     
-    if (usernames.length === 0) {
-        showScrapeStatus('Please enter at least one username', 'error');
-        return;
+    if (!cookieData.has_cookies) {
+      showScrapeStatus('❌ Please upload your Instagram cookies.json file first!', 'error');
+      return;
     }
+  } catch (error) {
+    showScrapeStatus('❌ Failed to check cookie status', 'error');
+    return;
+  }
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
+  showScrapeStatus('⏳ Sending request to Render...', 'running');
+  showScrapeProgress(10, 'Connecting to Vercel proxy...');
+  
+  try {
+    const response = await fetch('/api/scrape/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        usernames: usernames,
+        maxReels: maxReels,
+        maxScrolls: maxScrolls,
+        headless: headless,
+        sendToVercel: true
+      })
+    });
     
-    const maxReels = parseInt(scrapeMaxReels.value) || 50;
-    const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
-    const headless = scrapeHeadless.checked;
+    const data = await response.json();
     
-    try {
-        const cookieStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
-        const cookieData = await cookieStatus.json();
+    if (response.ok) {
+      showScrapeProgress(100, '✅ Job started!');
+      
+      // ✅ STEP 1: If results are returned immediately, render them
+      if (data.results && data.results.length > 0) {
+        window.scrapedData = data.results;
+        window.allUsernames = data.usernames || [];
+        renderScrapedResults(data.results);
         
-        if (!cookieData.has_cookies) {
-            showScrapeStatus('❌ Please upload your Instagram cookies.json file first!', 'error');
-            return;
-        }
-    } catch (error) {
-        showScrapeStatus('❌ Failed to check cookie status', 'error');
-        return;
-    }
-    
-    this.disabled = true;
-    this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
-    showScrapeStatus('⏳ Sending request to Render...', 'running');
-    showScrapeProgress(10, 'Connecting to Vercel proxy...');
-    
-    try {
-        const response = await fetch('/api/scrape/proxy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                usernames: usernames,
-                maxReels: maxReels,
-                maxScrolls: maxScrolls,
-                headless: headless,
-                sendToVercel: true
-            })
-        });
+        // ✅ STEP 2: Show that auto-sync is starting
+        showScrapeStatus(`🔄 Auto-syncing captions for: ${data.usernames.join(', ')}`, 'running');
         
-        const data = await response.json();
+        // ✅ STEP 3: Start monitoring sync progress
+        startSyncMonitoringForAllProfiles(data.results);
         
-        if (response.ok) {
-            showScrapeProgress(100, '✅ Reels received!');
-            
-            // ✅ STEP 1: Results returned immediately (reels appear)
-            if (data.results && data.results.length > 0) {
-                window.scrapedData = data.results;
-                window.allUsernames = data.usernames || [];
-                
-                // ✅ STEP 2: Render reels in UI (with sync indicator)
-                renderScrapedResults(data.results);
-                
-                // ✅ STEP 3: AUTO-SYNC STARTS HERE!
-                // Frontend calls the caption service
-                showScrapeStatus(`🔄 Auto-syncing captions for: ${data.usernames.join(', ')}`, 'running');
-                
-                // ✅ STEP 4: Start sync monitoring (shows progress every 2 seconds)
-                startSyncMonitoringForAllProfiles(data.results);
-                
-                // ✅ STEP 5: For each profile, trigger caption sync
-                for (const username of data.usernames) {
-                    try {
-                        console.log(`🔄 Calling caption service for @${username}`);
-                        
-                        // This is the key call - frontend triggers caption service
-                        await fetch('/api/sync-captions', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            credentials: 'same-origin',
-                            body: JSON.stringify({ username })
-                        });
-                        console.log(`✅ Caption sync started for @${username}`);
-                    } catch (error) {
-                        console.error(`❌ Failed to start sync for @${username}:`, error);
-                    }
-                }
-                
-                // ✅ STEP 6: Hide progress after a moment
-                setTimeout(() => {
-                    hideScrapeProgress();
-                    showScrapeStatus('✅ Auto-sync started! Watch the profile cards for progress.', 'success');
-                }, 2000);
-                
-            } else {
-                // Fallback: wait for results
-                showScrapeStatus(`✅ Job started! Job ID: ${data.job_id || 'N/A'}`, 'success');
-                localStorage.setItem('last_scrape_job_id', data.job_id);
-            }
-            
-        } else {
-            showScrapeProgress(0, '❌ Failed');
-            showScrapeStatus(`❌ ${data.error || 'Failed to start job'}`, 'error');
-        }
-    } catch (error) {
-        console.error('Scrape error:', error);
-        showScrapeProgress(0, '❌ Error');
-        showScrapeStatus(`❌ ${error.message}`, 'error');
-    } finally {
-        this.innerHTML = `
-            <span class="btn-content">
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                    <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                Start Scraping
-            </span>
+        // ✅ STEP 4: Hide progress after a moment
+        setTimeout(() => {
+          hideScrapeProgress();
+          showScrapeStatus('✅ Auto-sync started! Watch the profile cards for progress.', 'success');
+        }, 2000);
+      } else {
+        // Fallback: wait for results
+        showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
+        showScrapeProgress(100, '✅ Job started!');
+        
+        localStorage.setItem('last_scrape_job_id', data.jobId);
+        
+        scrapedReelsContent.innerHTML = `
+          <div class="empty-state" style="border-color: var(--success);">
+            <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
+            <strong>Job sent to Render!</strong>
+            <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+              Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${data.jobId}</code>
+            </p>
+            <p style="margin-top: 4px; font-size: 13px; color: var(--text-secondary);">
+              Render is scraping the profiles. Results will be sent back automatically.
+            </p>
+            <p style="margin-top: 8px; font-size: 13px; color: var(--text-muted);">
+              ⏱️ This may take a minute or two. Click <strong>"Load Results"</strong> after the job completes.
+            </p>
+          </div>
         `;
-        this.disabled = false;
+        
+        setTimeout(() => {
+          hideScrapeProgress();
+        }, 3000);
+      }
+      
+    } else {
+      showScrapeProgress(0, '❌ Failed');
+      showScrapeStatus(`❌ ${data.error || 'Failed to start job'}`, 'error');
     }
+  } catch (error) {
+    console.error('Scrape error:', error);
+    showScrapeProgress(0, '❌ Error');
+    showScrapeStatus(`❌ ${error.message}`, 'error');
+  } finally {
+    this.innerHTML = `
+      <span class="btn-content">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Start Scraping
+      </span>
+    `;
+    this.disabled = false;
+  }
 });
 
 // ==================== FETCH SCRAPED RESULTS ====================
