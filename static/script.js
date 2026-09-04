@@ -647,7 +647,6 @@ syncCaptionsBtn?.addEventListener('click', function() {
 
 
 
-
 // Execute Sync
 syncExecuteBtn?.addEventListener('click', async function() {
   const username = syncUsernameSelect?.value;
@@ -678,34 +677,68 @@ syncExecuteBtn?.addEventListener('click', async function() {
       body: JSON.stringify({ username })
     });
     
+    // ✅ Check if response is OK before parsing JSON
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('❌ Server error response:', text);
+      
+      // Try to parse as JSON if possible
+      try {
+        const errorData = JSON.parse(text);
+        showSyncStatus(`❌ ${errorData.error || 'Server error'}`, 'error');
+      } catch {
+        // If it's HTML, show a generic error
+        showSyncStatus(`❌ Server error: ${response.status} - ${response.statusText}`, 'error');
+      }
+      
+      if (syncProgressBar) syncProgressBar.style.width = '0%';
+      if (syncProgressText) syncProgressText.textContent = 'Failed';
+      return;
+    }
+    
+    // ✅ Parse JSON response
     const data = await response.json();
+    console.log('📤 Sync response:', data);
     
     if (syncProgressBar) syncProgressBar.style.width = '100%';
     if (syncProgressText) syncProgressText.textContent = 'Complete!';
     
-    if (response.ok && data.status === 'success') {
+    // ✅ Handle both 'accepted' (from backend) and 'success' status
+    if (response.ok && (data.status === 'accepted' || data.status === 'success')) {
       showSyncStatus(
-        `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
+        `✅ Sync started for @${username}! Check the profile card for progress.`,
         'success'
       );
       
-      // Refresh the scraped results to show new captions
+      // ✅ Start monitoring sync status immediately
+      checkAndShowSyncStatus(username);
+      
+      // Refresh after a moment to show captions
       setTimeout(() => {
         autoLoadScrapedResults();
-      }, 1000);
+      }, 3000);
       
     } else {
       showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
+      if (syncProgressBar) syncProgressBar.style.width = '0%';
+      if (syncProgressText) syncProgressText.textContent = 'Failed';
     }
     
   } catch (error) {
-    console.error('Sync error:', error);
+    console.error('❌ Sync error:', error);
     showSyncStatus(`❌ Error: ${error.message}`, 'error');
+    if (syncProgressBar) syncProgressBar.style.width = '0%';
+    if (syncProgressText) syncProgressText.textContent = 'Failed';
   } finally {
     this.disabled = false;
     this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
-
-
+    
+    setTimeout(() => {
+      if (syncProgress) syncProgress.style.display = 'none';
+      if (syncProgressBar) syncProgressBar.style.width = '0%';
+    }, 3000);
+  }
+});
 
 
 
