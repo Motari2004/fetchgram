@@ -602,19 +602,861 @@ function showSyncStatus(message, type) {
 
 // Sync Captions Button - opens sync controls
 syncCaptionsBtn?.addEventListener('click', function() {
+  // If sync controls are hidden, show them
   if (syncControls.style.display === 'none' || syncControls.style.display === '') {
+    // Load available profiles first
     const usernames = window.allUsernames || [];
     if (usernames.length > 0) {
       showSyncControls(usernames);
       showSyncStatus('Select a profile and click "Sync Captions"', 'info');
+      // Scroll to sync controls
       syncControls.scrollIntoView({ behavior: 'smooth', block: 'center' });
     } else {
       showSyncStatus('No profiles found. Load results first.', 'error');
     }
   } else {
+    // Toggle visibility
     syncControls.style.display = syncControls.style.display === 'none' ? 'block' : 'none';
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Execute Sync
+syncExecuteBtn?.addEventListener('click', async function() {
+  const username = syncUsernameSelect?.value;
+  
+  if (!username) {
+    showSyncStatus('❌ Please select a profile', 'error');
+    return;
+  }
+  
+  if (!confirm(`🔄 Fetch captions for all reels of @${username}?\n\nThis may take a few moments depending on the number of reels.`)) {
+    return;
+  }
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Syncing...';
+  
+  if (syncProgress) syncProgress.style.display = 'block';
+  if (syncProgressBar) syncProgressBar.style.width = '10%';
+  if (syncProgressText) syncProgressText.textContent = 'Starting...';
+  
+  showSyncStatus(`⏳ Fetching captions for @${username}...`, 'info');
+  
+  try {
+    const response = await fetch('/api/sync-captions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username })
+    });
+    
+    const data = await response.json();
+    
+    if (syncProgressBar) syncProgressBar.style.width = '100%';
+    if (syncProgressText) syncProgressText.textContent = 'Complete!';
+    
+    if (response.ok && data.status === 'success') {
+      showSyncStatus(
+        `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
+        'success'
+      );
+      
+      // Refresh the scraped results to show new captions
+      setTimeout(() => {
+        autoLoadScrapedResults();
+      }, 1000);
+      
+    } else {
+      showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
+    }
+    
+  } catch (error) {
+    console.error('Sync error:', error);
+    showSyncStatus(`❌ Error: ${error.message}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
+
+
+
+
+
+
+
+
+    
+    setTimeout(() => {
+      if (syncProgress) syncProgress.style.display = 'none';
+      if (syncProgressBar) syncProgressBar.style.width = '0%';
+    }, 3000);
+  }
+});
+
+// ==================== ZERNIO (FACEBOOK) FUNCTIONS ====================
+
+function showZernioStatus(message, type) {
+  if (!zernioStatus) return;
+  
+  zernioStatus.hidden = false;
+  zernioStatus.style.display = 'block';
+  zernioStatus.innerHTML = '';
+  zernioStatus.className = 'status-message ' + type;
+  
+  const textSpan = document.createElement('span');
+  textSpan.textContent = message;
+  zernioStatus.appendChild(textSpan);
+  
+  if (type === 'success' || type === 'error') {
+    const closeBtn = document.createElement('span');
+    closeBtn.textContent = ' ✕';
+    closeBtn.style.cssText = `
+      float: right;
+      cursor: pointer;
+      font-weight: bold;
+      margin-left: 12px;
+      opacity: 0.7;
+      padding: 0 4px;
+    `;
+    closeBtn.onclick = function(e) {
+      e.stopPropagation();
+      zernioStatus.style.display = 'none';
+      zernioStatus.hidden = true;
+    };
+    zernioStatus.appendChild(closeBtn);
+  }
+  
+  if (type === 'info') {
+    setTimeout(() => {
+      if (zernioStatus) {
+        zernioStatus.style.display = 'none';
+        zernioStatus.hidden = true;
+      }
+    }, 8000);
+  }
+}
+
+function showZernioSuccess(message, details) {
+  if (!zernioStatus) return;
+  
+  zernioStatus.hidden = false;
+  zernioStatus.style.display = 'block';
+  
+  let html = `<div style="display: flex; align-items: flex-start; gap: 10px; padding: 4px 0;">`;
+  html += `<span style="font-size: 18px; flex-shrink: 0;">✅</span>`;
+  html += `<div style="flex: 1;">`;
+  html += `<div style="font-weight: 600; font-size: 14px;">${message}</div>`;
+  
+  if (details) {
+    html += `<div style="margin-top: 6px; font-size: 13px; opacity: 0.85; line-height: 1.6;">`;
+    if (details.accounts) {
+      html += `<div>📱 <strong>Account:</strong> ${details.accounts}</div>`;
+    }
+    if (details.post_id) {
+      html += `<div>📋 <strong>Post ID:</strong> ${details.post_id}</div>`;
+    }
+    if (details.status) {
+      html += `<div>📊 <strong>Status:</strong> ${details.status}</div>`;
+    }
+    if (details.scheduled_for) {
+      html += `<div>📅 <strong>Scheduled:</strong> ${new Date(details.scheduled_for).toLocaleString()}</div>`;
+    }
+    if (details.url) {
+      html += `<div>🔗 <a href="${details.url}" target="_blank" style="color: var(--accent); text-decoration: underline;">View on Facebook</a></div>`;
+    }
+    html += `</div>`;
+  }
+  
+  html += `</div>`;
+  html += `<button onclick="this.parentElement.parentElement.style.display='none'; this.parentElement.parentElement.hidden=true;" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-muted);flex-shrink:0;padding:0 4px;">✕</button>`;
+  html += `</div>`;
+  
+  zernioStatus.innerHTML = html;
+  zernioStatus.className = 'status-message success';
+  zernioStatus.style.display = 'block';
+  zernioStatus.hidden = false;
+  
+  setTimeout(() => {
+    zernioStatus.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 300);
+}
+
+// ==================== LOAD ZERNIO ACCOUNTS ====================
+
+async function loadZernioAccounts() {
+  try {
+    const response = await fetch('/api/zernio/accounts', {
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success' && data.accounts) {
+      zernioAccounts = data.accounts;
+      populateZernioAccountSelect(zernioAccounts);
+      populatePipelineFacebookAccounts(zernioAccounts);
+      zernioAccountsLoaded = true;
+      console.log('✅ Loaded Zernio accounts:', zernioAccounts);
+      
+      if (zernioStatusBadge) {
+        if (zernioAccounts.length > 0) {
+          zernioStatusBadge.textContent = `✅ ${zernioAccounts.length} accounts`;
+          zernioStatusBadge.style.background = 'var(--success-bg)';
+          zernioStatusBadge.style.color = 'var(--success)';
+        } else {
+          zernioStatusBadge.textContent = '⚠️ No accounts';
+          zernioStatusBadge.style.background = 'var(--warning-bg)';
+          zernioStatusBadge.style.color = 'var(--warning)';
+        }
+      }
+    } else {
+      console.warn('⚠️ Failed to load Zernio accounts:', data.message);
+    }
+  } catch (error) {
+    console.error('❌ Failed to load Zernio accounts:', error);
+  }
+}
+
+function populateZernioAccountSelect(accounts) {
+  if (!zernioAccountSelect) return;
+  
+  zernioAccountSelect.innerHTML = '';
+  
+  if (accounts.length > 1) {
+    const allOption = document.createElement('option');
+    allOption.value = 'all';
+    allOption.textContent = `All Accounts (${accounts.length})`;
+    zernioAccountSelect.appendChild(allOption);
+  }
+  
+  if (accounts.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No Facebook accounts found';
+    option.disabled = true;
+    zernioAccountSelect.appendChild(option);
+    return;
+  }
+  
+  accounts.sort((a, b) => a.name.localeCompare(b.name));
+  
+  accounts.forEach(account => {
+    const option = document.createElement('option');
+    option.value = account.id;
+    option.textContent = account.name;
+    option.dataset.pageId = account.page_id;
+    option.dataset.status = account.status;
+    zernioAccountSelect.appendChild(option);
+  });
+  
+  if (accounts.length === 1) {
+    zernioAccountSelect.value = accounts[0].id;
+  }
+}
+
+function populatePipelineFacebookAccounts(accounts) {
+  if (!pipelineFacebookAccount) return;
+  
+  pipelineFacebookAccount.innerHTML = '';
+  
+  if (accounts.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No Facebook accounts found';
+    option.disabled = true;
+    pipelineFacebookAccount.appendChild(option);
+    return;
+  }
+  
+  accounts.forEach(account => {
+    const option = document.createElement('option');
+    option.value = account.id;
+    option.textContent = account.name;
+    pipelineFacebookAccount.appendChild(option);
+  });
+}
+
+// ==================== PUBLISH FUNCTIONS ====================
+
+async function publishToFacebook(videoUrl, text, accountId, publishNow = true, scheduledTime = null) {
+  const payload = {
+    video_url: videoUrl,
+    text: text,
+    publish_now: publishNow
+  };
+
+  if (accountId && accountId !== 'all') {
+    payload.account_id = accountId;
+  }
+
+  if (scheduledTime) {
+    payload.scheduled_time = scheduledTime;
+  }
+
+  try {
+    const response = await fetch('/api/zernio/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+    console.log('📤 Zernio response:', data);
+    return data;
+  } catch (error) {
+    console.error('❌ Zernio error:', error);
+    throw error;
+  }
+}
+
+async function checkZernioStatus() {
+  try {
+    const response = await fetch('/api/zernio/status', {
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'connected') {
+      if (zernioStatusBadge) {
+        zernioStatusBadge.textContent = '✅ Connected';
+        zernioStatusBadge.style.background = 'var(--success-bg)';
+        zernioStatusBadge.style.color = 'var(--success)';
+      }
+      console.log('✅ Zernio connected');
+    } else {
+      if (zernioStatusBadge) {
+        zernioStatusBadge.textContent = '⚠️ Disconnected';
+        zernioStatusBadge.style.background = 'var(--error-bg)';
+        zernioStatusBadge.style.color = 'var(--error)';
+      }
+      console.warn('⚠️ Zernio not connected');
+    }
+  } catch (error) {
+    console.error('Failed to check Zernio status:', error);
+  }
+}
+
+function showZernioSection() {
+  const section = document.getElementById('zernio-section');
+  if (section) {
+    section.hidden = false;
+    if (!zernioAccountsLoaded) {
+      loadZernioAccounts();
+    }
+    setTimeout(() => {
+      section.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+  }
+}
+
+// ==================== ZERNIO EVENT LISTENERS ====================
+
+zernioPublishBtn?.addEventListener('click', async function() {
+  const text = zernioText.value.trim() || 'Check out this video! 🎬';
+  const accountId = zernioAccountSelect.value;
+  const videoUrl = currentVideoUrl;
+  
+  if (!videoUrl) {
+    showZernioStatus('❌ No video loaded. Please fetch a video first.', 'error');
+    return;
+  }
+  
+  let accountName = accountId === 'all' ? 'All Accounts' : 'Selected Account';
+  if (accountId !== 'all') {
+    const selectedOption = zernioAccountSelect.options[zernioAccountSelect.selectedIndex];
+    accountName = selectedOption ? selectedOption.textContent : 'Selected Account';
+  }
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Publishing...';
+  showZernioStatus(`⏳ Publishing to ${accountName}...`, 'info');
+  
+  try {
+    const result = await publishToFacebook(videoUrl, text, accountId, true, null);
+    console.log('📤 Publish result:', result);
+    
+    if (result.error) {
+      showZernioStatus(`❌ ${result.error}`, 'error');
+      return;
+    }
+    
+    let successMessage = '';
+    let details = {};
+    
+    if (result.status === 'success') {
+      const results = result.results || {};
+      const accountNames = Object.values(results).map(r => r.account_name).join(', ');
+      successMessage = `✅ Published successfully to ${Object.keys(results).length} account(s)!`;
+      details = {
+        accounts: accountNames || accountName,
+        post_id: result.post_id || 'N/A',
+        status: 'published'
+      };
+      
+      const failed = Object.values(results).filter(r => r.result && r.result.error);
+      if (failed.length > 0) {
+        successMessage += ` (${failed.length} account(s) had issues)`;
+      }
+      
+      showZernioSuccess(successMessage, details);
+      
+    } else {
+      const post = result.post || result;
+      const postStatus = post.status || 'unknown';
+      
+      if (postStatus === 'published') {
+        successMessage = '✅ Video published successfully to Facebook!';
+        details = {
+          post_id: post._id || 'N/A',
+          status: 'published',
+          url: post.platforms?.find(p => p.platform === 'facebook')?.publishedUrl || null,
+          accounts: accountName
+        };
+        showZernioSuccess(successMessage, details);
+        
+      } else if (postStatus === 'scheduled') {
+        const scheduledTime = post.scheduledFor || 'later';
+        successMessage = `📅 Video scheduled for ${new Date(scheduledTime).toLocaleString()}`;
+        details = {
+          post_id: post._id || 'N/A',
+          status: 'scheduled',
+          scheduled_for: scheduledTime,
+          accounts: accountName
+        };
+        showZernioSuccess(successMessage, details);
+        
+      } else if (postStatus === 'draft') {
+        successMessage = '📝 Video saved as draft.';
+        details = {
+          post_id: post._id || 'N/A',
+          status: 'draft',
+          accounts: accountName
+        };
+        showZernioSuccess(successMessage, details);
+        
+      } else {
+        successMessage = `📊 Post created with status: ${postStatus}`;
+        details = {
+          post_id: post._id || 'N/A',
+          status: postStatus,
+          accounts: accountName
+        };
+        showZernioSuccess(successMessage, details);
+      }
+    }
+    
+    if (zernioSchedule) {
+      zernioSchedule.value = '';
+    }
+    
+  } catch (error) {
+    console.error('Publish error:', error);
+    showZernioStatus(`❌ Failed to publish: ${error.message || 'Unknown error'}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.innerHTML = `
+      <span class="btn-content">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Publish Now
+      </span>
+    `;
+  }
+});
+
+zernioScheduleBtn?.addEventListener('click', async function() {
+  const text = zernioText.value.trim() || 'Check out this video! 🎬';
+  const accountId = zernioAccountSelect.value;
+  const videoUrl = currentVideoUrl;
+  const scheduleTime = zernioSchedule.value;
+  
+  if (!videoUrl) {
+    showZernioStatus('❌ No video loaded. Please fetch a video first.', 'error');
+    return;
+  }
+  
+  if (!scheduleTime) {
+    showZernioStatus('❌ Please select a date and time to schedule.', 'error');
+    return;
+  }
+  
+  let accountName = accountId === 'all' ? 'All Accounts' : 'Selected Account';
+  if (accountId !== 'all') {
+    const selectedOption = zernioAccountSelect.options[zernioAccountSelect.selectedIndex];
+    accountName = selectedOption ? selectedOption.textContent : 'Selected Account';
+  }
+  
+  const scheduledDateTime = new Date(scheduleTime).toISOString();
+  const displayTime = new Date(scheduleTime).toLocaleString();
+  
+  this.disabled = true;
+  this.innerHTML = '<span class="btn-spinner"></span> Scheduling...';
+  showZernioStatus(`⏳ Scheduling post for ${displayTime}...`, 'info');
+  
+  try {
+    const result = await publishToFacebook(videoUrl, text, accountId, false, scheduledDateTime);
+    console.log('📤 Schedule result:', result);
+    
+    if (result.error) {
+      showZernioStatus(`❌ ${result.error}`, 'error');
+      return;
+    }
+    
+    const post = result.post || result;
+    const postStatus = post.status || 'unknown';
+    
+    if (postStatus === 'scheduled') {
+      const successMessage = `📅 Post scheduled for ${displayTime}`;
+      const details = {
+        post_id: post._id || 'N/A',
+        status: 'scheduled',
+        scheduled_for: scheduledDateTime,
+        accounts: accountName
+      };
+      showZernioSuccess(successMessage, details);
+    } else if (postStatus === 'published') {
+      showZernioSuccess('✅ Video published immediately!', {
+        post_id: post._id || 'N/A',
+        status: 'published',
+        accounts: accountName
+      });
+    } else {
+      showZernioSuccess(`📊 Post status: ${postStatus}`, {
+        post_id: post._id || 'N/A',
+        status: postStatus,
+        accounts: accountName
+      });
+    }
+    
+    zernioSchedule.value = '';
+    
+  } catch (error) {
+    console.error('Schedule error:', error);
+    showZernioStatus(`❌ Failed to schedule: ${error.message || 'Unknown error'}`, 'error');
+  } finally {
+    this.disabled = false;
+    this.innerHTML = '<span class="btn-content">📅 Schedule</span>';
+  }
+});
+
+// ==================== REFRESH ZERNIO ACCOUNTS ====================
+
+document.getElementById('refresh-zernio-btn')?.addEventListener('click', async function() {
+  this.disabled = true;
+  this.textContent = '⏳';
+  
+  try {
+    const response = await fetch('/api/zernio/accounts?t=' + Date.now(), {
+      credentials: 'same-origin'
+    });
+    const data = await response.json();
+    
+    if (data.status === 'success' && data.accounts) {
+      zernioAccounts = data.accounts;
+      populateZernioAccountSelect(zernioAccounts);
+      populatePipelineFacebookAccounts(zernioAccounts);
+      zernioAccountsLoaded = true;
+      showZernioStatus(`✅ Refreshed ${data.accounts.length} accounts`, 'success');
+      
+      if (zernioStatusBadge) {
+        if (zernioAccounts.length > 0) {
+          zernioStatusBadge.textContent = `✅ ${zernioAccounts.length} accounts`;
+          zernioStatusBadge.style.background = 'var(--success-bg)';
+          zernioStatusBadge.style.color = 'var(--success)';
+        } else {
+          zernioStatusBadge.textContent = '⚠️ No accounts';
+          zernioStatusBadge.style.background = 'var(--warning-bg)';
+          zernioStatusBadge.style.color = 'var(--warning)';
+        }
+      }
+    }
+  } catch (error) {
+    showZernioStatus('❌ Failed to refresh accounts', 'error');
+  } finally {
+    this.disabled = false;
+    this.textContent = '🔄 Refresh';
+  }
+});
+
+// ==================== DELETE FUNCTIONS ====================
+
+async function deleteProfile(username) {
+  if (!confirm(`⚠️ Permanently delete ALL data for @${username} from the database?`)) {
+    return;
+  }
+  
+  showScrapedStatus(`🗑️ Permanently deleting @${username} from database...`, 'info');
+  
+  try {
+    const response = await fetch('/api/scraped/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username: username })
+    });
+    
+    const data = await response.json();
+    console.log('Delete response:', data);
+    
+    if (response.ok && data.status === 'success') {
+      if (window.scrapedData) {
+        window.scrapedData = window.scrapedData.filter(p => p.username !== username);
+        renderScrapedResults(window.scrapedData);
+      }
+      
+      window.allUsernames = window.allUsernames?.filter(u => u !== username) || [];
+      
+      showScrapedStatus(
+        `✅ Permanently deleted @${username} (${data.deleted_count || 0} jobs removed from database)`, 
+        'success'
+      );
+      
+      setTimeout(() => {
+        autoLoadScrapedResults();
+      }, 1500);
+      
+    } else {
+      showScrapedStatus(`❌ Failed to delete: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (error) {
+    console.error('Delete error:', error);
+    showScrapedStatus(`❌ Failed to delete: ${error.message}`, 'error');
+  }
+}
+
+// ==================== SCRAPED REELS FUNCTIONS ====================
+
+function renderScrapedResults(results, stats, isLoading = false) {
+  const content = document.getElementById('scraped-reels-content');
+  const statsContainer = document.getElementById('scraped-stats');
+  const exportBtn = document.getElementById('export-scraped-btn');
+  const countBadge = document.getElementById('scraped-count-badge');
+  
+  if (allUsernamesSection && allUsernamesList) {
+    if (results && results.length > 0) {
+      const usernames = results.map(p => `@${p.username}`).join(', ');
+      allUsernamesList.textContent = usernames;
+      allUsernamesSection.hidden = false;
+      window.allUsernames = usernames;
+    } else {
+      allUsernamesSection.hidden = true;
+      window.allUsernames = [];
+    }
+  }
+  
+  // Show sync controls if we have results
+  if (results && results.length > 0) {
+    const usernames = results.map(p => p.username);
+    showSyncControls(usernames);
+  } else {
+    showSyncControls([]);
+  }
+  
+  if (isLoading) {
+    content.innerHTML = `
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p style="color: var(--text-muted); margin-top: 12px;">Loading scraped data...</p>
+      </div>
+    `;
+    if (statsContainer) statsContainer.hidden = true;
+    if (exportBtn) exportBtn.hidden = true;
+    if (countBadge) countBadge.textContent = 'Loading...';
+    return;
+  }
+  
+  if (!results || results.length === 0) {
+    content.innerHTML = `
+      <div class="empty-state">
+        <div style="font-size: 32px; margin-bottom: 12px;">📭</div>
+        <strong>No scraped data found</strong>
+        <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+          Enter usernames below and click "Start Scraping" to begin.
+        </p>
+      </div>
+    `;
+    if (statsContainer) statsContainer.hidden = true;
+    if (exportBtn) exportBtn.hidden = true;
+    if (countBadge) countBadge.textContent = '0 profiles';
+    return;
+  }
+  
+  let totalReels = 0;
+  let successCount = 0;
+  let errorCount = 0;
+  
+  results.forEach(profile => {
+    const reels = profile.reels || [];
+    totalReels += reels.length;
+    if (profile.status === 'ok') successCount++;
+    else errorCount++;
+  });
+  
+  document.getElementById('stat-profiles').textContent = results.length;
+  document.getElementById('stat-reels').textContent = totalReels;
+  document.getElementById('stat-success').textContent = successCount;
+  document.getElementById('stat-errors').textContent = errorCount;
+  
+  if (statsContainer) statsContainer.hidden = false;
+  if (exportBtn) exportBtn.hidden = false;
+  if (countBadge) countBadge.textContent = `${results.length} profiles (${totalReels} reels)`;
+  
+  let html = `<div class="scraped-profiles-grid">`;
+  
+  results.forEach((profile, index) => {
+    const username = profile.username || 'unknown';
+    const reelCount = (profile.reels || []).length;
+    const status = profile.status || 'ok';
+    const statusClass = status === 'ok' ? 'ok' : 
+                        (status === 'no_reels_found' || status === 'private') ? 'warn' : 'err';
+    const isOpen = false;
+    
+    html += `
+      <div class="scraped-profile-card">
+        <div class="scraped-profile-header" onclick="toggleProfile(this)">
+          <div class="scraped-profile-name">
+            👤 @${escapeHtml(username)}
+            <span class="status-badge ${statusClass}">${escapeHtml(status)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="scraped-profile-count">📹 ${reelCount}</span>
+            <button class="btn btn-sm btn-danger delete-profile-btn" data-username="${escapeHtml(username)}" onclick="event.stopPropagation(); deleteProfile('${escapeHtml(username)}')">
+              🗑️
+            </button>
+            <span class="scraped-profile-toggle ${isOpen ? 'open' : ''}">▼</span>
+          </div>
+        </div>
+        <div class="scraped-profile-body ${isOpen ? 'open' : ''}">
+          <div class="scraped-profile-reels">
+    `;
+    
+    if (reelCount > 0) {
+      const reelsToShow = profile.reels.slice(0, 50);
+      reelsToShow.forEach((reel, idx) => {
+        let reelUrl = reel;
+        let reelCaption = '';
+        if (typeof reel === 'object') {
+          reelUrl = reel.url || reel;
+          reelCaption = reel.caption || '';
+        }
+        
+        html += `
+          <div class="scraped-reel-item">
+            <span class="scraped-reel-index">#${idx + 1}</span>
+            <span class="scraped-reel-url"><a href="${escapeHtml(reelUrl)}" target="_blank">${escapeHtml(reelUrl)}</a></span>
+            ${reelCaption ? `<span class="scraped-reel-caption">📝 ${escapeHtml(reelCaption.substring(0, 60))}${reelCaption.length > 60 ? '...' : ''}</span>` : ''}
+            <div class="scraped-reel-actions">
+              <button class="btn btn-sm btn-success btn-icon copy-reel-btn" data-url="${escapeHtml(reelUrl)}">📋</button>
+              <button class="btn btn-sm btn-primary btn-icon download-reel-btn" data-url="${escapeHtml(reelUrl)}">⬇</button>
+            </div>
+          </div>
+        `;
+      });
+      
+      if (reelCount > 50) {
+        html += `<div style="color:var(--text-muted);font-size:12px;padding:6px 0;text-align:center;">+${reelCount - 50} more reels</div>`;
+      }
+    } else {
+      html += `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No reels found</div>`;
+    }
+    
+    html += `
+          </div>
+        </div>
+      </div>
+    `;
+  });
+  
+  html += `</div>`;
+  content.innerHTML = html;
+  clearScrapedBtn.hidden = false;
+  
+  document.querySelectorAll('.copy-reel-btn').forEach(btn => {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const url = this.dataset.url;
+      copyToClipboard(url, this);
+    });
+  });
+  
+  document.querySelectorAll('.download-reel-btn').forEach(btn => {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const url = this.dataset.url;
+      downloadVideo(url, 'instagram_reel');
+    });
+  });
+}
+
+// ==================== SCRAPED REELS HELPER FUNCTIONS ====================
+
+function toggleProfile(header) {
+  const body = header.nextElementSibling;
+  const toggle = header.querySelector('.scraped-profile-toggle');
+  
+  if (body.classList.contains('open')) {
+    body.classList.remove('open');
+    toggle.classList.remove('open');
+    toggle.textContent = '▼';
+  } else {
+    body.classList.add('open');
+    toggle.classList.add('open');
+    toggle.textContent = '▲';
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+async function copyToClipboard(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = '✅';
+    setTimeout(() => { btn.textContent = '📋'; }, 2000);
+  } catch {
+    const input = document.createElement('input');
+    input.value = text;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    document.body.removeChild(input);
+    btn.textContent = '✅';
+    setTimeout(() => { btn.textContent = '📋'; }, 2000);
+  }
+}
 
 // ==================== START SCRAPING ====================
 
@@ -668,19 +1510,16 @@ startScrapeBtn.addEventListener('click', async function() {
     
     if (response.ok) {
       showScrapeProgress(100, '✅ Job started!');
-      // ✅ FIX: Use job_id (not jobId)
-      showScrapeStatus(`✅ Job started! Job ID: ${data.job_id || 'N/A'}`, 'success');
+      showScrapeStatus(`✅ Job started! Job ID: ${data.jobId}`, 'success');
       
-      if (data.job_id) {
-        localStorage.setItem('last_scrape_job_id', data.job_id);
-      }
+      localStorage.setItem('last_scrape_job_id', data.jobId);
       
       scrapedReelsContent.innerHTML = `
         <div class="empty-state" style="border-color: var(--success);">
           <div style="font-size: 24px; margin-bottom: 8px;">🚀</div>
           <strong>Job sent to Render!</strong>
           <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-            Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${data.job_id || 'N/A'}</code>
+            Job ID: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${data.jobId}</code>
           </p>
           <p style="margin-top: 4px; font-size: 13px; color: var(--text-secondary);">
             Render is scraping the profiles. Results will be sent back automatically.
@@ -1581,6 +2420,10 @@ document.getElementById('refresh-status-btn')?.addEventListener('click', functio
   autoLoadScrapedResults();
   showCookieStatus('🔄 Status refreshed', 'info');
 });
+
+
+
+
 
 // ==================== SYNC STATUS MONITORING ====================
 
