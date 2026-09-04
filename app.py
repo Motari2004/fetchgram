@@ -2979,8 +2979,9 @@ def webhook_caption():
                 
                 # 2. Also update scraped_reels if we have profile username
                 if profile_username:
+                    # ✅ FIX: Get the results properly
                     cur.execute("""
-                        SELECT results FROM scraped_reels 
+                        SELECT id, results FROM scraped_reels 
                         WHERE EXISTS (
                             SELECT 1 FROM jsonb_array_elements(results) AS elem
                             WHERE elem->>'username' = %s
@@ -2991,9 +2992,16 @@ def webhook_caption():
                     
                     result = cur.fetchone()
                     if result:
-                        results = result[0]
+                        # ✅ result is a tuple: (id, results)
+                        row_id = result[0]
+                        results = result[1]  # This is the JSONB data
                         updated = False
                         
+                        # Parse results if it's a string
+                        if isinstance(results, str):
+                            results = json.loads(results)
+                        
+                        # Update the caption
                         for profile_idx, profile in enumerate(results):
                             if profile.get('username') == profile_username:
                                 reels = profile.get('reels', [])
@@ -3010,9 +3018,11 @@ def webhook_caption():
                                 UPDATE scraped_reels 
                                 SET results = %s, updated_at = NOW()
                                 WHERE id = %s
-                            """, (json.dumps(results), result.get('id')))
+                            """, (json.dumps(results), row_id))
                             conn.commit()
                             app.logger.info(f"💾 [Job {job_id}] Caption stored in scraped_reels")
+                        else:
+                            app.logger.warning(f"⚠️ [Job {job_id}] Could not find reel in scraped_reels")
                 
                 # 3. Update reel_cache
                 cur.execute("""
@@ -3034,6 +3044,8 @@ def webhook_caption():
                 
         except Exception as e:
             app.logger.error(f"❌ [Job {job_id}] Failed to store caption: {e}")
+            import traceback
+            app.logger.error(traceback.format_exc())
             return jsonify({
                 "status": "error",
                 "message": f"Failed to store caption: {str(e)}",
