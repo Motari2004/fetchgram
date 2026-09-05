@@ -4049,44 +4049,82 @@ def delete_pipeline(pipeline_id):
 
 @app.route("/api/process-reels", methods=["POST"])
 def process_reels():
-    data = request.get_json(silent=True)
-    if not data or not isinstance(data, dict):
-        return jsonify({"error": "Invalid request body"}), 400
-
+    """
+    Process reels from scraper - JUST STORE them in reel_cache.
+    Download URLs will be generated when needed (UI or pipeline).
+    This is FAST and won't timeout.
+    """
+    data = request.get_json(silent=True) or {}
+    
     reel_urls = data.get("reels")
+    job_id = data.get("job_id")
+    chunk = data.get("chunk", 1)
+    total_chunks = data.get("total_chunks", 1)
+    
     if not reel_urls or not isinstance(reel_urls, list):
         return jsonify({"error": "Missing or invalid 'reels' list"}), 400
-
-    processed_results = []
-    for reel_url in reel_urls:
-        try:
-            direct_url = get_direct_video_url(reel_url)
-            if direct_url:
-                processed_results.append({
-                    "original_url": reel_url,
-                    "download_url": direct_url,
-                    "status": "success"
-                })
-            else:
-                processed_results.append({
-                    "original_url": reel_url,
-                    "download_url": None,
-                    "status": "failed",
-                    "error": "Could not fetch direct URL"
-                })
-        except Exception as e:
-            processed_results.append({
-                "original_url": reel_url,
-                "download_url": None,
-                "status": "error",
-                "error": str(e)
-            })
-
-    return jsonify({
-        "status": "success",
-        "processed_count": len(processed_results),
-        "results": processed_results
-    })
+    
+    app.logger.info(f"📥 [Job {job_id}] Received chunk {chunk}/{total_chunks} with {len(reel_urls)} reels")
+    
+    if len(reel_urls) == 0:
+        return jsonify({
+            "status": "success",
+            "message": "No reels to process",
+            "job_id": job_id,
+            "count": 0
+        })
+    
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # ✅ JUST STORE - NO URL GENERATION
+        # This is fast - just inserts URLs into the database
+        stored_count = 0
+        for reel_url in reel_urls:
+            try:
+                cur.execute("""
+                    INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+                    VALUES (%s, '', '', NOW())
+                    ON CONFLICT (reel_url) DO UPDATE SET 
+                        created_at = NOW()
+                """, (reel_url,))
+                stored_count += 1
+            except Exception as e:
+                app.logger.warning(f"⚠️ Failed to store reel: {reel_url[:50]}... - {e}")
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        app.logger.info(f"✅ [Job {job_id}] Stored {stored_count}/{len(reel_urls)} reels (chunk {chunk}/{total_chunks})")
+        
+        # If this is the last chunk, log completion
+        if chunk == total_chunks:
+            app.logger.info(f"🎉 [Job {job_id}] All {total_chunks} chunks received! Total reels: {len(reel_urls) * total_chunks}")
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Stored {stored_count} reels",
+            "job_id": job_id,
+            "chunk": chunk,
+            "total_chunks": total_chunks,
+            "stored": stored_count,
+            "total": len(reel_urls)
+        })
+        
+    except Exception as e:
+        app.logger.error(f"❌ [Job {job_id}] Error processing reels: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "job_id": job_id
+        }), 500
 
 # ============== DEBUG ROUTES ==============
 
