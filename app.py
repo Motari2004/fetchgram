@@ -55,34 +55,6 @@ def get_db_connection():
         app.logger.error(f"Database connection error: {e}")
         return None
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def init_db():
     """Initialize the database tables if they don't exist."""
     conn = get_db_connection()
@@ -310,24 +282,6 @@ def init_db():
     finally:
         cur.close()
         conn.close()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # Initialize database on startup
 init_db()
@@ -646,6 +600,7 @@ def sync_captions_background(username):
 def get_user_id():
     """Get or create a persistent user ID."""
     user_id = FIXED_USER_ID
+    # Only store small session data
     session['user_id'] = user_id
     return user_id
 
@@ -904,7 +859,8 @@ def is_valid_instagram_url(url: str) -> bool:
 # ============== YT-DLP FUNCTIONS ==============
 
 def get_cookie_file():
-    """Get cookies from session, database, or file."""
+    """Get cookies from database only - NOT from session to keep cookie small."""
+    # 🔥 FIX: Only use database, not session
     db_cookies = get_cookies_from_db()
     if db_cookies:
         cookie_data = db_cookies.get('cookie_data', [])
@@ -913,14 +869,10 @@ def get_cookie_file():
             safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username))[:40]
             cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
             write_netscape_cookies(cookie_data, cookie_file)
-            session['cookie_file'] = cookie_file
             app.logger.info(f"Using cookies from database → {cookie_file}")
             return cookie_file
     
-    cookie_file = session.get('cookie_file')
-    if cookie_file and os.path.exists(cookie_file):
-        app.logger.info(f"Using cookies from session: {cookie_file}")
-        return cookie_file
+    # 🔥 REMOVED: Don't check session for cookie_file
     
     cookies_json_env = os.environ.get('COOKIES_JSON')
     if cookies_json_env:
@@ -1358,7 +1310,7 @@ def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_t
     
     return results
 
-# ============== DUAL REQUEST CAPTION FETCH (NEW) ==============
+# ============== DUAL REQUEST CAPTION FETCH ==============
 
 def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_username):
     """
@@ -1407,7 +1359,7 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
                     "webhook_url": f"https://fetchgram-one.vercel.app/api/webhook/caption",
                     "request_type": "wakeup"
                 },
-                timeout=3,  # Very short timeout - just to wake up
+                timeout=3,
                 headers={"Content-Type": "application/json"}
             )
             
@@ -1429,7 +1381,7 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
         """Second request - actually fetches the caption (after Render is awake)."""
         try:
             app.logger.info(f"⏳ [Job {job_id}] Waiting 60 seconds before request 2...")
-            time.sleep(60)  # Wait 1 minute for Render to fully wake up
+            time.sleep(60)
             
             app.logger.info(f"📞 [Job {job_id}] Request 2 (REAL FETCH) sent...")
             
@@ -1443,7 +1395,7 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
                     "webhook_url": f"https://fetchgram-one.vercel.app/api/webhook/caption",
                     "request_type": "real_fetch"
                 },
-                timeout=60,  # Long timeout for actual fetch
+                timeout=60,
                 headers={"Content-Type": "application/json"}
             )
             
@@ -1546,7 +1498,7 @@ def trigger_caption_fetch_with_dual_requests_and_retry(
                     "webhook_url": f"https://fetchgram-one.vercel.app/api/webhook/caption",
                     "request_type": "wakeup"
                 },
-                timeout=2,  # Very short timeout
+                timeout=2,
                 headers={"Content-Type": "application/json"}
             )
             
@@ -1597,7 +1549,7 @@ def trigger_caption_fetch_with_dual_requests_and_retry(
                         "request_type": "real_fetch",
                         "attempt": attempt + 1
                     },
-                    timeout=45,  # Reasonable timeout for actual fetch
+                    timeout=45,
                     headers={"Content-Type": "application/json"}
                 )
                 
@@ -1622,7 +1574,6 @@ def trigger_caption_fetch_with_dual_requests_and_retry(
                     return
                     
                 elif response.status_code in [502, 503, 504]:
-                    # Gateway errors - Render still waking up
                     app.logger.warning(f"⚠️ [Job {job_id}] Gateway error (attempt {attempt + 1})")
                     
                     if attempt < max_attempts - 1:
@@ -1638,7 +1589,6 @@ def trigger_caption_fetch_with_dual_requests_and_retry(
                         return
                         
                 else:
-                    # Other errors - don't retry
                     app.logger.error(f"❌ [Job {job_id}] Real fetch failed: {response.status_code}")
                     CAPTION_FETCH_STATUS[reel_url]['real_fetch_status'] = 'failed'
                     CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
@@ -1674,7 +1624,6 @@ def trigger_caption_fetch_with_dual_requests_and_retry(
                     CAPTION_FETCH_STATUS[reel_url]['message'] = str(e)
                     return
         
-        # If we exit the loop
         if CAPTION_FETCH_STATUS[reel_url]['status'] != 'processing':
             CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
             CAPTION_FETCH_STATUS[reel_url]['message'] = 'All retry attempts exhausted'
@@ -1699,8 +1648,6 @@ def trigger_caption_fetch_with_dual_requests_and_retry(
         }
     }
 
-# ============== ORIGINAL ASYNC CAPTION FETCH FUNCTIONS (KEPT FOR BACKWARDS COMPATIBILITY) ==============
-
 def trigger_caption_fetch_async(reel_url, pipeline_id, profile_username):
     """
     Original async caption fetch - kept for backwards compatibility.
@@ -1711,12 +1658,6 @@ def trigger_caption_fetch_async(reel_url, pipeline_id, profile_username):
 def get_caption_fetch_status(reel_url):
     """
     Get the status of a caption fetch job.
-    
-    Args:
-        reel_url: Instagram reel URL
-    
-    Returns:
-        dict: Status information
     """
     status = CAPTION_FETCH_STATUS.get(reel_url)
     if status:
@@ -1815,10 +1756,8 @@ def process_pending_post(post):
     try:
         app.logger.info(f"📤 Processing pending post for: {post['reel_url'][:50]}...")
         
-        # Update status to processing
         update_pending_post_status(post['id'], 'processing')
         
-        # Get the caption
         caption = get_caption_for_reel(post['reel_url'], post['profile_username'], post['pipeline_id'])
         
         if not caption or not caption.strip():
@@ -1826,7 +1765,6 @@ def process_pending_post(post):
             update_pending_post_status(post['id'], 'failed', 'No caption available')
             return False
         
-        # Post to Facebook
         result = publish_to_facebook(
             video_url=post['direct_video_url'],
             text=caption,
@@ -1835,7 +1773,6 @@ def process_pending_post(post):
         )
         
         if result and not result.get('error'):
-            # Success
             post_id = result.get('post', {}).get('_id') or result.get('post_id')
             post_url = None
             
@@ -1845,7 +1782,6 @@ def process_pending_post(post):
                     post_url = platform.get('publishedUrl')
                     break
             
-            # 🔥 Mark as posted - THIS WILL UPDATE PIPELINE STATS
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
                 reel_url=post['reel_url'],
@@ -1856,10 +1792,8 @@ def process_pending_post(post):
                 status='success'
             )
             
-            # 🔥 FIX: Explicitly update pipeline stats to be safe
             update_pipeline_stats(post['pipeline_id'], 0, 0)
             
-            # Update pending post status
             update_pending_post_status(
                 post['id'], 
                 'completed', 
@@ -1871,11 +1805,9 @@ def process_pending_post(post):
             app.logger.info(f"✅ Pending post completed and stats updated: {post['reel_url'][:50]}...")
             return True
         else:
-            # Failed
             error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
             update_pending_post_status(post['id'], 'failed', str(error_msg))
             
-            # 🔥 Mark as failed in posted_reels
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
                 reel_url=post['reel_url'],
@@ -1885,7 +1817,6 @@ def process_pending_post(post):
                 error_message=str(error_msg)
             )
             
-            # 🔥 Update stats to reflect failure
             update_pipeline_stats(post['pipeline_id'], 0, 0)
             
             app.logger.error(f"❌ Pending post failed: {post['reel_url'][:50]}... - {error_msg}")
@@ -1895,7 +1826,6 @@ def process_pending_post(post):
         app.logger.error(f"❌ Error processing pending post: {e}")
         update_pending_post_status(post['id'], 'failed', str(e))
         
-        # 🔥 Mark as failed in posted_reels
         try:
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
@@ -1982,7 +1912,6 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
     try:
         cur = conn.cursor()
         
-        # Get reels from scraped data
         cur.execute("""
             SELECT 
                 results
@@ -1999,22 +1928,18 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
         if not result:
             return []
         
-        # Extract reels for this profile
-        results = result[0]  # results JSONB
+        results = result[0]
         profile_reels = []
         for item in results:
             if item.get('username') == profile_username:
                 profile_reels = item.get('reels', [])
-                break
-        
-        # Get already posted reels
+                break        
         cur.execute("""
             SELECT reel_url FROM posted_reels 
             WHERE pipeline_id = %s
         """, (pipeline_id,))
         posted_urls = {row[0] for row in cur.fetchall()}
         
-        # Filter unposted reels
         unposted = []
         for reel in profile_reels:
             if isinstance(reel, str):
@@ -2052,7 +1977,6 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
     try:
         cur = conn.cursor()
         
-        # Insert or update posted_reels
         cur.execute("""
             INSERT INTO posted_reels (
                 pipeline_id, reel_url, direct_video_url, caption,
@@ -2070,16 +1994,13 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
         """, (pipeline_id, reel_url, direct_video_url, caption, 
               facebook_post_id, facebook_post_url, status, error_message))
         
-        # 🔥 FIX: ALWAYS update pipeline total_posted when status is 'success'
         if status == 'success':
-            # Get the actual count of successful posts for this pipeline
             cur.execute("""
                 SELECT COUNT(*) FROM posted_reels 
                 WHERE pipeline_id = %s AND status = 'success'
             """, (pipeline_id,))
             total_posted = cur.fetchone()[0]
             
-            # Update pipeline with the actual count
             cur.execute("""
                 UPDATE pipelines 
                 SET total_posted = %s,
@@ -2109,21 +2030,18 @@ def update_pipeline_stats(pipeline_id, posted_count, failed_count):
     try:
         cur = conn.cursor()
         
-        # 🔥 FIX: Always calculate from posted_reels, don't trust the passed count
         cur.execute("""
             SELECT COUNT(*) FROM posted_reels 
             WHERE pipeline_id = %s AND status = 'success'
         """, (pipeline_id,))
         total_posted = cur.fetchone()[0]
         
-        # Also get failed count
         cur.execute("""
             SELECT COUNT(*) FROM posted_reels 
             WHERE pipeline_id = %s AND status = 'failed'
         """, (pipeline_id,))
         total_failed = cur.fetchone()[0]
         
-        # Update pipeline with actual counts
         cur.execute("""
             UPDATE pipelines 
             SET total_posted = %s,
@@ -2207,7 +2125,6 @@ def get_direct_url_from_cache_only(reel_url):
             app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
             return result[0]
         
-        app.logger.info(f"❌ No cache for: {reel_url[:50]}...")
         return None
         
     except Exception as e:
@@ -2224,7 +2141,6 @@ def run_pipeline(pipeline_id):
         return {"error": "Database connection failed"}
     
     try:
-        # Get pipeline configuration
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
         pipeline = cur.fetchone()
@@ -2236,7 +2152,6 @@ def run_pipeline(pipeline_id):
         if not pipeline['is_active']:
             return {"error": "Pipeline is inactive"}
         
-        # Get unposted reels
         unposted = get_unposted_reels(
             pipeline['profile_username'], 
             pipeline['id'], 
@@ -2256,11 +2171,9 @@ def run_pipeline(pipeline_id):
                 reel_url = reel['url']
                 app.logger.info(f"📝 Processing: {reel_url[:50]}...")
                 
-                # Check if caption exists
                 caption = get_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
                 
                 if caption and caption.strip():
-                    # ✅ Has caption - post immediately
                     app.logger.info(f"✅ Found caption: {caption[:50]}...")
                     
                     direct_video_url = get_direct_video_url(reel_url)
@@ -2307,12 +2220,9 @@ def run_pipeline(pipeline_id):
                                 error_message=str(error_msg)
                             )
                             failed_count += 1
-                            app.logger.error(f"❌ Failed to post: {reel_url[:50]}... - {error_msg}")
                     else:
                         failed_count += 1
-                        app.logger.error(f"❌ Could not get video URL: {reel_url[:50]}...")
                 else:
-                    # 🔥 NO CAPTION - Use dual request with retry
                     app.logger.info(f"⏳ No caption, using DUAL+RETRY: {reel_url[:50]}...")
                     
                     direct_video_url = get_direct_video_url(reel_url)
@@ -2320,7 +2230,6 @@ def run_pipeline(pipeline_id):
                         direct_video_url = get_direct_url_from_cache_only(reel_url)
                     
                     if direct_video_url:
-                        # Create pending post
                         post_id = create_pending_post(
                             reel_url=reel_url,
                             direct_video_url=direct_video_url,
@@ -2330,7 +2239,6 @@ def run_pipeline(pipeline_id):
                         )
                         
                         if post_id:
-                            # 🔥 Use DUAL+RETRY version
                             trigger_caption_fetch_with_dual_requests_and_retry(
                                 reel_url,
                                 pipeline['id'],
@@ -2341,24 +2249,20 @@ def run_pipeline(pipeline_id):
                             app.logger.info(f"⏳ Dual request sent for: {reel_url[:50]}...")
                         else:
                             failed_count += 1
-                            app.logger.error(f"❌ Failed to create pending post: {reel_url[:50]}...")
                     else:
                         failed_count += 1
-                        app.logger.error(f"❌ Could not get video URL: {reel_url[:50]}...")
                     
             except Exception as e:
                 app.logger.error(f"Error processing reel: {e}")
                 failed_count += 1
         
-        # Update pipeline stats
         update_pipeline_stats(pipeline['id'], posted_count, failed_count)
         
-        # Log the run
         log_pipeline_run(pipeline['id'], posted_count, failed_count, 
                         'completed' if failed_count == 0 else 'partial')
         
         return {
-            "message": f"Posted {posted_count} reels, {pending_count} pending (waiting for captions), {failed_count} failed",
+            "message": f"Posted {posted_count} reels, {pending_count} pending, {failed_count} failed",
             "posted": posted_count,
             "pending": pending_count,
             "failed": failed_count,
@@ -2405,7 +2309,6 @@ def run_all_active_pipelines():
 def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
     """
     Ensure a reel has a caption - uses async fetch if missing.
-    Priority: 1. scraped_reels → 2. posted_reels → 3. Async caption service
     """
     conn = get_db_connection()
     if not conn:
@@ -2414,7 +2317,6 @@ def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
     try:
         cur = conn.cursor()
         
-        # 1. Check scraped_reels first (fastest)
         cur.execute("""
             SELECT results FROM scraped_reels 
             WHERE EXISTS (
@@ -2439,7 +2341,6 @@ def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
                                     app.logger.info(f"📝 Found caption in scraped_reels")
                                     return caption
         
-        # 2. Check posted_reels
         cur.execute("""
             SELECT caption FROM posted_reels 
             WHERE pipeline_id = %s AND reel_url = %s
@@ -2449,11 +2350,9 @@ def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
             app.logger.info(f"📝 Found caption in posted_reels")
             return result[0]
         
-        # 3. Trigger async caption fetch (doesn't block!)
         app.logger.info(f"🔥 Caption not found, triggering dual fetch for: {reel_url[:50]}...")
         trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, profile_username)
         
-        # Return None for now - webhook will update later
         return None
         
     except Exception as e:
@@ -2518,14 +2417,12 @@ def upload_cookies():
         if not success:
             return jsonify({"error": "Failed to save cookies to database", "status": "error"}), 500
 
-        encrypted = encrypt_credentials(json.dumps(cookies_data), "instagram_cookies")
-        if encrypted:
-            session['instagram_encrypted'] = encrypted
-            session['instagram_username'] = username or 'Instagram User'
-            session['instagram_saved'] = True
-
-        session['cookies_data'] = cookies_data
-        session['username'] = username or 'Instagram User'
+        # 🔥 FIX: Store only small data in session, not the cookies
+        session['instagram_username'] = username or 'Instagram User'
+        session['instagram_saved'] = True
+        # 🔥 REMOVED: session['instagram_encrypted'] = encrypted
+        # 🔥 REMOVED: session['cookies_data'] = cookies_data
+        # 🔥 REMOVED: session['username'] = username
 
         response = jsonify({
             "status": "success",
@@ -2553,7 +2450,7 @@ def upload_cookies():
 
 @app.route("/api/instagram/cookies_status", methods=["GET"])
 def instagram_cookies_status():
-    """Check if Instagram cookies are saved."""
+    """Check if Instagram cookies are saved - ONLY check database."""
     db_cookies = get_cookies_from_db()
     if db_cookies:
         return jsonify({
@@ -2563,19 +2460,7 @@ def instagram_cookies_status():
             "message": "Cookies are saved in database"
         })
     
-    encrypted = session.get('instagram_encrypted')
-    if encrypted:
-        try:
-            decrypted = decrypt_credentials(encrypted)
-            if decrypted:
-                return jsonify({
-                    "status": "success",
-                    "has_cookies": True,
-                    "username": session.get('instagram_username', 'Instagram User'),
-                    "message": "Cookies are saved in session"
-                })
-        except Exception:
-            pass
+    # 🔥 REMOVED: Don't check session for encrypted cookies
     
     return jsonify({
         "status": "success",
@@ -2588,12 +2473,13 @@ def clear_cookies():
     """Clear uploaded cookies from Neon PostgreSQL and session."""
     clear_cookies_from_db()
     
-    session.pop('instagram_encrypted', None)
+    # 🔥 Clear only small session data
     session.pop('instagram_username', None)
     session.pop('instagram_saved', None)
-    session.pop('cookies_data', None)
-    session.pop('username', None)
-    session.pop('cookie_file', None)
+    # 🔥 REMOVED: session.pop('instagram_encrypted', None)
+    # 🔥 REMOVED: session.pop('cookies_data', None)
+    # 🔥 REMOVED: session.pop('username', None)
+    # 🔥 REMOVED: session.pop('cookie_file', None)
 
     for file in ['cookies_netscape.txt', 'instagram_cookies_persistent.txt']:
         path = os.path.join('/tmp', file)
@@ -2622,31 +2508,23 @@ def scrape_proxy():
     app.logger.info(f"📝 Max reels: {max_reels}")
     
     cookies = None
+    
+    # 🔥 FIX: Only get cookies from database
     db_cookies = get_cookies_from_db()
     if db_cookies:
         cookies = db_cookies.get('cookie_data', [])
         app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from Neon DB")
     
-    if not cookies:
-        encrypted = session.get('instagram_encrypted')
-        if encrypted:
-            try:
-                decrypted = decrypt_credentials(encrypted)
-                if decrypted:
-                    cookie_data = decrypted[0]
-                    if isinstance(cookie_data, str) and cookie_data.startswith('['):
-                        cookie_data = json.loads(cookie_data)
-                    elif isinstance(cookie_data, dict):
-                        cookie_data = cookie_data.get('data', [])
-                    cookies = cookie_data
-                    app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from session")
-            except Exception as e:
-                app.logger.error(f"Failed to decrypt cookies: {e}")
+    # 🔥 REMOVED: Don't check session for encrypted cookies
     
     if not cookies:
-        cookies = session.get('cookies_data')
-        if cookies:
-            app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from session data")
+        cookies_json_env = os.environ.get('COOKIES_JSON')
+        if cookies_json_env:
+            try:
+                cookies = json.loads(cookies_json_env)
+                app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from env")
+            except:
+                pass
     
     if not cookies:
         return jsonify({
@@ -2657,7 +2535,6 @@ def scrape_proxy():
     data['cookies'] = cookies
     
     try:
-        # Get existing URLs before scraping
         existing_urls = {}
         for username in usernames:
             existing_urls[username] = get_existing_reel_urls(username)
@@ -2676,7 +2553,6 @@ def scrape_proxy():
             result_data = response.json()
             results = result_data.get('results', [])
             
-            # Filter out already existing reels
             new_results = []
             total_new_reels = 0
             
@@ -2688,7 +2564,6 @@ def scrape_proxy():
                 existing = existing_urls.get(username, set())
                 reels = profile.get('reels', [])
                 
-                # Filter out existing reels
                 new_reels = []
                 for reel in reels:
                     if isinstance(reel, str):
@@ -2709,13 +2584,11 @@ def scrape_proxy():
                 else:
                     app.logger.info(f"ℹ️ @{username}: No new reels found")
             
-            # Store only new reels
             if new_results:
                 with app.test_request_context():
                     store_scraped_data()
                     app.logger.info(f"✅ Stored {total_new_reels} new reels for {len(new_results)} profiles")
                 
-                # Fetch captions only for new reels
                 if fetch_captions:
                     app.logger.info(f"📝 Auto-fetching captions for {total_new_reels} new reels...")
                     
@@ -2874,17 +2747,12 @@ def store_scraped_data():
             if username:
                 all_usernames.append(username)
             
-            # Get existing reels for this username
             existing_urls = get_existing_reel_urls(username)
-            
-            # Get new reels
             new_reels = profile.get('reels', [])
             
-            # Merge: Keep existing reels + add new ones
             merged_reels = []
             existing_reels_dict = {}
             
-            # First, add existing reels from database
             if existing_urls:
                 cur = conn.cursor()
                 cur.execute("""
@@ -2912,11 +2780,9 @@ def store_scraped_data():
                                     existing_reels_dict[reel] = {"url": reel, "caption": ""}
                             break
             
-            # Add existing reels first
             for url, reel_data in existing_reels_dict.items():
                 merged_reels.append(reel_data)
             
-            # Add new reels (deduplicate)
             for reel in new_reels:
                 if isinstance(reel, dict):
                     url = reel.get('url')
@@ -2928,7 +2794,6 @@ def store_scraped_data():
                         merged_reels.append({"url": reel, "caption": ""})
                         existing_reels_dict[reel] = {"url": reel, "caption": ""}
             
-            # Create merged profile
             merged_profile = {
                 "username": username,
                 "reels": merged_reels,
@@ -3549,7 +3414,6 @@ def sync_captions():
     
     app.logger.info(f"📝 Syncing captions for @{username}")
     
-    # Start background sync and get job ID
     job_id = sync_captions_background(username)
     
     return jsonify({
@@ -3666,7 +3530,6 @@ def webhook_caption():
                 if pending:
                     app.logger.info(f"🔥 [Job {job_id}] Found pending post! Processing...")
                     
-                    # ✅ Process the pending post (this will set status to 'completed')
                     success = process_pending_post(pending)
                     
                     if success:
@@ -3674,7 +3537,6 @@ def webhook_caption():
                     else:
                         app.logger.error(f"❌ [Job {job_id}] Failed to process pending post")
                         
-                        # 🔥 If processing failed, mark as failed
                         cur.execute("""
                             UPDATE pending_posts 
                             SET status = 'failed',
@@ -3686,7 +3548,6 @@ def webhook_caption():
                 else:
                     app.logger.info(f"ℹ️ [Job {job_id}] No pending post found")
                     
-                    # 🔥 Check if this reel was already posted
                     cur.execute("""
                         SELECT COUNT(*) FROM posted_reels 
                         WHERE reel_url = %s AND status = 'success'
@@ -3695,7 +3556,6 @@ def webhook_caption():
                     
                     if already_posted:
                         app.logger.info(f"✅ [Job {job_id}] Reel already posted, updating pending_posts to completed")
-                        # Mark any pending posts as completed
                         cur.execute("""
                             UPDATE pending_posts 
                             SET status = 'completed',
@@ -3706,9 +3566,7 @@ def webhook_caption():
                         """, (caption, reel_url))
                         conn.commit()
                     else:
-                        # No pending post and not posted yet - store for future
                         app.logger.info(f"ℹ️ [Job {job_id}] No pending post, caption stored for future use")
-                        # Update pending_posts with caption but don't change status
                         cur.execute("""
                             UPDATE pending_posts 
                             SET caption = %s,
@@ -3718,7 +3576,6 @@ def webhook_caption():
                         """, (caption, reel_url))
                         conn.commit()
                 
-                # 5. Update pending_posts with webhook_received and caption
                 cur.execute("""
                     UPDATE pending_posts 
                     SET webhook_received = TRUE,
@@ -3753,7 +3610,6 @@ def webhook_caption():
         if reel_url in CAPTION_FETCH_STATUS:
             CAPTION_FETCH_STATUS[reel_url]['error'] = error
         
-        # 🔥 Mark pending posts as failed if caption fetch failed
         try:
             conn = get_db_connection()
             if conn:
@@ -3843,7 +3699,6 @@ def get_pipelines():
         """)
         pipelines = cur.fetchall()
         
-        # Get pending counts for each pipeline
         for pipeline in pipelines:
             cur.execute("""
                 SELECT COUNT(*) as pending_count 
@@ -3983,9 +3838,7 @@ def reset_pipeline(pipeline_id):
     
     try:
         cur = conn.cursor()
-        # Delete posted records for this pipeline
         cur.execute("DELETE FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
-        # Reset pipeline stats
         cur.execute("""
             UPDATE pipelines 
             SET total_posted = 0,
@@ -4118,7 +3971,6 @@ def get_pipeline(pipeline_id):
         if not pipeline:
             return jsonify({"error": "Pipeline not found"}), 404
         
-        # Get pending count
         cur.execute("""
             SELECT COUNT(*) as pending_count 
             FROM pending_posts 
@@ -4150,7 +4002,6 @@ def delete_pipeline(pipeline_id):
     try:
         cur = conn.cursor()
         
-        # First, check if pipeline exists
         cur.execute("SELECT id, name FROM pipelines WHERE id = %s", (pipeline_id,))
         pipeline = cur.fetchone()
         
@@ -4159,19 +4010,15 @@ def delete_pipeline(pipeline_id):
         
         pipeline_name = pipeline[1]
         
-        # Delete associated pending_posts
         cur.execute("DELETE FROM pending_posts WHERE pipeline_id = %s", (pipeline_id,))
         pending_deleted = cur.rowcount
         
-        # Delete associated posted_reels (cascade will handle this if set)
         cur.execute("DELETE FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
         posted_deleted = cur.rowcount
         
-        # Delete associated pipeline_runs
         cur.execute("DELETE FROM pipeline_runs WHERE pipeline_id = %s", (pipeline_id,))
         runs_deleted = cur.rowcount
         
-        # Delete the pipeline itself
         cur.execute("DELETE FROM pipelines WHERE id = %s", (pipeline_id,))
         
         conn.commit()
@@ -4255,7 +4102,7 @@ def debug_cookies():
             "cookie_file_path": cookie_file,
             "sample_cookies": first_lines,
             "has_session_cookie": any("sessionid" in line for line in first_lines),
-            "username": session.get('instagram_username') or session.get('username', 'Unknown'),
+            "username": session.get('instagram_username') or 'Unknown',
             "has_encrypted": bool(session.get('instagram_encrypted')),
             "session_permanent": session.permanent
         })
@@ -4272,42 +4119,48 @@ def debug_session():
     db_cookies = get_cookies_from_db()
     return jsonify({
         "session_keys": list(session.keys()),
-        "has_instagram_encrypted": bool(session.get('instagram_encrypted')),
-        "has_cookies_data": bool(session.get('cookies_data')),
+        "session_size": len(str(dict(session))),
         "instagram_username": session.get('instagram_username'),
-        "username": session.get('username'),
+        "instagram_saved": session.get('instagram_saved', False),
         "session_permanent": session.permanent,
-        "cookie_file": session.get('cookie_file'),
         "db_cookies": db_cookies is not None,
         "db_username": db_cookies.get('username') if db_cookies else None,
         "user_id_from_cookie": request.cookies.get('user_id'),
-        "user_id_from_session": session.get('user_id')
+        "user_id_from_session": session.get('user_id'),
+        "note": "Large cookie data is stored in database, not session"
     })
 
 @app.route("/api/init", methods=["GET"])
 def init_session():
-    """Initialize session and return user_id."""
+    """Initialize session and return user_id - DON'T store large data."""
     user_id = FIXED_USER_ID
     session['user_id'] = user_id
     
     db_cookies = get_cookies_from_db()
     
-    if db_cookies and not session.get('instagram_encrypted'):
-        cookies_data = db_cookies.get('cookie_data', [])
-        username = db_cookies.get('username', 'Instagram User')
-        
-        encrypted = encrypt_credentials(json.dumps(cookies_data), "instagram_cookies")
-        if encrypted:
-            session['instagram_encrypted'] = encrypted
-            session['instagram_username'] = username
-            session['instagram_saved'] = True
-            session['cookies_data'] = cookies_data
-            session['username'] = username
+    if db_cookies:
+        # Store only the username, not the cookies
+        session['instagram_username'] = db_cookies.get('username', 'Instagram User')
+        session['instagram_saved'] = True
     
     return jsonify({
         "status": "success",
         "user_id": user_id,
-        "has_cookies": True
+        "has_cookies": bool(db_cookies)
+    })
+
+@app.route("/api/session/clear-large", methods=["POST"])
+def clear_large_session():
+    """Clear large session data to fix cookie size issue."""
+    session.pop('instagram_encrypted', None)
+    session.pop('cookies_data', None)
+    session.pop('username', None)
+    session.pop('cookie_file', None)
+    
+    return jsonify({
+        "status": "success",
+        "message": "Large session data cleared. Session size should now be under 4KB.",
+        "new_session_size": len(str(dict(session)))
     })
 
 @app.route("/api/commands/status", methods=["GET"])
@@ -4364,6 +4217,42 @@ def keep_alive():
         "timestamp": datetime.utcnow().isoformat(),
         "message": "I'm alive!"
     })
+
+@app.route("/api/pipelines/<pipeline_id>/sync-stats", methods=["POST"])
+def sync_pipeline_stats(pipeline_id):
+    """Sync pipeline stats with actual posted_reels count."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM posted_reels 
+            WHERE pipeline_id = %s AND status = 'success'
+        """, (pipeline_id,))
+        actual_count = cur.fetchone()[0]
+        
+        cur.execute("""
+            UPDATE pipelines 
+            SET total_posted = %s,
+                updated_at = NOW()
+            WHERE id = %s
+        """, (actual_count, pipeline_id))
+        conn.commit()
+        
+        return jsonify({
+            "status": "success",
+            "pipeline_id": pipeline_id,
+            "total_posted": actual_count,
+            "message": f"Pipeline stats synced: {actual_count} total posted"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
 
 # ============== AFTER REQUEST ==============
 
