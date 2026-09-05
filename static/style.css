@@ -3468,3 +3468,392 @@ html, body {
     background: rgba(156, 163, 175, 0.08);
     border: 1px solid rgba(156, 163, 175, 0.15);
 }
+
+
+
+
+
+/* Dashboard */
+.dashboard {
+    padding: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* Status Grid */
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.status-card {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    border: 1px solid #2d2d44;
+    transition: all 0.3s ease;
+}
+
+.status-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+}
+
+.status-card .status-label {
+    display: block;
+    font-size: 13px;
+    color: #94a3b8;
+    margin-bottom: 4px;
+}
+
+.status-card .status-value {
+    display: block;
+    font-size: 32px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+.status-card .status-sub {
+    display: block;
+    font-size: 11px;
+    color: #64748b;
+    margin-top: 4px;
+}
+
+.status-card.pending .status-value {
+    color: #fbbf24;
+}
+
+.status-card.processing .status-value {
+    color: #60a5fa;
+}
+
+.status-card.failed .status-value {
+    color: #f87171;
+}
+
+/* Pending Posts Section */
+.pending-posts-section {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid #2d2d44;
+}
+
+.pending-posts-section h3 {
+    color: #ffffff;
+    margin-bottom: 16px;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pending-posts-section .badge {
+    background: #2d2d44;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    color: #94a3b8;
+}
+
+/* Pending Post Item */
+.pending-post-item {
+    background: #16213e;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+    border-left: 4px solid #fbbf24;
+    transition: all 0.3s ease;
+}
+
+.pending-post-item:hover {
+    background: #1a2744;
+    transform: translateX(4px);
+}
+
+.pending-post-item.status-completed {
+    border-left-color: #34d399;
+    opacity: 0.7;
+}
+
+.pending-post-item.status-failed {
+    border-left-color: #f87171;
+}
+
+.pending-post-item .post-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.pending-post-item .reel-url {
+    color: #94a3b8;
+    font-size: 14px;
+    font-family: monospace;
+}
+
+.pending-post-item .post-status {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 12px;
+}
+
+.post-status.pending {
+    background: #fbbf24;
+    color: #000;
+}
+
+.post-status.processing {
+    background: #60a5fa;
+    color: #fff;
+}
+
+.post-status.completed {
+    background: #34d399;
+    color: #000;
+}
+
+.post-status.failed {
+    background: #f87171;
+    color: #fff;
+}
+
+/* Dual Request Status */
+.dual-request-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 0;
+    padding: 10px;
+    background: #0a1628;
+    border-radius: 6px;
+}
+
+.request-step {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    background: #1a1a2e;
+    border: 1px solid #2d2d44;
+}
+
+.request-step .step-icon {
+    font-size: 14px;
+}
+
+.request-step .step-label {
+    color: #94a3b8;
+    font-weight: 500;
+}
+
+.request-step .step-status {
+    font-size: 11px;
+}
+
+.request-step.step-completed {
+    border-color: #34d399;
+}
+
+.request-step.step-completed .step-status {
+    color: #34d399;
+}
+
+.request-step.step-active {
+    border-color: #60a5fa;
+    animation: pulse-active 1.5s infinite;
+}
+
+.request-step.step-active .step-status {
+    color: #60a5fa;
+}
+
+.request-step.step-pending {
+    border-color: #64748b;
+    opacity: 0.6;
+}
+
+.request-step.step-pending .step-status {
+    color: #64748b;
+}
+
+.request-step.step-failed {
+    border-color: #f87171;
+}
+
+.request-step.step-failed .step-status {
+    color: #f87171;
+}
+
+.request-arrow {
+    color: #64748b;
+    font-size: 16px;
+}
+
+@keyframes pulse-active {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Progress Bar */
+.progress-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 8px 0;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 6px;
+    background: #2d2d44;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #60a5fa, #34d399);
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
+.progress-label {
+    font-size: 12px;
+    color: #94a3b8;
+    min-width: 36px;
+    text-align: right;
+}
+
+/* Timeline */
+.post-timeline {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 8px 0;
+    font-size: 12px;
+    color: #64748b;
+}
+
+.post-timeline span {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Caption Preview */
+.caption-preview {
+    margin: 8px 0;
+    padding: 8px 12px;
+    background: #0a1628;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #94a3b8;
+}
+
+.caption-preview .caption-label {
+    color: #60a5fa;
+    font-weight: 500;
+}
+
+/* Error Message */
+.error-message {
+    margin: 8px 0;
+    padding: 8px 12px;
+    background: #1a0a0a;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #f87171;
+    border-left: 3px solid #f87171;
+}
+
+/* Post Actions */
+.post-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.btn-retry, .btn-view {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-retry {
+    background: #fbbf24;
+    color: #000;
+}
+
+.btn-retry:hover:not(:disabled) {
+    background: #f59e0b;
+    transform: scale(1.02);
+}
+
+.btn-retry:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-view {
+    background: #60a5fa;
+    color: #fff;
+}
+
+.btn-view:hover:not(:disabled) {
+    background: #3b82f6;
+    transform: scale(1.02);
+}
+
+.btn-view:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* No Pending */
+.no-pending {
+    text-align: center;
+    padding: 40px 20px;
+    color: #34d399;
+    font-size: 16px;
+    background: #0a1628;
+    border-radius: 8px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .status-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .dual-request-status {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .request-arrow {
+        transform: rotate(90deg);
+        align-self: center;
+    }
+    
+    .post-timeline {
+        flex-direction: column;
+        gap: 4px;
+    }
+    
+    .post-actions {
+        flex-direction: column;
+    }
+}
