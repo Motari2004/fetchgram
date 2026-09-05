@@ -177,26 +177,6 @@ def init_db():
             );
         """)
         
-        # ========== PENDING POSTS TABLE (NEW) ==========
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pending_posts (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                reel_url TEXT NOT NULL UNIQUE,
-                direct_video_url TEXT NOT NULL,
-                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-                profile_username TEXT NOT NULL,
-                facebook_account_id TEXT NOT NULL,
-                caption TEXT,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                status TEXT DEFAULT 'pending',
-                attempts INTEGER DEFAULT 0,
-                error_message TEXT,
-                facebook_post_id TEXT,
-                facebook_post_url TEXT
-            );
-        """)
-        
         # Create indexes
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id 
@@ -241,18 +221,6 @@ def init_db():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_sync_status_status 
             ON sync_status(status);
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_pending_posts_reel_url 
-            ON pending_posts(reel_url);
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_pending_posts_status 
-            ON pending_posts(status);
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at 
-            ON pending_posts(created_at DESC);
         """)
         
         conn.commit()
@@ -1330,7 +1298,7 @@ def trigger_caption_fetch_async(reel_url, pipeline_id, profile_username):
         try:
             app.logger.info(f"📞 [Job {job_id}] Calling caption service...")
             
-            # Call the caption service with webhook URL
+            # Call the caption service WITHOUT waiting for full response
             response = requests.post(
                 CAPTION_SERVICE_URL,
                 json={
@@ -1355,6 +1323,7 @@ def trigger_caption_fetch_async(reel_url, pipeline_id, profile_username):
                 CAPTION_FETCH_STATUS[reel_url]['error'] = response.text[:200] if response.text else 'Unknown error'
                 
         except requests.exceptions.Timeout:
+            # Timeout is expected - we don't wait for the full response
             app.logger.info(f"⏰ [Job {job_id}] Request sent (timeout expected - service is processing)")
             CAPTION_FETCH_STATUS[reel_url]['status'] = 'processing'
             CAPTION_FETCH_STATUS[reel_url]['message'] = 'Service started (timeout expected)'
@@ -1398,160 +1367,19 @@ def get_caption_fetch_status(reel_url):
         'message': 'No caption fetch job found for this URL'
     }
 
-# ============== PENDING POST FUNCTIONS (NEW) ==============
 
-def create_pending_post(reel_url, direct_video_url, pipeline_id, profile_username, facebook_account_id):
-    """Create a pending post entry for a reel waiting for caption."""
-    conn = get_db_connection()
-    if not conn:
-        return None
+
+
+
+
+
+
+def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
+    """
+    Ensure a reel has a caption - uses async fetch if missing.
     
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO pending_posts (
-                reel_url, direct_video_url, pipeline_id, 
-                profile_username, facebook_account_id, status
-            )
-            VALUES (%s, %s, %s, %s, %s, 'pending')
-            ON CONFLICT (reel_url) DO UPDATE SET
-                direct_video_url = EXCLUDED.direct_video_url,
-                status = 'pending',
-                updated_at = NOW()
-            RETURNING id
-        """, (reel_url, direct_video_url, pipeline_id, profile_username, facebook_account_id))
-        
-        result = cur.fetchone()
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        app.logger.info(f"📝 Created pending post for: {reel_url[:50]}...")
-        return result[0] if result else None
-        
-    except Exception as e:
-        app.logger.error(f"Failed to create pending post: {e}")
-        return None
-
-def get_pending_post(reel_url):
-    """Get a pending post by reel URL."""
-    conn = get_db_connection()
-    if not conn:
-        return None
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT * FROM pending_posts 
-            WHERE reel_url = %s AND status IN ('pending', 'processing')
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (reel_url,))
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-        return result
-    except Exception as e:
-        app.logger.error(f"Failed to get pending post: {e}")
-        return None
-
-def update_pending_post_status(post_id, status, error_message=None, facebook_post_id=None, facebook_post_url=None):
-    """Update pending post status."""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE pending_posts 
-            SET status = %s,
-                attempts = attempts + 1,
-                error_message = COALESCE(%s, error_message),
-                facebook_post_id = COALESCE(%s, facebook_post_id),
-                facebook_post_url = COALESCE(%s, facebook_post_url),
-                updated_at = NOW()
-            WHERE id = %s
-        """, (status, error_message, facebook_post_id, facebook_post_url, post_id))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return True
-    except Exception as e:
-        app.logger.error(f"Failed to update pending post: {e}")
-        return False
-
-def process_pending_post(post):
-    """Process a pending post - post to Facebook with caption."""
-    try:
-        app.logger.info(f"📤 Processing pending post for: {post['reel_url'][:50]}...")
-        
-        # Update status to processing
-        update_pending_post_status(post['id'], 'processing')
-        
-        # Get the caption (should be available now)
-        caption = get_caption_for_reel(post['reel_url'], post['profile_username'], post['pipeline_id'])
-        
-        if not caption or not caption.strip():
-            app.logger.error(f"❌ No caption available for: {post['reel_url'][:50]}...")
-            update_pending_post_status(post['id'], 'failed', 'No caption available')
-            return False
-        
-        # Post to Facebook
-        result = publish_to_facebook(
-            video_url=post['direct_video_url'],
-            text=caption,
-            account_id=post['facebook_account_id'],
-            publish_now=True
-        )
-        
-        if result and not result.get('error'):
-            # Success
-            post_id = result.get('post', {}).get('_id') or result.get('post_id')
-            post_url = None
-            
-            platforms = result.get('post', {}).get('platforms', [])
-            for platform in platforms:
-                if platform.get('platform') == 'facebook':
-                    post_url = platform.get('publishedUrl')
-                    break
-            
-            # Mark as posted
-            mark_reel_as_posted(
-                pipeline_id=post['pipeline_id'],
-                reel_url=post['reel_url'],
-                direct_video_url=post['direct_video_url'],
-                caption=caption,
-                facebook_post_id=post_id,
-                facebook_post_url=post_url,
-                status='success'
-            )
-            
-            # Update pending post
-            update_pending_post_status(
-                post['id'], 
-                'completed', 
-                None, 
-                post_id, 
-                post_url
-            )
-            
-            app.logger.info(f"✅ Pending post completed: {post['reel_url'][:50]}...")
-            return True
-        else:
-            # Failed
-            error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
-            update_pending_post_status(post['id'], 'failed', str(error_msg))
-            app.logger.error(f"❌ Pending post failed: {post['reel_url'][:50]}... - {error_msg}")
-            return False
-            
-    except Exception as e:
-        app.logger.error(f"❌ Error processing pending post: {e}")
-        update_pending_post_status(post['id'], 'failed', str(e))
-        return False
-
-def get_caption_for_reel(reel_url, profile_username, pipeline_id):
-    """Get caption for a reel from database."""
+    Priority: 1. scraped_reels → 2. posted_reels → 3. Async caption service
+    """
     conn = get_db_connection()
     if not conn:
         return None
@@ -1559,7 +1387,7 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id):
     try:
         cur = conn.cursor()
         
-        # 1. Check scraped_reels
+        # 1. Check scraped_reels first (fastest)
         cur.execute("""
             SELECT results FROM scraped_reels 
             WHERE EXISTS (
@@ -1573,15 +1401,16 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id):
         result = cur.fetchone()
         if result:
             results = result[0]
-            if isinstance(results, str):
-                results = json.loads(results)
             for profile in results:
                 if profile.get('username') == profile_username:
-                    for reel in profile.get('reels', []):
-                        if isinstance(reel, dict) and reel.get('url') == reel_url:
-                            caption = reel.get('caption', '')
-                            if caption and caption.strip():
-                                return caption
+                    reels = profile.get('reels', [])
+                    for reel in reels:
+                        if isinstance(reel, dict):
+                            if reel.get('url') == reel_url:
+                                caption = reel.get('caption', '')
+                                if caption and caption.strip():
+                                    app.logger.info(f"📝 Found caption in scraped_reels")
+                                    return caption
         
         # 2. Check posted_reels
         cur.execute("""
@@ -1590,25 +1419,32 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id):
         """, (pipeline_id, reel_url))
         result = cur.fetchone()
         if result and result[0] and result[0].strip():
+            app.logger.info(f"📝 Found caption in posted_reels")
             return result[0]
         
-        # 3. Check reel_cache
-        cur.execute("""
-            SELECT caption FROM reel_cache 
-            WHERE reel_url = %s
-        """, (reel_url,))
-        result = cur.fetchone()
-        if result and result[0] and result[0].strip():
-            return result[0]
+        # 3. Trigger async caption fetch (doesn't block!)
+        app.logger.info(f"🔥 Caption not found, triggering async fetch for: {reel_url[:50]}...")
+        trigger_caption_fetch_async(reel_url, pipeline_id, profile_username)
         
+        # Return None for now - webhook will update later
         return None
         
     except Exception as e:
-        app.logger.error(f"Error getting caption: {e}")
+        app.logger.error(f"Error ensuring caption: {e}")
         return None
     finally:
         cur.close()
         conn.close()
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
 
 # ============== PIPELINE FUNCTIONS ==============
 
@@ -1815,8 +1651,16 @@ def get_direct_url_from_cache_only(reel_url):
         cur.close()
         conn.close()
 
+
+
+
+
+
+
+
+
 def run_pipeline(pipeline_id):
-    """Execute a single pipeline - creates pending posts for reels without captions."""
+    """Execute a single pipeline - waits for async caption if pending."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -1834,7 +1678,7 @@ def run_pipeline(pipeline_id):
         if not pipeline['is_active']:
             return {"error": "Pipeline is inactive"}
         
-        # Get unposted reels
+        # Get unposted reels with captions
         unposted = get_unposted_reels(
             pipeline['profile_username'], 
             pipeline['id'], 
@@ -1847,100 +1691,129 @@ def run_pipeline(pipeline_id):
         
         posted_count = 0
         failed_count = 0
-        pending_count = 0
         
+        # Post each reel
         for reel in unposted:
             try:
                 reel_url = reel['url']
+                
+                # 🔥 STEP 1: Check if caption exists
                 app.logger.info(f"📝 Processing: {reel_url[:50]}...")
+                caption = ensure_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
                 
-                # Check if caption exists
-                caption = get_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
-                
-                if caption and caption.strip():
-                    # ✅ Has caption - post immediately
-                    app.logger.info(f"✅ Found caption: {caption[:50]}...")
+                # 🔥 STEP 2: If caption is being fetched asynchronously, WAIT for it
+                if not caption or caption.strip() == '':
+                    status = get_caption_fetch_status(reel_url)
                     
-                    direct_video_url = get_direct_video_url(reel_url)
-                    if not direct_video_url:
-                        direct_video_url = get_direct_url_from_cache_only(reel_url)
-                    
-                    if direct_video_url:
-                        result = publish_to_facebook(
-                            video_url=direct_video_url,
-                            text=caption,
-                            account_id=pipeline['facebook_account_id'],
-                            publish_now=True
-                        )
+                    if status.get('status') in ('pending', 'processing'):
+                        app.logger.info(f"⏳ Caption is being fetched, waiting up to 60 seconds...")
                         
-                        if result and not result.get('error'):
-                            post_id = result.get('post', {}).get('_id') or result.get('post_id')
-                            post_url = None
+                        # Wait for caption with timeout
+                        max_wait = 60  # seconds
+                        wait_interval = 2
+                        waited = 0
+                        caption_found = False
+                        
+                        while waited < max_wait:
+                            time.sleep(wait_interval)
+                            waited += wait_interval
                             
-                            platforms = result.get('post', {}).get('platforms', [])
-                            for platform in platforms:
-                                if platform.get('platform') == 'facebook':
-                                    post_url = platform.get('publishedUrl')
-                                    break
+                            # Check if caption is now in database
+                            check_caption = ensure_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
+                            if check_caption and check_caption.strip():
+                                caption = check_caption
+                                caption_found = True
+                                app.logger.info(f"✅ Got caption after waiting {waited}s: {caption[:50]}...")
+                                break
                             
-                            mark_reel_as_posted(
-                                pipeline_id=pipeline['id'],
-                                reel_url=reel_url,
-                                direct_video_url=direct_video_url,
-                                caption=caption,
-                                facebook_post_id=post_id,
-                                facebook_post_url=post_url,
-                                status='success'
-                            )
-                            posted_count += 1
-                            app.logger.info(f"✅ Posted immediately: {reel_url[:50]}...")
-                        else:
-                            error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
-                            mark_reel_as_posted(
-                                pipeline_id=pipeline['id'],
-                                reel_url=reel_url,
-                                direct_video_url=direct_video_url,
-                                caption=caption,
-                                status='failed',
-                                error_message=str(error_msg)
-                            )
-                            failed_count += 1
-                            app.logger.error(f"❌ Failed to post: {reel_url[:50]}... - {error_msg}")
+                            # Check if webhook failed
+                            current_status = get_caption_fetch_status(reel_url)
+                            if current_status.get('status') == 'failed':
+                                app.logger.warning(f"⚠️ Caption fetch failed, using fallback")
+                                break
+                            
+                            app.logger.info(f"⏳ Still waiting for caption... ({waited}s elapsed)")
+                        
+                        if not caption_found and (not caption or caption.strip() == ''):
+                            caption = f"🎬 New reel from @{pipeline['profile_username']}!"
+                            app.logger.info(f"📝 Timeout after {max_wait}s, using fallback caption")
                     else:
-                        failed_count += 1
-                        app.logger.error(f"❌ Could not get video URL: {reel_url[:50]}...")
-                else:
-                    # 🔥 NO CAPTION - Create pending post + trigger webhook
-                    app.logger.info(f"⏳ No caption, creating pending post: {reel_url[:50]}...")
+                        caption = f"🎬 New reel from @{pipeline['profile_username']}!"
+                        app.logger.info(f"📝 Using fallback caption")
+                
+                # Truncate caption if too long
+                if len(caption) > 5000:
+                    caption = caption[:4997] + "..."
+                
+                # 🔥 STEP 3: Get direct video URL
+                app.logger.info(f"📥 Converting to CDN URL: {reel_url[:60]}...")
+                direct_video_url = get_direct_video_url(reel_url)
+                
+                if not direct_video_url:
+                    direct_video_url = get_direct_url_from_cache_only(reel_url)
                     
-                    direct_video_url = get_direct_video_url(reel_url)
                     if not direct_video_url:
-                        direct_video_url = get_direct_url_from_cache_only(reel_url)
-                    
-                    if direct_video_url:
-                        # 🔥 Create pending post
-                        post_id = create_pending_post(
-                            reel_url=reel_url,
-                            direct_video_url=direct_video_url,
+                        mark_reel_as_posted(
                             pipeline_id=pipeline['id'],
-                            profile_username=pipeline['profile_username'],
-                            facebook_account_id=pipeline['facebook_account_id']
+                            reel_url=reel_url,
+                            caption=caption,
+                            status='failed',
+                            error_message='Could not convert Instagram URL to CDN URL'
                         )
-                        
-                        if post_id:
-                            # 🔥 Trigger async caption fetch
-                            trigger_caption_fetch_async(reel_url, pipeline['id'], pipeline['profile_username'])
-                            pending_count += 1
-                            app.logger.info(f"⏳ Pending post created: {reel_url[:50]}...")
-                        else:
-                            failed_count += 1
-                            app.logger.error(f"❌ Failed to create pending post: {reel_url[:50]}...")
-                    else:
                         failed_count += 1
-                        app.logger.error(f"❌ Could not get video URL: {reel_url[:50]}...")
+                        continue
+                
+                # 🔥 STEP 4: Post to Facebook
+                result = publish_to_facebook(
+                    video_url=direct_video_url,
+                    text=caption,
+                    account_id=pipeline['facebook_account_id'],
+                    publish_now=True
+                )
+                
+                if result and not result.get('error'):
+                    post_id = result.get('post', {}).get('_id') or result.get('post_id')
+                    post_url = None
+                    
+                    platforms = result.get('post', {}).get('platforms', [])
+                    for platform in platforms:
+                        if platform.get('platform') == 'facebook':
+                            post_url = platform.get('publishedUrl')
+                            break
+                    
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline['id'],
+                        reel_url=reel_url,
+                        direct_video_url=direct_video_url,
+                        caption=caption,
+                        facebook_post_id=post_id,
+                        facebook_post_url=post_url,
+                        status='success'
+                    )
+                    posted_count += 1
+                    app.logger.info(f"✅ Successfully posted: {reel_url[:50]}...")
+                else:
+                    error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline['id'],
+                        reel_url=reel_url,
+                        direct_video_url=direct_video_url,
+                        caption=caption,
+                        status='failed',
+                        error_message=str(error_msg)
+                    )
+                    failed_count += 1
+                    app.logger.error(f"❌ Failed to post: {reel_url[:50]}... - {error_msg}")
                     
             except Exception as e:
-                app.logger.error(f"Error processing reel: {e}")
+                app.logger.error(f"Error posting reel: {e}")
+                mark_reel_as_posted(
+                    pipeline_id=pipeline['id'],
+                    reel_url=reel.get('url', 'unknown'),
+                    caption=reel.get('caption', ''),
+                    status='failed',
+                    error_message=str(e)
+                )
                 failed_count += 1
         
         # Update pipeline stats
@@ -1951,9 +1824,8 @@ def run_pipeline(pipeline_id):
                         'completed' if failed_count == 0 else 'partial')
         
         return {
-            "message": f"Posted {posted_count} reels, {pending_count} pending (waiting for captions), {failed_count} failed",
+            "message": f"Posted {posted_count} reels, {failed_count} failed",
             "posted": posted_count,
-            "pending": pending_count,
             "failed": failed_count,
             "total": len(unposted)
         }
@@ -1964,6 +1836,17 @@ def run_pipeline(pipeline_id):
         return {"error": str(e)}
     finally:
         conn.close()
+
+
+
+
+
+
+
+
+
+
+
 
 def run_all_active_pipelines():
     """Run all active pipelines"""
@@ -1993,67 +1876,6 @@ def run_all_active_pipelines():
     except Exception as e:
         return {"error": str(e)}
     finally:
-        conn.close()
-
-def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
-    """
-    Ensure a reel has a caption - uses async fetch if missing.
-    Priority: 1. scraped_reels → 2. posted_reels → 3. Async caption service
-    """
-    conn = get_db_connection()
-    if not conn:
-        return None
-    
-    try:
-        cur = conn.cursor()
-        
-        # 1. Check scraped_reels first (fastest)
-        cur.execute("""
-            SELECT results FROM scraped_reels 
-            WHERE EXISTS (
-                SELECT 1 FROM jsonb_array_elements(results) AS elem
-                WHERE elem->>'username' = %s
-            )
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (profile_username,))
-        
-        result = cur.fetchone()
-        if result:
-            results = result[0]
-            for profile in results:
-                if profile.get('username') == profile_username:
-                    reels = profile.get('reels', [])
-                    for reel in reels:
-                        if isinstance(reel, dict):
-                            if reel.get('url') == reel_url:
-                                caption = reel.get('caption', '')
-                                if caption and caption.strip():
-                                    app.logger.info(f"📝 Found caption in scraped_reels")
-                                    return caption
-        
-        # 2. Check posted_reels
-        cur.execute("""
-            SELECT caption FROM posted_reels 
-            WHERE pipeline_id = %s AND reel_url = %s
-        """, (pipeline_id, reel_url))
-        result = cur.fetchone()
-        if result and result[0] and result[0].strip():
-            app.logger.info(f"📝 Found caption in posted_reels")
-            return result[0]
-        
-        # 3. Trigger async caption fetch (doesn't block!)
-        app.logger.info(f"🔥 Caption not found, triggering async fetch for: {reel_url[:50]}...")
-        trigger_caption_fetch_async(reel_url, pipeline_id, profile_username)
-        
-        # Return None for now - webhook will update later
-        return None
-        
-    except Exception as e:
-        app.logger.error(f"Error ensuring caption: {e}")
-        return None
-    finally:
-        cur.close()
         conn.close()
 
 # ============== ROUTES ==============
@@ -3152,13 +2974,13 @@ def sync_captions():
         "username": username
     }), 202
 
-# ============== CAPTION WEBHOOK (UPDATED) ==============
+# ============== CAPTION WEBHOOK ==============
 
 @app.route("/api/webhook/caption", methods=["POST"])
 def webhook_caption():
     """
     Webhook endpoint for caption service to call back with the caption.
-    When caption arrives, checks for pending post and posts to Facebook.
+    This is called by the caption service when it finishes processing.
     """
     data = request.get_json(silent=True) or {}
     reel_url = data.get('reel_url')
@@ -3193,17 +3015,23 @@ def webhook_caption():
             if conn:
                 cur = conn.cursor()
                 
-                # 1. Store in reel_cache
+                # 1. Update posted_reels with caption
                 cur.execute("""
-                    INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
-                    VALUES (%s, '', %s, NOW())
-                    ON CONFLICT (reel_url) DO UPDATE SET 
-                        caption = EXCLUDED.caption,
-                        created_at = NOW()
-                """, (reel_url, caption))
+                    UPDATE posted_reels 
+                    SET caption = %s 
+                    WHERE reel_url = %s AND caption IS NULL
+                """, (caption, reel_url))
+                updated_rows = cur.rowcount
+                conn.commit()
                 
-                # 2. Update scraped_reels if we have profile_username
+                if updated_rows > 0:
+                    app.logger.info(f"💾 [Job {job_id}] Caption stored in posted_reels")
+                else:
+                    app.logger.info(f"💾 [Job {job_id}] Caption already existed in posted_reels")
+                
+                # 2. Also update scraped_reels if we have profile username
                 if profile_username:
+                    # ✅ FIX: Get the results properly
                     cur.execute("""
                         SELECT id, results FROM scraped_reels 
                         WHERE EXISTS (
@@ -3216,13 +3044,16 @@ def webhook_caption():
                     
                     result = cur.fetchone()
                     if result:
+                        # ✅ result is a tuple: (id, results)
                         row_id = result[0]
-                        results = result[1]
+                        results = result[1]  # This is the JSONB data
                         updated = False
                         
+                        # Parse results if it's a string
                         if isinstance(results, str):
                             results = json.loads(results)
                         
+                        # Update the caption
                         for profile_idx, profile in enumerate(results):
                             if profile.get('username') == profile_username:
                                 reels = profile.get('reels', [])
@@ -3242,40 +3073,25 @@ def webhook_caption():
                             """, (json.dumps(results), row_id))
                             conn.commit()
                             app.logger.info(f"💾 [Job {job_id}] Caption stored in scraped_reels")
+                        else:
+                            app.logger.warning(f"⚠️ [Job {job_id}] Could not find reel in scraped_reels")
                 
-                # 3. Update posted_reels
+                # 3. Update reel_cache
                 cur.execute("""
-                    UPDATE posted_reels 
-                    SET caption = %s 
-                    WHERE reel_url = %s AND (caption IS NULL OR caption = '')
+                    UPDATE reel_cache 
+                    SET caption = %s, created_at = NOW()
+                    WHERE reel_url = %s
                 """, (caption, reel_url))
                 conn.commit()
-                
-                # ========== 🔥 CHECK FOR PENDING POST ==========
-                app.logger.info(f"🔍 [Job {job_id}] Checking for pending post: {reel_url[:50]}...")
-                pending = get_pending_post(reel_url)
-                
-                if pending:
-                    app.logger.info(f"🔥 [Job {job_id}] Found pending post! Processing...")
-                    
-                    # ✅ Process the pending post
-                    success = process_pending_post(pending)
-                    
-                    if success:
-                        app.logger.info(f"✅ [Job {job_id}] Pending post processed successfully!")
-                    else:
-                        app.logger.error(f"❌ [Job {job_id}] Failed to process pending post")
-                else:
-                    app.logger.info(f"ℹ️ [Job {job_id}] No pending post found, caption stored for future use")
                 
                 cur.close()
                 conn.close()
                 
                 return jsonify({
                     "status": "success",
-                    "message": "Caption stored and pending post processed",
+                    "message": "Caption stored successfully",
                     "job_id": job_id,
-                    "pending_processed": bool(pending) if 'pending' in locals() else False
+                    "stored": True
                 })
                 
         except Exception as e:
@@ -3346,16 +3162,6 @@ def get_pipelines():
             ORDER BY p.created_at DESC
         """)
         pipelines = cur.fetchall()
-        
-        # Get pending counts for each pipeline
-        for pipeline in pipelines:
-            cur.execute("""
-                SELECT COUNT(*) as pending_count 
-                FROM pending_posts 
-                WHERE pipeline_id = %s AND status IN ('pending', 'processing')
-            """, (pipeline['id'],))
-            pending = cur.fetchone()
-            pipeline['pending_posts'] = pending['pending_count'] if pending else 0
         
         return jsonify({
             "status": "success",
@@ -3509,49 +3315,6 @@ def reset_pipeline(pipeline_id):
         cur.close()
         conn.close()
 
-@app.route('/api/pipelines/<pipeline_id>/pending', methods=['GET'])
-def get_pending_posts(pipeline_id):
-    """Get pending posts for a pipeline."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT 
-                id,
-                reel_url,
-                direct_video_url,
-                pipeline_id,
-                profile_username,
-                facebook_account_id,
-                caption,
-                created_at,
-                updated_at,
-                status,
-                attempts,
-                error_message,
-                facebook_post_id,
-                facebook_post_url
-            FROM pending_posts
-            WHERE pipeline_id = %s
-            ORDER BY created_at DESC
-        """, (pipeline_id,))
-        pending = cur.fetchall()
-        
-        return jsonify({
-            "status": "success",
-            "pending": pending,
-            "count": len(pending)
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
 @app.route('/api/pipelines/<pipeline_id>/posted', methods=['GET'])
 def get_posted_reels(pipeline_id):
     """Get posted reels for a pipeline with captions"""
@@ -3619,15 +3382,6 @@ def get_pipeline(pipeline_id):
         if not pipeline:
             return jsonify({"error": "Pipeline not found"}), 404
         
-        # Get pending count
-        cur.execute("""
-            SELECT COUNT(*) as pending_count 
-            FROM pending_posts 
-            WHERE pipeline_id = %s AND status IN ('pending', 'processing')
-        """, (pipeline_id,))
-        pending = cur.fetchone()
-        pipeline['pending_posts'] = pending['pending_count'] if pending else 0
-        
         return jsonify({
             "status": "success",
             "pipeline": pipeline
@@ -3660,10 +3414,6 @@ def delete_pipeline(pipeline_id):
         
         pipeline_name = pipeline[1]
         
-        # Delete associated pending_posts
-        cur.execute("DELETE FROM pending_posts WHERE pipeline_id = %s", (pipeline_id,))
-        pending_deleted = cur.rowcount
-        
         # Delete associated posted_reels (cascade will handle this if set)
         cur.execute("DELETE FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
         posted_deleted = cur.rowcount
@@ -3677,7 +3427,7 @@ def delete_pipeline(pipeline_id):
         
         conn.commit()
         
-        app.logger.info(f"🗑️ Deleted pipeline '{pipeline_name}' (ID: {pipeline_id}) with {pending_deleted} pending, {posted_deleted} posted reels, and {runs_deleted} runs")
+        app.logger.info(f"🗑️ Deleted pipeline '{pipeline_name}' (ID: {pipeline_id}) with {posted_deleted} posted reels and {runs_deleted} runs")
         
         return jsonify({
             "status": "success",
@@ -3685,7 +3435,6 @@ def delete_pipeline(pipeline_id):
             "deleted": {
                 "pipeline_id": pipeline_id,
                 "pipeline_name": pipeline_name,
-                "pending_posts_deleted": pending_deleted,
                 "posted_reels_deleted": posted_deleted,
                 "runs_deleted": runs_deleted
             }
@@ -3822,38 +3571,6 @@ def api_status():
         "download_history_count": 0,
         "recent_downloads": []
     })
-
-@app.route("/api/pending-posts", methods=["GET"])
-def get_all_pending_posts():
-    """Get all pending posts across all pipelines."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT 
-                pp.*,
-                p.name as pipeline_name
-            FROM pending_posts pp
-            LEFT JOIN pipelines p ON pp.pipeline_id = p.id
-            WHERE pp.status IN ('pending', 'processing')
-            ORDER BY pp.created_at DESC
-        """)
-        pending = cur.fetchall()
-        
-        return jsonify({
-            "status": "success",
-            "pending": pending,
-            "count": len(pending)
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
 
 # ============== AFTER REQUEST ==============
 
