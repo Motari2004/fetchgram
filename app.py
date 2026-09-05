@@ -1762,7 +1762,7 @@ def create_pending_post(reel_url, direct_video_url, pipeline_id, profile_usernam
         return None
 
 def get_pending_post(reel_url):
-    """Get a pending post by reel URL."""
+    """Get a pending post by reel URL - only pending or processing."""
     conn = get_db_connection()
     if not conn:
         return None
@@ -1804,6 +1804,7 @@ def update_pending_post_status(post_id, status, error_message=None, facebook_pos
         conn.commit()
         cur.close()
         conn.close()
+        app.logger.info(f"📝 Updated pending post {post_id} status to: {status}")
         return True
     except Exception as e:
         app.logger.error(f"Failed to update pending post: {e}")
@@ -1844,7 +1845,7 @@ def process_pending_post(post):
                     post_url = platform.get('publishedUrl')
                     break
             
-            # Mark as posted
+            # Mark as posted in posted_reels
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
                 reel_url=post['reel_url'],
@@ -1855,10 +1856,10 @@ def process_pending_post(post):
                 status='success'
             )
             
-            # Update pending post
+            # 🔥 CRITICAL FIX: Update pending post status to 'completed'
             update_pending_post_status(
                 post['id'], 
-                'completed', 
+                'completed',  # ← This must be 'completed'
                 None, 
                 post_id, 
                 post_url
@@ -3585,32 +3586,73 @@ def webhook_caption():
                 """, (caption, reel_url))
                 conn.commit()
                 
-                # 4. Update pending_posts
-                cur.execute("""
-                    UPDATE pending_posts 
-                    SET caption = %s,
-                        webhook_received = TRUE,
-                        updated_at = NOW()
-                    WHERE reel_url = %s AND status IN ('pending', 'processing')
-                """, (caption, reel_url))
-                conn.commit()
-                
-                # ========== 🔥 CHECK FOR PENDING POST ==========
+                # ========== 🔥 CHECK FOR PENDING POST FIRST ==========
                 app.logger.info(f"🔍 [Job {job_id}] Checking for pending post: {reel_url[:50]}...")
                 pending = get_pending_post(reel_url)
                 
                 if pending:
                     app.logger.info(f"🔥 [Job {job_id}] Found pending post! Processing...")
                     
-                    # ✅ Process the pending post
+                    # ✅ Process the pending post (this will set status to 'completed')
                     success = process_pending_post(pending)
                     
                     if success:
                         app.logger.info(f"✅ [Job {job_id}] Pending post processed successfully!")
                     else:
                         app.logger.error(f"❌ [Job {job_id}] Failed to process pending post")
+                        
+                        # 🔥 If processing failed, mark as failed
+                        cur.execute("""
+                            UPDATE pending_posts 
+                            SET status = 'failed',
+                                error_message = 'Processing failed',
+                                updated_at = NOW()
+                            WHERE reel_url = %s AND status IN ('pending', 'processing')
+                        """, (reel_url,))
+                        conn.commit()
                 else:
-                    app.logger.info(f"ℹ️ [Job {job_id}] No pending post found, caption stored for future use")
+                    app.logger.info(f"ℹ️ [Job {job_id}] No pending post found")
+                    
+                    # 🔥 Check if this reel was already posted
+                    cur.execute("""
+                        SELECT COUNT(*) FROM posted_reels 
+                        WHERE reel_url = %s AND status = 'success'
+                    """, (reel_url,))
+                    already_posted = cur.fetchone()[0] > 0
+                    
+                    if already_posted:
+                        app.logger.info(f"✅ [Job {job_id}] Reel already posted, updating pending_posts to completed")
+                        # Mark any pending posts as completed
+                        cur.execute("""
+                            UPDATE pending_posts 
+                            SET status = 'completed',
+                                caption = %s,
+                                webhook_received = TRUE,
+                                updated_at = NOW()
+                            WHERE reel_url = %s AND status IN ('pending', 'processing')
+                        """, (caption, reel_url))
+                        conn.commit()
+                    else:
+                        # No pending post and not posted yet - store for future
+                        app.logger.info(f"ℹ️ [Job {job_id}] No pending post, caption stored for future use")
+                        # Update pending_posts with caption but don't change status
+                        cur.execute("""
+                            UPDATE pending_posts 
+                            SET caption = %s,
+                                webhook_received = TRUE,
+                                updated_at = NOW()
+                            WHERE reel_url = %s
+                        """, (caption, reel_url))
+                        conn.commit()
+                
+                # 5. Update pending_posts with webhook_received and caption
+                cur.execute("""
+                    UPDATE pending_posts 
+                    SET webhook_received = TRUE,
+                        updated_at = NOW()
+                    WHERE reel_url = %s AND status IN ('pending', 'processing')
+                """, (reel_url,))
+                conn.commit()
                 
                 cur.close()
                 conn.close()
@@ -3637,6 +3679,25 @@ def webhook_caption():
         
         if reel_url in CAPTION_FETCH_STATUS:
             CAPTION_FETCH_STATUS[reel_url]['error'] = error
+        
+        # 🔥 Mark pending posts as failed if caption fetch failed
+        try:
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE pending_posts 
+                    SET status = 'failed',
+                        error_message = %s,
+                        updated_at = NOW()
+                    WHERE reel_url = %s AND status IN ('pending', 'processing')
+                """, (error or 'Caption fetch failed', reel_url))
+                conn.commit()
+                cur.close()
+                conn.close()
+                app.logger.info(f"✅ [Job {job_id}] Marked pending post as failed")
+        except Exception as e:
+            app.logger.error(f"❌ [Job {job_id}] Failed to mark pending post as failed: {e}")
     
     return jsonify({
         "status": "success",
