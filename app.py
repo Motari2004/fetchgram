@@ -1818,7 +1818,7 @@ def process_pending_post(post):
         # Update status to processing
         update_pending_post_status(post['id'], 'processing')
         
-        # Get the caption (should be available now)
+        # Get the caption
         caption = get_caption_for_reel(post['reel_url'], post['profile_username'], post['pipeline_id'])
         
         if not caption or not caption.strip():
@@ -1845,7 +1845,7 @@ def process_pending_post(post):
                     post_url = platform.get('publishedUrl')
                     break
             
-            # Mark as posted in posted_reels
+            # 🔥 Mark as posted - THIS WILL UPDATE PIPELINE STATS
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
                 reel_url=post['reel_url'],
@@ -1856,27 +1856,59 @@ def process_pending_post(post):
                 status='success'
             )
             
-            # 🔥 CRITICAL FIX: Update pending post status to 'completed'
+            # 🔥 FIX: Explicitly update pipeline stats to be safe
+            update_pipeline_stats(post['pipeline_id'], 0, 0)
+            
+            # Update pending post status
             update_pending_post_status(
                 post['id'], 
-                'completed',  # ← This must be 'completed'
+                'completed', 
                 None, 
                 post_id, 
                 post_url
             )
             
-            app.logger.info(f"✅ Pending post completed: {post['reel_url'][:50]}...")
+            app.logger.info(f"✅ Pending post completed and stats updated: {post['reel_url'][:50]}...")
             return True
         else:
             # Failed
             error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
             update_pending_post_status(post['id'], 'failed', str(error_msg))
+            
+            # 🔥 Mark as failed in posted_reels
+            mark_reel_as_posted(
+                pipeline_id=post['pipeline_id'],
+                reel_url=post['reel_url'],
+                direct_video_url=post['direct_video_url'],
+                caption=caption if caption else '',
+                status='failed',
+                error_message=str(error_msg)
+            )
+            
+            # 🔥 Update stats to reflect failure
+            update_pipeline_stats(post['pipeline_id'], 0, 0)
+            
             app.logger.error(f"❌ Pending post failed: {post['reel_url'][:50]}... - {error_msg}")
             return False
             
     except Exception as e:
         app.logger.error(f"❌ Error processing pending post: {e}")
         update_pending_post_status(post['id'], 'failed', str(e))
+        
+        # 🔥 Mark as failed in posted_reels
+        try:
+            mark_reel_as_posted(
+                pipeline_id=post['pipeline_id'],
+                reel_url=post['reel_url'],
+                direct_video_url=post['direct_video_url'],
+                caption='',
+                status='failed',
+                error_message=str(e)
+            )
+            update_pipeline_stats(post['pipeline_id'], 0, 0)
+        except:
+            pass
+        
         return False
 
 def get_caption_for_reel(reel_url, profile_username, pipeline_id):
@@ -2012,13 +2044,15 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
 def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=None, 
                         facebook_post_id=None, facebook_post_url=None, 
                         status='success', error_message=None):
-    """Mark a reel as posted with caption."""
+    """Mark a reel as posted with caption and update pipeline stats."""
     conn = get_db_connection()
     if not conn:
         return False
     
     try:
         cur = conn.cursor()
+        
+        # Insert or update posted_reels
         cur.execute("""
             INSERT INTO posted_reels (
                 pipeline_id, reel_url, direct_video_url, caption,
@@ -2036,7 +2070,28 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
         """, (pipeline_id, reel_url, direct_video_url, caption, 
               facebook_post_id, facebook_post_url, status, error_message))
         
+        # 🔥 FIX: ALWAYS update pipeline total_posted when status is 'success'
+        if status == 'success':
+            # Get the actual count of successful posts for this pipeline
+            cur.execute("""
+                SELECT COUNT(*) FROM posted_reels 
+                WHERE pipeline_id = %s AND status = 'success'
+            """, (pipeline_id,))
+            total_posted = cur.fetchone()[0]
+            
+            # Update pipeline with the actual count
+            cur.execute("""
+                UPDATE pipelines 
+                SET total_posted = %s,
+                    last_run = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+            """, (total_posted, pipeline_id))
+            
+            app.logger.info(f"📊 Updated pipeline {pipeline_id} total_posted to: {total_posted}")
+        
         conn.commit()
+        app.logger.info(f"✅ Marked reel as posted: {reel_url[:50]}... (status: {status})")
         return True
     except Exception as e:
         app.logger.error(f"Error marking reel as posted: {e}")
@@ -2046,21 +2101,39 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
         conn.close()
 
 def update_pipeline_stats(pipeline_id, posted_count, failed_count):
-    """Update pipeline statistics"""
+    """Update pipeline statistics - ALWAYS use actual count from posted_reels."""
     conn = get_db_connection()
     if not conn:
         return False
     
     try:
         cur = conn.cursor()
+        
+        # 🔥 FIX: Always calculate from posted_reels, don't trust the passed count
+        cur.execute("""
+            SELECT COUNT(*) FROM posted_reels 
+            WHERE pipeline_id = %s AND status = 'success'
+        """, (pipeline_id,))
+        total_posted = cur.fetchone()[0]
+        
+        # Also get failed count
+        cur.execute("""
+            SELECT COUNT(*) FROM posted_reels 
+            WHERE pipeline_id = %s AND status = 'failed'
+        """, (pipeline_id,))
+        total_failed = cur.fetchone()[0]
+        
+        # Update pipeline with actual counts
         cur.execute("""
             UPDATE pipelines 
-            SET total_posted = total_posted + %s,
+            SET total_posted = %s,
                 last_run = NOW(),
                 updated_at = NOW()
             WHERE id = %s
-        """, (posted_count, pipeline_id))
+        """, (total_posted, pipeline_id))
         conn.commit()
+        
+        app.logger.info(f"📊 Pipeline {pipeline_id} stats synced: {total_posted} posted, {total_failed} failed")
         return True
     except Exception as e:
         app.logger.error(f"Error updating pipeline stats: {e}")
