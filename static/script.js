@@ -98,6 +98,12 @@ const pipelineUsername = document.getElementById('pipeline-username');
 const pipelineFacebookAccount = document.getElementById('pipeline-facebook-account');
 const pipelineDailyLimit = document.getElementById('pipeline-daily-limit');
 
+// Pending Posts elements
+const pendingPostsContainer = document.getElementById('pending-posts-container');
+const pendingCount = document.getElementById('pending-count');
+const processingCount = document.getElementById('processing-count');
+const failedCount = document.getElementById('failed-count');
+
 let currentVideoUrl = null;
 let currentVideoItem = null;
 
@@ -620,34 +626,6 @@ syncCaptionsBtn?.addEventListener('click', function() {
   }
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Execute Sync
 syncExecuteBtn?.addEventListener('click', async function() {
   const username = syncUsernameSelect?.value;
@@ -684,71 +662,40 @@ syncExecuteBtn?.addEventListener('click', async function() {
     if (syncProgressText) syncProgressText.textContent = 'Complete!';
     
     if (response.ok && (data.status === 'accepted' || data.status === 'success')) {
-
-
-
       showSyncStatus(
-        `✅ Synced ${data.captions_fetched} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
+        `✅ Sync started for @${username}! Check the profile card for progress.`,
         'success'
       );
-            // ✅ FIX: Show correct message for background sync
-            if (data.status === 'accepted') {
-                showSyncStatus(
-                    `✅ Sync started for @${username}! Check the profile card for progress.`,
-                    'success'
-                );
-            } else {
-                // Only show count if sync completed immediately (unlikely)
-                showSyncStatus(
-                    `✅ Synced ${data.captions_fetched || 0} captions for @${username} (${data.captions_skipped || 0} already had captions, ${data.errors || 0} errors)`,
-                    'success'
-                );
-            }
-            
-            // Start monitoring sync status immediately
-            checkAndShowSyncStatus(username);
-            
-            // Refresh after a moment to show captions
-            setTimeout(() => {
-                autoLoadScrapedResults();
-            }, 3000);
-            
-        } else {
-            showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
-            if (syncProgressBar) syncProgressBar.style.width = '0%';
-            if (syncProgressText) syncProgressText.textContent = 'Failed';
-        }
-        
-    } catch (error) {
-        console.error('❌ Sync error:', error);
-        showSyncStatus(`❌ Error: ${error.message}`, 'error');
-        if (syncProgressBar) syncProgressBar.style.width = '0%';
-        if (syncProgressText) syncProgressText.textContent = 'Failed';
-    } finally {
-        this.disabled = false;
-        this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
-        
-        setTimeout(() => {
-            if (syncProgress) syncProgress.style.display = 'none';
-            if (syncProgressBar) syncProgressBar.style.width = '0%';
-        }, 3000);
+      
+      // Start monitoring sync status immediately
+      checkAndShowSyncStatus(username);
+      
+      // Refresh after a moment to show captions
+      setTimeout(() => {
+        autoLoadScrapedResults();
+      }, 3000);
+      
+    } else {
+      showSyncStatus(`❌ ${data.error || 'Failed to sync captions'}`, 'error');
+      if (syncProgressBar) syncProgressBar.style.width = '0%';
+      if (syncProgressText) syncProgressText.textContent = 'Failed';
     }
+    
+  } catch (error) {
+    console.error('❌ Sync error:', error);
+    showSyncStatus(`❌ Error: ${error.message}`, 'error');
+    if (syncProgressBar) syncProgressBar.style.width = '0%';
+    if (syncProgressText) syncProgressText.textContent = 'Failed';
+  } finally {
+    this.disabled = false;
+    this.innerHTML = '<span class="btn-content">🔄 Sync Captions</span>';
+    
+    setTimeout(() => {
+      if (syncProgress) syncProgress.style.display = 'none';
+      if (syncProgressBar) syncProgressBar.style.width = '0%';
+    }, 3000);
+  }
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ==================== ZERNIO (FACEBOOK) FUNCTIONS ====================
 
@@ -2036,6 +1983,9 @@ function renderPipelines(pipelines) {
             <span class="stat-success">✅ ${p.success_count || 0}</span>
             <span class="stat-failed">❌ ${p.failed_count || 0}</span>
           </div>
+          <div class="pipeline-pending" style="margin-top: 6px; font-size: 12px;">
+            <span class="stat-pending">⏳ Pending: ${p.pending_posts || 0}</span>
+          </div>
         </div>
       </div>
     `;
@@ -2249,13 +2199,13 @@ async function runPipeline(pipelineId) {
     
     if (response.ok) {
       showPipelinesStatus(`✅ ${data.message}`, 'success');
+      // Reload pipelines to update pending count
+      setTimeout(loadPipelines, 2000);
     } else {
       showPipelinesStatus(`❌ ${data.error || 'Failed to run pipeline'}`, 'error');
     }
   } catch (error) {
     showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
-  } finally {
-    setTimeout(loadPipelines, 2000);
   }
 }
 
@@ -2450,8 +2400,6 @@ document.getElementById('refresh-status-btn')?.addEventListener('click', functio
   autoLoadScrapedResults();
   showCookieStatus('🔄 Status refreshed', 'info');
 });
-
-
 
 // ==================== SYNC STATUS MONITORING ====================
 
