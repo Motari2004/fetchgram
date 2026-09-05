@@ -55,6 +55,34 @@ def get_db_connection():
         app.logger.error(f"Database connection error: {e}")
         return None
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def init_db():
     """Initialize the database tables if they don't exist."""
     conn = get_db_connection()
@@ -177,7 +205,7 @@ def init_db():
             );
         """)
         
-        # ========== PENDING POSTS TABLE ==========
+        # ========== PENDING POSTS TABLE (FULL VERSION) ==========
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pending_posts (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -200,7 +228,22 @@ def init_db():
             );
         """)
         
-        # Create indexes
+        # ========== ADD COLUMNS IF THEY DON'T EXIST (FOR EXISTING TABLES) ==========
+        # This ensures existing tables get the new columns
+        cur.execute("""
+            ALTER TABLE pending_posts 
+            ADD COLUMN IF NOT EXISTS wakeup_sent BOOLEAN DEFAULT FALSE;
+        """)
+        cur.execute("""
+            ALTER TABLE pending_posts 
+            ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;
+        """)
+        cur.execute("""
+            ALTER TABLE pending_posts 
+            ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;
+        """)
+        
+        # ========== CREATE INDEXES ==========
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id 
             ON scraped_reels(user_id);
@@ -259,12 +302,32 @@ def init_db():
         """)
         
         conn.commit()
-        app.logger.info("Database tables ready")
+        app.logger.info("✅ Database tables ready with all columns")
     except Exception as e:
-        app.logger.error(f"Database init error: {e}")
+        app.logger.error(f"❌ Database init error: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
     finally:
         cur.close()
         conn.close()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Initialize database on startup
 init_db()
