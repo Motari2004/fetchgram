@@ -4136,6 +4136,80 @@ def get_setting_endpoint(key):
         "value": value
     })
 
+
+
+
+
+
+
+# ============== VALIDATE ZERNIO KEY ==============
+
+@app.route('/api/zernio/validate-key', methods=['POST'])
+def validate_zernio_key():
+    """Validate a Zernio API key and return associated accounts."""
+    data = request.get_json(silent=True) or {}
+    api_key = data.get('api_key')
+    
+    if not api_key:
+        return jsonify({"valid": False, "message": "API key required"}), 400
+    
+    try:
+        zernio_base_url = get_zernio_base_url()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Try to fetch accounts with this key
+        response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            accounts = data.get('accounts', [])
+            
+            facebook_accounts = []
+            for account in accounts:
+                if account.get('platform') == 'facebook':
+                    facebook_accounts.append({
+                        "id": account.get('_id'),
+                        "name": account.get('displayName', 'Unknown'),
+                        "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                        "status": account.get('platformStatus', 'unknown')
+                    })
+            
+            # Get the first Facebook account for auto-fill
+            first_account = facebook_accounts[0] if facebook_accounts else None
+            
+            # Try to get key info from the response
+            key_name = data.get('key_name') or data.get('name') or f"Key {len(facebook_accounts)} accounts"
+            
+            return jsonify({
+                "valid": True,
+                "accounts": facebook_accounts,
+                "account_count": len(facebook_accounts),
+                "name": key_name,
+                "first_account": first_account
+            })
+        else:
+            return jsonify({
+                "valid": False,
+                "message": f"Invalid API key or unable to connect. Status: {response.status_code}"
+            }), 400
+            
+    except requests.exceptions.Timeout:
+        return jsonify({"valid": False, "message": "Connection timeout - please check your key"}), 400
+    except requests.exceptions.ConnectionError:
+        return jsonify({"valid": False, "message": "Could not connect to Zernio API"}), 400
+    except Exception as e:
+        return jsonify({"valid": False, "message": str(e)}), 400
+
+
+
+
+
+
+
+
 @app.route('/api/settings', methods=['POST', 'PUT'])
 def update_setting_endpoint():
     """Update a setting."""

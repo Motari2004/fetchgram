@@ -2988,9 +2988,31 @@ console.log('✅ Fetchgram loaded successfully!');
 
 
 
-// ==============================================
-// ============ ZERNIO KEYS MANAGEMENT ============
-// ==============================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== ZERNIO KEYS MANAGEMENT ====================
 
 let zernioKeys = [];
 
@@ -3061,7 +3083,9 @@ function renderZernioKeys(keys) {
                         </span>
                     </div>
                     <div class="zernio-key-actions">
-                        <button class="btn btn-sm btn-ghost edit-zernio-key-btn" data-id="${key.id}" title="Edit Key">✏️</button>
+                        <button class="btn btn-sm btn-ghost toggle-key-btn" data-id="${key.id}" data-active="${isActive}" title="Toggle Key">
+                            ${isActive ? '⏸' : '▶'}
+                        </button>
                         <button class="btn btn-sm btn-danger delete-zernio-key-btn" data-id="${key.id}" data-name="${escapeHtml(key.name)}" title="Delete Key">🗑️</button>
                     </div>
                 </div>
@@ -3070,15 +3094,6 @@ function renderZernioKeys(keys) {
                         <span class="key-label">API Key:</span>
                         <span class="key-value key-masked">${key.api_key_masked || '***'}</span>
                     </div>
-                    <div class="key-detail">
-                        <span class="key-label">Facebook Account:</span>
-                        <span class="key-value">${escapeHtml(key.facebook_account_id)}</span>
-                    </div>
-                    ${key.facebook_page_name ? `
-                    <div class="key-detail">
-                        <span class="key-label">Page Name:</span>
-                        <span class="key-value">${escapeHtml(key.facebook_page_name)}</span>
-                    </div>` : ''}
                     <div class="key-detail">
                         <span class="key-label">Daily Limit:</span>
                         <span class="key-value">${key.daily_limit}</span>
@@ -3103,6 +3118,11 @@ function renderZernioKeys(keys) {
                         <span class="key-label">Total Usage:</span>
                         <span class="key-value" style="font-size: 11px; color: var(--text-muted);">${key.usage_count || 0} posts</span>
                     </div>
+                    ${key.accounts_count !== undefined ? `
+                    <div class="key-detail">
+                        <span class="key-label">Accounts Found:</span>
+                        <span class="key-value" style="color: var(--accent);">${key.accounts_count}</span>
+                    </div>` : ''}
                 </div>
             </div>
         `;
@@ -3111,20 +3131,23 @@ function renderZernioKeys(keys) {
     html += `</div>`;
     container.innerHTML = html;
     
+    // Delete button
     document.querySelectorAll('.delete-zernio-key-btn').forEach(btn => {
         btn.addEventListener('click', () => deleteZernioKey(btn.dataset.id, btn.dataset.name));
     });
     
-    document.querySelectorAll('.edit-zernio-key-btn').forEach(btn => {
-        btn.addEventListener('click', () => editZernioKey(btn.dataset.id));
+    // Toggle button
+    document.querySelectorAll('.toggle-key-btn').forEach(btn => {
+        btn.addEventListener('click', () => toggleZernioKey(btn.dataset.id, btn.dataset.active === 'true'));
     });
 }
 
-// ==================== ADD ZERNIO KEY ====================
+// ==================== ADD ZERNIO KEY (SIMPLIFIED) ====================
 
 document.getElementById('add-zernio-key-btn')?.addEventListener('click', () => {
     document.getElementById('add-zernio-key-modal').hidden = false;
     document.getElementById('add-zernio-key-status').style.display = 'none';
+    document.getElementById('zernio-key-api').value = '';
 });
 
 document.getElementById('add-zernio-key-modal-close')?.addEventListener('click', () => {
@@ -3132,62 +3155,76 @@ document.getElementById('add-zernio-key-modal-close')?.addEventListener('click',
 });
 
 document.getElementById('add-zernio-key-modal')?.addEventListener('click', (e) => {
-    if (e.target === this) {
-        this.hidden = true;
+    if (e.target === e.currentTarget) {
+        e.target.hidden = true;
     }
 });
 
 document.getElementById('save-zernio-key-btn')?.addEventListener('click', async function() {
-    const name = document.getElementById('zernio-key-name').value.trim();
     const apiKey = document.getElementById('zernio-key-api').value.trim();
-    const accountId = document.getElementById('zernio-key-account').value.trim();
-    const pageName = document.getElementById('zernio-key-page').value.trim();
-    const dailyLimit = parseInt(document.getElementById('zernio-key-limit').value) || 50;
     const status = document.getElementById('add-zernio-key-status');
     
-    if (!name || !apiKey || !accountId) {
-        status.textContent = '❌ Name, API Key, and Facebook Account ID are required';
+    if (!apiKey) {
+        status.textContent = '❌ Please enter your Zernio API key';
         status.className = 'status-message error';
         status.style.display = 'block';
         return;
     }
     
     this.disabled = true;
-    this.textContent = '⏳ Saving...';
+    this.textContent = '⏳ Checking key...';
     status.style.display = 'none';
     
     try {
+        // First, validate the key by fetching accounts
+        const validateResponse = await fetch('/api/zernio/validate-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ api_key: apiKey })
+        });
+        
+        const validateData = await validateResponse.json();
+        
+        if (!validateResponse.ok || !validateData.valid) {
+            status.textContent = `❌ Invalid API key: ${validateData.message || 'Please check your key'}`;
+            status.className = 'status-message error';
+            status.style.display = 'block';
+            this.disabled = false;
+            this.textContent = 'Save Key';
+            return;
+        }
+        
+        // Key is valid, save it
         const response = await fetch('/api/zernio/keys', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
             body: JSON.stringify({
-                name,
+                name: validateData.name || `Key ${new Date().toLocaleDateString()}`,
                 api_key: apiKey,
-                facebook_account_id: accountId,
-                facebook_page_name: pageName,
-                daily_limit: dailyLimit
+                facebook_account_id: validateData.accounts?.[0]?.id || 'auto',
+                facebook_page_name: validateData.accounts?.[0]?.name || '',
+                daily_limit: 50
             })
         });
         
         const data = await response.json();
         
         if (response.ok) {
-            status.textContent = `✅ ${data.message}`;
+            status.textContent = `✅ Key added! Found ${validateData.accounts?.length || 0} Facebook accounts.`;
             status.className = 'status-message success';
             status.style.display = 'block';
             
-            document.getElementById('zernio-key-name').value = '';
             document.getElementById('zernio-key-api').value = '';
-            document.getElementById('zernio-key-account').value = '';
-            document.getElementById('zernio-key-page').value = '';
-            document.getElementById('zernio-key-limit').value = '50';
             
+            // Reload keys
             loadZernioKeys();
+            loadZernioAccounts(); // Refresh account list
             
             setTimeout(() => {
                 document.getElementById('add-zernio-key-modal').hidden = true;
-            }, 1500);
+            }, 2000);
         } else {
             status.textContent = `❌ ${data.error || 'Failed to add key'}`;
             status.className = 'status-message error';
@@ -3221,6 +3258,7 @@ async function deleteZernioKey(keyId, keyName) {
         if (response.ok) {
             showToast(`✅ Zernio key "${keyName}" deleted`, 'success');
             loadZernioKeys();
+            loadZernioAccounts(); // Refresh account list
         } else {
             showToast(`❌ ${data.error || 'Failed to delete key'}`, 'error');
         }
@@ -3229,36 +3267,28 @@ async function deleteZernioKey(keyId, keyName) {
     }
 }
 
-// ==================== EDIT ZERNIO KEY ====================
+// ==================== TOGGLE ZERNIO KEY ====================
 
-async function editZernioKey(keyId) {
-    const key = zernioKeys.find(k => k.id === keyId);
-    if (!key) {
-        showToast('❌ Key not found', 'error');
-        return;
-    }
-    
-    const newName = prompt('Edit key name:', key.name);
-    if (newName !== null && newName.trim() !== '') {
-        try {
-            const response = await fetch(`/api/zernio/keys/${keyId}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({ name: newName.trim() })
-            });
-            
-            const data = await response.json();
-            
-            if (response.ok) {
-                showToast(`✅ Key name updated to "${newName.trim()}"`, 'success');
-                loadZernioKeys();
-            } else {
-                showToast(`❌ ${data.error || 'Failed to update key'}`, 'error');
-            }
-        } catch (error) {
-            showToast(`❌ Error: ${error.message}`, 'error');
+async function toggleZernioKey(keyId, currentActive) {
+    try {
+        const response = await fetch(`/api/zernio/keys/${keyId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ is_active: !currentActive })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showToast(`✅ Key ${!currentActive ? 'activated' : 'deactivated'}`, 'success');
+            loadZernioKeys();
+            loadZernioAccounts(); // Refresh account list
+        } else {
+            showToast(`❌ ${data.error || 'Failed to toggle key'}`, 'error');
         }
+    } catch (error) {
+        showToast(`❌ Error: ${error.message}`, 'error');
     }
 }
 
