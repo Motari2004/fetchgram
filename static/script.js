@@ -104,8 +104,20 @@ const pendingCount = document.getElementById('pending-count');
 const processingCount = document.getElementById('processing-count');
 const failedCount = document.getElementById('failed-count');
 
+// Scheduled Jobs elements
+const scheduledJobsContainer = document.getElementById('scheduled-jobs-container');
+const toggleScheduledJobsBtn = document.getElementById('toggle-scheduled-jobs-btn');
+const closeScheduledBtn = document.getElementById('close-scheduled-btn');
+const refreshScheduledBtn = document.getElementById('refresh-scheduled-btn');
+const scheduledPostsList = document.getElementById('scheduled-posts-list');
+const scheduledCountBadge = document.getElementById('scheduled-count-badge');
+const scheduledFilterStatus = document.getElementById('scheduled-filter-status');
+const scheduledFilterPipeline = document.getElementById('scheduled-filter-pipeline');
+
 let currentVideoUrl = null;
 let currentVideoItem = null;
+let scheduledPosts = [];
+let scheduledPollingInterval = null;
 
 // Zernio state
 let zernioAccounts = [];
@@ -2666,5 +2678,308 @@ renderScrapedResults = function(results, stats, isLoading = false) {
         startSyncMonitoringForAllProfiles(results);
     }
 };
+
+// ==================== SCHEDULED JOBS FUNCTIONS ====================
+
+// Toggle scheduled jobs visibility
+toggleScheduledJobsBtn?.addEventListener('click', function() {
+    if (scheduledJobsContainer) {
+        const isHidden = scheduledJobsContainer.style.display === 'none' || scheduledJobsContainer.style.display === '';
+        scheduledJobsContainer.style.display = isHidden ? 'block' : 'none';
+        this.textContent = isHidden ? '📅 Hide Scheduled Jobs' : '📅 View Scheduled Jobs';
+        
+        if (isHidden) {
+            loadScheduledPosts();
+            startScheduledPolling();
+        } else {
+            stopScheduledPolling();
+        }
+    }
+});
+
+// Close scheduled jobs
+closeScheduledBtn?.addEventListener('click', function() {
+    if (scheduledJobsContainer) {
+        scheduledJobsContainer.style.display = 'none';
+        toggleScheduledJobsBtn.textContent = '📅 View Scheduled Jobs';
+        stopScheduledPolling();
+    }
+});
+
+// Refresh scheduled posts
+refreshScheduledBtn?.addEventListener('click', function() {
+    loadScheduledPosts();
+});
+
+// Filter scheduled posts
+scheduledFilterStatus?.addEventListener('change', loadScheduledPosts);
+scheduledFilterPipeline?.addEventListener('change', loadScheduledPosts);
+
+async function loadScheduledPosts() {
+    const statusFilter = scheduledFilterStatus?.value || 'all';
+    const pipelineFilter = scheduledFilterPipeline?.value || '';
+    
+    try {
+        let url = `/api/scheduled-posts?status=${statusFilter}&limit=100`;
+        if (pipelineFilter) {
+            url += `&pipeline_id=${pipelineFilter}`;
+        }
+        
+        const response = await fetch(url, { credentials: 'same-origin' });
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            scheduledPosts = data.scheduled_posts;
+            renderScheduledPosts(data);
+            updateScheduledSummary(data.counts);
+        } else {
+            console.error('Failed to load scheduled posts:', data.error);
+            showScheduledError('Failed to load scheduled posts');
+        }
+    } catch (error) {
+        console.error('Error loading scheduled posts:', error);
+        showScheduledError('Network error loading scheduled posts');
+    }
+}
+
+function renderScheduledPosts(data) {
+    const container = scheduledPostsList;
+    const posts = data.scheduled_posts || [];
+    
+    if (!container) return;
+    
+    // Update badge
+    if (scheduledCountBadge) {
+        const pending = data.counts?.pending || 0;
+        scheduledCountBadge.textContent = `${pending} pending / ${posts.length} total`;
+    }
+    
+    if (posts.length === 0) {
+        container.innerHTML = `
+            <div class="no-scheduled">
+                <div class="empty-icon">📭</div>
+                <strong>No scheduled posts</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    Posts will appear here once they are scheduled.
+                </p>
+            </div>
+        `;
+        return;
+    }
+    
+    let html = '';
+    const now = new Date();
+    
+    posts.forEach(post => {
+        const scheduledTime = new Date(post.scheduled_time);
+        const isDue = scheduledTime <= now && post.status === 'pending';
+        const timeRemaining = getTimeRemaining(scheduledTime);
+        const statusClass = post.status === 'pending' ? 'pending' : 
+                           post.status === 'posted' ? 'posted' : 'failed';
+        
+        html += `
+            <div class="scheduled-post-item status-${statusClass}">
+                <div class="scheduled-post-info">
+                    <span class="post-url">${escapeHtml(post.reel_url || '')}</span>
+                    <span class="post-time">
+                        🕐 ${formatDateTime(scheduledTime)}
+                        ${isDue ? ' 🔴 DUE NOW!' : ''}
+                        ${post.status === 'pending' ? ` (${timeRemaining})` : ''}
+                    </span>
+                    ${post.caption ? `<span class="post-caption">📝 ${escapeHtml(post.caption.substring(0, 80))}${post.caption.length > 80 ? '...' : ''}</span>` : ''}
+                    ${post.pipeline_name ? `<span class="post-caption" style="color: var(--accent);">🏗️ ${escapeHtml(post.pipeline_name)}</span>` : ''}
+                </div>
+                <div class="scheduled-post-status">
+                    <span class="status-badge ${statusClass}">
+                        ${post.status === 'pending' ? '⏳ Pending' : 
+                          post.status === 'posted' ? '✅ Posted' : '❌ Failed'}
+                    </span>
+                    ${post.status === 'pending' ? `
+                        <div class="scheduled-post-actions">
+                            <button class="btn btn-sm btn-danger delete-scheduled-btn" data-id="${post.id}" title="Delete">🗑️</button>
+                        </div>
+                    ` : ''}
+                    ${post.posted_at ? `<span style="font-size: 11px; color: var(--text-muted);">Posted: ${formatDateTime(new Date(post.posted_at))}</span>` : ''}
+                </div>
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+    
+    // Add event listeners for delete buttons
+    document.querySelectorAll('.delete-scheduled-btn').forEach(btn => {
+        btn.addEventListener('click', async function(e) {
+            e.stopPropagation();
+            const postId = this.dataset.id;
+            if (confirm('Delete this scheduled post?')) {
+                await deleteScheduledPost(postId);
+            }
+        });
+    });
+}
+
+function updateScheduledSummary(counts) {
+    if (!counts) return;
+    
+    const totalEl = document.getElementById('summary-total');
+    const pendingEl = document.getElementById('summary-pending');
+    const postedEl = document.getElementById('summary-posted');
+    const failedEl = document.getElementById('summary-failed');
+    
+    if (totalEl) totalEl.textContent = counts.total || 0;
+    if (pendingEl) pendingEl.textContent = counts.pending || 0;
+    if (postedEl) postedEl.textContent = counts.posted || 0;
+    if (failedEl) failedEl.textContent = counts.failed || 0;
+}
+
+function getTimeRemaining(date) {
+    const now = new Date();
+    const diff = date - now;
+    
+    if (diff <= 0) return 'Due now';
+    
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    if (hours > 24) {
+        const days = Math.floor(hours / 24);
+        return `${days}d ${hours % 24}h`;
+    }
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+}
+
+function formatDateTime(date) {
+    if (!date || isNaN(date.getTime())) return 'Unknown';
+    return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    });
+}
+
+async function deleteScheduledPost(postId) {
+    try {
+        const response = await fetch(`/api/scheduled-posts/${postId}`, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            showToast('✅ Post deleted', 'success');
+            loadScheduledPosts();
+        } else {
+            showToast('❌ Failed to delete: ' + data.error, 'error');
+        }
+    } catch (error) {
+        console.error('Error deleting post:', error);
+        showToast('❌ Error deleting post', 'error');
+    }
+}
+
+function showScheduledError(message) {
+    const container = scheduledPostsList;
+    if (container) {
+        container.innerHTML = `
+            <div class="no-scheduled">
+                <div class="empty-icon">⚠️</div>
+                <strong>Error</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--error);">${escapeHtml(message)}</p>
+            </div>
+        `;
+    }
+}
+
+function showToast(message, type) {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        padding: 12px 20px;
+        border-radius: 8px;
+        color: #fff;
+        font-size: 14px;
+        z-index: 9999;
+        animation: slideIn 0.3s ease;
+        max-width: 400px;
+    `;
+    
+    if (type === 'success') {
+        toast.style.background = 'rgba(34, 197, 94, 0.9)';
+    } else if (type === 'error') {
+        toast.style.background = 'rgba(239, 68, 68, 0.9)';
+    } else {
+        toast.style.background = 'rgba(59, 130, 246, 0.9)';
+    }
+    
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// Populate pipeline filter
+async function populatePipelineFilter() {
+    try {
+        const response = await fetch('/api/pipelines', { credentials: 'same-origin' });
+        const data = await response.json();
+        const select = scheduledFilterPipeline;
+        
+        if (select && data.pipelines) {
+            select.innerHTML = '<option value="">All Pipelines</option>';
+            data.pipelines.forEach(p => {
+                const option = document.createElement('option');
+                option.value = p.id;
+                option.textContent = p.name || p.profile_username;
+                select.appendChild(option);
+            });
+        }
+    } catch (error) {
+        console.error('Error loading pipelines:', error);
+    }
+}
+
+// Start polling for scheduled posts
+function startScheduledPolling() {
+    if (scheduledPollingInterval) {
+        clearInterval(scheduledPollingInterval);
+    }
+    
+    // Load immediately
+    loadScheduledPosts();
+    
+    // Poll every 30 seconds
+    scheduledPollingInterval = setInterval(() => {
+        // Only update if tab is visible
+        if (!document.hidden && scheduledJobsContainer?.style.display !== 'none') {
+            loadScheduledPosts();
+        }
+    }, 30000);
+}
+
+function stopScheduledPolling() {
+    if (scheduledPollingInterval) {
+        clearInterval(scheduledPollingInterval);
+        scheduledPollingInterval = null;
+    }
+}
+
+// Initialize scheduled jobs on page load
+document.addEventListener('DOMContentLoaded', function() {
+    populatePipelineFilter();
+    // Don't auto-load scheduled jobs - wait for user to click toggle
+});
 
 console.log('✅ Fetchgram loaded successfully!');
