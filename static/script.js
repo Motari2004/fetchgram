@@ -3010,9 +3010,6 @@ console.log('✅ Fetchgram loaded successfully!');
 
 
 
-
-
-
 // ==================== ZERNIO KEYS MANAGEMENT ====================
 
 let zernioKeys = [];
@@ -3069,6 +3066,8 @@ function renderZernioKeys(keys) {
     
     keys.forEach(key => {
         const isActive = key.is_active;
+        const accounts = key.accounts || [];
+        const accountCount = accounts.length;
         
         html += `
             <div class="zernio-key-card ${isActive ? '' : 'inactive'}">
@@ -3079,6 +3078,7 @@ function renderZernioKeys(keys) {
                         <span class="key-status-badge ${isActive ? 'active' : 'inactive'}">
                             ${isActive ? 'Active' : 'Inactive'}
                         </span>
+                        <span class="key-account-count-badge">${accountCount} account${accountCount !== 1 ? 's' : ''}</span>
                     </div>
                     <div class="zernio-key-actions">
                         <button class="btn btn-sm btn-ghost toggle-key-btn" data-id="${key.id}" data-active="${isActive}" title="Toggle Key">
@@ -3092,20 +3092,32 @@ function renderZernioKeys(keys) {
                         <span class="key-label">API Key:</span>
                         <span class="key-value key-masked">${key.api_key_masked || '***'}</span>
                     </div>
-                    <div class="key-detail">
-                        <span class="key-label">Facebook Account:</span>
-                        <span class="key-value">${escapeHtml(key.facebook_account_id || 'N/A')}</span>
+                    
+                    <!-- ⭐ Show ALL Facebook accounts -->
+                    <div class="key-accounts-section">
+                        <div class="key-detail" style="border-bottom: none; margin-bottom: 4px; font-weight: 600;">
+                            <span class="key-label">Facebook Accounts:</span>
+                            <span class="key-value" style="color: var(--accent);">${accountCount}</span>
+                        </div>
+                        ${accountCount > 0 ? `
+                        <div class="key-accounts-list">
+                            ${accounts.map((account, idx) => `
+                                <div class="key-account-item">
+                                    <span class="account-icon">📱</span>
+                                    <span class="account-name">${escapeHtml(account.name)}</span>
+                                    <span class="account-id">${escapeHtml(account.id)}</span>
+                                    <span class="account-status ${account.status === 'connected' ? 'connected' : ''}">
+                                        ${account.status === 'connected' ? '✅' : '⚠️'}
+                                    </span>
+                                </div>
+                            `).join('')}
+                        </div>
+                        ` : `
+                        <div class="key-accounts-empty">
+                            <span style="color: var(--text-muted); font-size: 13px;">No Facebook accounts found</span>
+                        </div>
+                        `}
                     </div>
-                    ${key.facebook_page_name ? `
-                    <div class="key-detail">
-                        <span class="key-label">Page Name:</span>
-                        <span class="key-value">${escapeHtml(key.facebook_page_name)}</span>
-                    </div>` : ''}
-                    ${key.accounts_count !== undefined ? `
-                    <div class="key-detail">
-                        <span class="key-label">Accounts Found:</span>
-                        <span class="key-value" style="color: var(--accent);">${key.accounts_count}</span>
-                    </div>` : ''}
                 </div>
             </div>
         `;
@@ -3202,9 +3214,9 @@ document.getElementById('save-zernio-key-btn')?.addEventListener('click', async 
             document.getElementById('zernio-key-api').value = '';
             
             // ⭐ Reload EVERYTHING
-            loadZernioKeys();
-            loadZernioAccounts(); // Refresh account list
-            loadPipelines(); // Refresh pipelines
+            await loadZernioKeys();
+            await loadZernioAccounts(); // Refresh account list
+            await loadPipelines(); // Refresh pipelines
             
             setTimeout(() => {
                 document.getElementById('add-zernio-key-modal').hidden = true;
@@ -3241,9 +3253,9 @@ async function deleteZernioKey(keyId, keyName) {
         
         if (response.ok) {
             showToast(`✅ Zernio key "${keyName}" deleted`, 'success');
-            loadZernioKeys();
-            loadZernioAccounts(); // Refresh account list
-            loadPipelines();
+            await loadZernioKeys();
+            await loadZernioAccounts(); // Refresh account list
+            await loadPipelines();
         } else {
             showToast(`❌ ${data.error || 'Failed to delete key'}`, 'error');
         }
@@ -3267,9 +3279,9 @@ async function toggleZernioKey(keyId, currentActive) {
         
         if (response.ok) {
             showToast(`✅ Key ${!currentActive ? 'activated' : 'deactivated'}`, 'success');
-            loadZernioKeys();
-            loadZernioAccounts(); // Refresh account list
-            loadPipelines();
+            await loadZernioKeys();
+            await loadZernioAccounts(); // Refresh account list
+            await loadPipelines();
         } else {
             showToast(`❌ ${data.error || 'Failed to toggle key'}`, 'error');
         }

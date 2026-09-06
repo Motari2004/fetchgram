@@ -4315,3 +4315,97 @@ html, body {
         gap: 6px;
     }
 }
+
+
+
+
+
+/* ==================== KEY ACCOUNTS LIST ==================== */
+
+.key-accounts-section {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.key-accounts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.key-account-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    font-size: 12px;
+    transition: var(--transition);
+}
+
+.key-account-item:hover {
+    background: var(--bg-card-hover);
+}
+
+.key-account-item .account-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.key-account-item .account-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.key-account-item .account-id {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.key-account-item .account-status {
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.key-accounts-empty {
+    padding: 4px 0;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.key-account-count-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 12px;
+    background: rgba(108, 99, 255, 0.15);
+    color: var(--accent);
+    margin-left: 4px;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+    .key-account-item {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    
+    .key-account-item .account-id {
+        max-width: 80px;
+        font-size: 9px;
+    }
+    
+    .key-account-count-badge {
+        font-size: 9px;
+        padding: 1px 8px;
+    }
+}
