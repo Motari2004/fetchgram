@@ -1848,11 +1848,10 @@ def get_direct_url_from_cache_only(reel_url):
 
 # ============== UPDATED RUN_PIPELINE - PURE SCHEDULING ==============
 
+# ============== PIPELINE FUNCTIONS ==============
+
 def run_pipeline(pipeline_id):
-    """
-    Pure scheduling - find unposted reels and schedule them at random times.
-    NO pending posts - captions will be fetched during posting.
-    """
+    """Pure scheduling - find unposted reels and schedule them at random times."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -1868,7 +1867,6 @@ def run_pipeline(pipeline_id):
         if not pipeline['is_active']:
             return {"error": "Pipeline is inactive"}
         
-        # Get ALL unposted reels
         unposted = get_unposted_reels(
             pipeline['profile_username'], 
             pipeline['id'], 
@@ -1898,7 +1896,6 @@ def run_pipeline(pipeline_id):
                     direct_video_url = get_direct_url_from_cache_only(reel_url)
                 
                 if direct_video_url:
-                    # 🔥 SCHEDULE at random time
                     scheduled_time = post_times[idx] if idx < len(post_times) else None
                     if not scheduled_time:
                         hours_from_now = random.randint(1, 24)
@@ -1906,16 +1903,31 @@ def run_pipeline(pipeline_id):
                         scheduled_time = scheduled_time.replace(minute=random.randint(0, 59), second=random.randint(0, 59))
                     
                     cur = conn.cursor()
-                    cur.execute("""
-                        INSERT INTO scheduled_posts (
-                            reel_url, direct_video_url, caption, pipeline_id, scheduled_time
-                        )
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (reel_url) DO UPDATE SET
-                            direct_video_url = EXCLUDED.direct_video_url,
-                            scheduled_time = EXCLUDED.scheduled_time,
-                            updated_at = NOW()
-                    """, (reel_url, direct_video_url, caption, pipeline['id'], scheduled_time))
+                    
+                    # 🔥 FIX: Check if reel already exists before inserting
+                    cur.execute("SELECT id FROM scheduled_posts WHERE reel_url = %s", (reel_url,))
+                    existing = cur.fetchone()
+                    
+                    if existing:
+                        # Update existing record
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET direct_video_url = %s,
+                                caption = %s,
+                                pipeline_id = %s,
+                                scheduled_time = %s,
+                                updated_at = NOW()
+                            WHERE reel_url = %s
+                        """, (direct_video_url, caption, pipeline['id'], scheduled_time, reel_url))
+                    else:
+                        # Insert new record
+                        cur.execute("""
+                            INSERT INTO scheduled_posts (
+                                reel_url, direct_video_url, caption, pipeline_id, scheduled_time
+                            )
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (reel_url, direct_video_url, caption, pipeline['id'], scheduled_time))
+                    
                     conn.commit()
                     cur.close()
                     scheduled_count += 1
