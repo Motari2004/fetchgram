@@ -2983,3 +2983,298 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 console.log('✅ Fetchgram loaded successfully!');
+
+
+
+
+
+// ==============================================
+// ============ ZERNIO KEYS MANAGEMENT ============
+// ==============================================
+
+let zernioKeys = [];
+
+async function loadZernioKeys() {
+    const container = document.getElementById('zernio-keys-list');
+    const countBadge = document.getElementById('zernio-keys-count');
+    
+    try {
+        const response = await fetch('/api/zernio/keys', {
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            zernioKeys = data.keys;
+            
+            if (countBadge) {
+                countBadge.textContent = `${data.total} keys`;
+            }
+            
+            renderZernioKeys(data.keys);
+        } else {
+            container.innerHTML = `<div class="empty-state">❌ Failed to load keys: ${data.error}</div>`;
+        }
+    } catch (error) {
+        console.error('Failed to load Zernio keys:', error);
+        container.innerHTML = `<div class="empty-state">❌ Error loading keys</div>`;
+    }
+}
+
+function renderZernioKeys(keys) {
+    const container = document.getElementById('zernio-keys-list');
+    
+    if (!keys || keys.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">🔑</div>
+                <strong>No Zernio keys added</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    Add your first Zernio API key to start posting to Facebook.
+                </p>
+                <button id="empty-add-key-btn" class="btn btn-sm btn-primary" style="margin-top: 12px;">➕ Add Key</button>
+            </div>
+        `;
+        
+        document.getElementById('empty-add-key-btn')?.addEventListener('click', () => {
+            document.getElementById('add-zernio-key-modal').hidden = false;
+        });
+        return;
+    }
+    
+    let html = `<div class="zernio-keys-grid">`;
+    
+    keys.forEach(key => {
+        const isActive = key.is_active;
+        const remaining = key.remaining || (key.daily_limit - key.today_usage);
+        const usagePercent = key.daily_limit > 0 ? Math.round((key.today_usage / key.daily_limit) * 100) : 0;
+        const statusColor = usagePercent > 90 ? 'var(--error)' : usagePercent > 70 ? 'var(--warning)' : 'var(--success)';
+        
+        html += `
+            <div class="zernio-key-card ${isActive ? '' : 'inactive'}">
+                <div class="zernio-key-header">
+                    <div class="zernio-key-name">
+                        <span class="key-icon">${isActive ? '🟢' : '🔴'}</span>
+                        <span class="key-title">${escapeHtml(key.name)}</span>
+                        <span class="key-status-badge ${isActive ? 'active' : 'inactive'}">
+                            ${isActive ? 'Active' : 'Inactive'}
+                        </span>
+                    </div>
+                    <div class="zernio-key-actions">
+                        <button class="btn btn-sm btn-ghost edit-zernio-key-btn" data-id="${key.id}" title="Edit Key">✏️</button>
+                        <button class="btn btn-sm btn-danger delete-zernio-key-btn" data-id="${key.id}" data-name="${escapeHtml(key.name)}" title="Delete Key">🗑️</button>
+                    </div>
+                </div>
+                <div class="zernio-key-body">
+                    <div class="key-detail">
+                        <span class="key-label">API Key:</span>
+                        <span class="key-value key-masked">${key.api_key_masked || '***'}</span>
+                    </div>
+                    <div class="key-detail">
+                        <span class="key-label">Facebook Account:</span>
+                        <span class="key-value">${escapeHtml(key.facebook_account_id)}</span>
+                    </div>
+                    ${key.facebook_page_name ? `
+                    <div class="key-detail">
+                        <span class="key-label">Page Name:</span>
+                        <span class="key-value">${escapeHtml(key.facebook_page_name)}</span>
+                    </div>` : ''}
+                    <div class="key-detail">
+                        <span class="key-label">Daily Limit:</span>
+                        <span class="key-value">${key.daily_limit}</span>
+                    </div>
+                    <div class="key-detail">
+                        <span class="key-label">Used Today:</span>
+                        <span class="key-value" style="color: ${statusColor};">${key.today_usage || 0} (${usagePercent}%)</span>
+                    </div>
+                    <div class="key-detail">
+                        <span class="key-label">Remaining:</span>
+                        <span class="key-value" style="color: ${remaining > 0 ? 'var(--success)' : 'var(--error)'};">${remaining}</span>
+                    </div>
+                    <div class="key-usage-bar">
+                        <div class="key-usage-fill" style="width: ${Math.min(usagePercent, 100)}%; background: ${statusColor};"></div>
+                    </div>
+                    ${key.last_used ? `
+                    <div class="key-detail">
+                        <span class="key-label">Last Used:</span>
+                        <span class="key-value" style="font-size: 11px; color: var(--text-muted);">${new Date(key.last_used).toLocaleString()}</span>
+                    </div>` : ''}
+                    <div class="key-detail">
+                        <span class="key-label">Total Usage:</span>
+                        <span class="key-value" style="font-size: 11px; color: var(--text-muted);">${key.usage_count || 0} posts</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += `</div>`;
+    container.innerHTML = html;
+    
+    document.querySelectorAll('.delete-zernio-key-btn').forEach(btn => {
+        btn.addEventListener('click', () => deleteZernioKey(btn.dataset.id, btn.dataset.name));
+    });
+    
+    document.querySelectorAll('.edit-zernio-key-btn').forEach(btn => {
+        btn.addEventListener('click', () => editZernioKey(btn.dataset.id));
+    });
+}
+
+// ==================== ADD ZERNIO KEY ====================
+
+document.getElementById('add-zernio-key-btn')?.addEventListener('click', () => {
+    document.getElementById('add-zernio-key-modal').hidden = false;
+    document.getElementById('add-zernio-key-status').style.display = 'none';
+});
+
+document.getElementById('add-zernio-key-modal-close')?.addEventListener('click', () => {
+    document.getElementById('add-zernio-key-modal').hidden = true;
+});
+
+document.getElementById('add-zernio-key-modal')?.addEventListener('click', (e) => {
+    if (e.target === this) {
+        this.hidden = true;
+    }
+});
+
+document.getElementById('save-zernio-key-btn')?.addEventListener('click', async function() {
+    const name = document.getElementById('zernio-key-name').value.trim();
+    const apiKey = document.getElementById('zernio-key-api').value.trim();
+    const accountId = document.getElementById('zernio-key-account').value.trim();
+    const pageName = document.getElementById('zernio-key-page').value.trim();
+    const dailyLimit = parseInt(document.getElementById('zernio-key-limit').value) || 50;
+    const status = document.getElementById('add-zernio-key-status');
+    
+    if (!name || !apiKey || !accountId) {
+        status.textContent = '❌ Name, API Key, and Facebook Account ID are required';
+        status.className = 'status-message error';
+        status.style.display = 'block';
+        return;
+    }
+    
+    this.disabled = true;
+    this.textContent = '⏳ Saving...';
+    status.style.display = 'none';
+    
+    try {
+        const response = await fetch('/api/zernio/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                name,
+                api_key: apiKey,
+                facebook_account_id: accountId,
+                facebook_page_name: pageName,
+                daily_limit: dailyLimit
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            status.textContent = `✅ ${data.message}`;
+            status.className = 'status-message success';
+            status.style.display = 'block';
+            
+            document.getElementById('zernio-key-name').value = '';
+            document.getElementById('zernio-key-api').value = '';
+            document.getElementById('zernio-key-account').value = '';
+            document.getElementById('zernio-key-page').value = '';
+            document.getElementById('zernio-key-limit').value = '50';
+            
+            loadZernioKeys();
+            
+            setTimeout(() => {
+                document.getElementById('add-zernio-key-modal').hidden = true;
+            }, 1500);
+        } else {
+            status.textContent = `❌ ${data.error || 'Failed to add key'}`;
+            status.className = 'status-message error';
+            status.style.display = 'block';
+        }
+    } catch (error) {
+        status.textContent = `❌ Error: ${error.message}`;
+        status.className = 'status-message error';
+        status.style.display = 'block';
+    } finally {
+        this.disabled = false;
+        this.textContent = 'Save Key';
+    }
+});
+
+// ==================== DELETE ZERNIO KEY ====================
+
+async function deleteZernioKey(keyId, keyName) {
+    if (!confirm(`⚠️ Are you sure you want to delete the Zernio key "${keyName}"?\n\nThis will NOT affect already posted content.`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/zernio/keys/${keyId}`, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showToast(`✅ Zernio key "${keyName}" deleted`, 'success');
+            loadZernioKeys();
+        } else {
+            showToast(`❌ ${data.error || 'Failed to delete key'}`, 'error');
+        }
+    } catch (error) {
+        showToast(`❌ Error: ${error.message}`, 'error');
+    }
+}
+
+// ==================== EDIT ZERNIO KEY ====================
+
+async function editZernioKey(keyId) {
+    const key = zernioKeys.find(k => k.id === keyId);
+    if (!key) {
+        showToast('❌ Key not found', 'error');
+        return;
+    }
+    
+    const newName = prompt('Edit key name:', key.name);
+    if (newName !== null && newName.trim() !== '') {
+        try {
+            const response = await fetch(`/api/zernio/keys/${keyId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ name: newName.trim() })
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+                showToast(`✅ Key name updated to "${newName.trim()}"`, 'success');
+                loadZernioKeys();
+            } else {
+                showToast(`❌ ${data.error || 'Failed to update key'}`, 'error');
+            }
+        } catch (error) {
+            showToast(`❌ Error: ${error.message}`, 'error');
+        }
+    }
+}
+
+// ==================== REFRESH ZERNIO KEYS ====================
+
+document.getElementById('refresh-zernio-keys-btn')?.addEventListener('click', function() {
+    this.disabled = true;
+    this.textContent = '⏳';
+    loadZernioKeys();
+    setTimeout(() => {
+        this.disabled = false;
+        this.textContent = '🔄 Refresh';
+    }, 2000);
+});
+
+// Load keys on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadZernioKeys();
+});

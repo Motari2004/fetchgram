@@ -411,6 +411,78 @@
       </div>
     </div>
 
+
+
+
+
+
+
+
+
+
+
+
+<!-- ============ ADD ZERNIO KEY MODAL ============ -->
+<div id="add-zernio-key-modal" class="modal-overlay" hidden>
+    <div class="modal-content premium-card">
+        <div class="modal-header">
+            <h3>🔑 Add Zernio API Key</h3>
+            <button id="add-zernio-key-modal-close" class="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <p class="modal-desc">Add a new Zernio API key for posting to Facebook. Keys are stored securely in the database.</p>
+            
+            <div class="form-group">
+                <label for="zernio-key-name">Key Name</label>
+                <input type="text" id="zernio-key-name" class="input-field" placeholder="e.g. Business Key, Client A" />
+            </div>
+            
+            <div class="form-group">
+                <label for="zernio-key-api">API Key</label>
+                <input type="text" id="zernio-key-api" class="input-field" placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                <span style="font-size: 11px; color: var(--text-muted);">Found in your Zernio dashboard</span>
+            </div>
+            
+            <div class="form-group">
+                <label for="zernio-key-account">Facebook Account ID</label>
+                <input type="text" id="zernio-key-account" class="input-field" placeholder="123456789012345" />
+                <span style="font-size: 11px; color: var(--text-muted);">The Facebook page/account ID this key is authorized for</span>
+            </div>
+            
+            <div class="form-group">
+                <label for="zernio-key-page">Facebook Page Name (optional)</label>
+                <input type="text" id="zernio-key-page" class="input-field" placeholder="My Business Page" />
+            </div>
+            
+            <div class="form-group">
+                <label for="zernio-key-limit">Daily Post Limit</label>
+                <input type="number" id="zernio-key-limit" class="input-field" value="50" min="1" max="500" />
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <button id="save-zernio-key-btn" class="btn btn-primary btn-block">Save Key</button>
+            </div>
+            
+            <div id="add-zernio-key-status" class="status-message" hidden></div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     <!-- ============ PIPELINES SECTION ============ -->
     <div class="pipelines-section premium-card" id="pipelines-section">
       <div class="pipelines-header">

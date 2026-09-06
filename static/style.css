@@ -4118,3 +4118,200 @@ html, body {
         width: 100%;
     }
 }
+
+
+
+
+
+
+
+/* ==================== ZERNIO KEYS SECTION ==================== */
+
+.zernio-keys-section {
+    margin-top: 20px;
+}
+
+.zernio-keys-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.zernio-keys-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.zernio-keys-title h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.zernio-keys-icon {
+    font-size: 22px;
+}
+
+.zernio-keys-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Zernio Keys Grid */
+.zernio-keys-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+}
+
+/* Zernio Key Card */
+.zernio-key-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    transition: var(--transition);
+}
+
+.zernio-key-card:hover {
+    border-color: var(--border-light);
+    background: var(--bg-card-hover);
+}
+
+.zernio-key-card.inactive {
+    opacity: 0.6;
+}
+
+.zernio-key-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.zernio-key-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.key-icon {
+    font-size: 14px;
+}
+
+.key-title {
+    color: var(--text-primary);
+}
+
+.key-status-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 12px;
+    text-transform: uppercase;
+}
+
+.key-status-badge.active {
+    background: var(--success-bg);
+    color: var(--success);
+}
+
+.key-status-badge.inactive {
+    background: var(--error-bg);
+    color: var(--error);
+}
+
+.zernio-key-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.zernio-key-actions .btn {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+.zernio-key-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.key-detail {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 2px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.key-detail:last-of-type {
+    border-bottom: none;
+}
+
+.key-label {
+    color: var(--text-muted);
+}
+
+.key-value {
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-align: right;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.key-masked {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.key-usage-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--bg-primary);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 4px 0;
+}
+
+.key-usage-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+    .zernio-keys-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .zernio-keys-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .zernio-keys-actions {
+        flex-wrap: wrap;
+    }
+    
+    .zernio-keys-actions .btn {
+        flex: 1;
+    }
+    
+    .zernio-key-header {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+}
