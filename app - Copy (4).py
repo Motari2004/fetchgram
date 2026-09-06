@@ -6,7 +6,6 @@ import tempfile
 import json
 import time
 import base64
-import random
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_file, render_template, after_this_request, session
 from flask_cors import CORS
@@ -27,7 +26,7 @@ try:
                 key, value = line.split('=', 1)
                 os.environ[key] = value
 except FileNotFoundError:
-    pass
+    pass  # .env file not found, use environment variables
 
 FIXED_USER_ID = '62c1d2ca-88e6-490f-9051-20926c1dd8c4'
 
@@ -44,6 +43,7 @@ CORS(app, supports_credentials=True)
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
 def get_db_connection():
+    """Get a connection to the Neon PostgreSQL database."""
     try:
         if DATABASE_URL:
             conn = psycopg2.connect(DATABASE_URL)
@@ -56,6 +56,7 @@ def get_db_connection():
         return None
 
 def init_db():
+    """Initialize the database tables if they don't exist."""
     conn = get_db_connection()
     if not conn:
         return
@@ -128,8 +129,12 @@ def init_db():
         """)
         
         # Add columns if they don't exist
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS caption TEXT;")
+        cur.execute("""
+            ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;
+        """)
+        cur.execute("""
+            ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS caption TEXT;
+        """)
         
         # Pipeline runs log
         cur.execute("""
@@ -155,7 +160,7 @@ def init_db():
             );
         """)
         
-        # Sync status table
+        # Sync status table for tracking caption sync progress
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sync_status (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -172,7 +177,7 @@ def init_db():
             );
         """)
         
-        # Pending posts table
+        # ========== PENDING POSTS TABLE (FULL VERSION) ==========
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pending_posts (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -195,46 +200,78 @@ def init_db():
             );
         """)
         
-        # Scheduled posts table
+        # ========== ADD COLUMNS IF THEY DON'T EXIST (FOR EXISTING TABLES) ==========
+        # This ensures existing tables get the new columns
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS scheduled_posts (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                reel_url TEXT NOT NULL,
-                direct_video_url TEXT NOT NULL,
-                caption TEXT NOT NULL,
-                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-                scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL,
-                status TEXT DEFAULT 'pending',
-                error_message TEXT,
-                posted_at TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
+            ALTER TABLE pending_posts 
+            ADD COLUMN IF NOT EXISTS wakeup_sent BOOLEAN DEFAULT FALSE;
+        """)
+        cur.execute("""
+            ALTER TABLE pending_posts 
+            ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;
+        """)
+        cur.execute("""
+            ALTER TABLE pending_posts 
+            ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;
         """)
         
-        # Add columns if they don't exist
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS wakeup_sent BOOLEAN DEFAULT FALSE;")
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;")
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;")
-        
-        # Create indexes
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id ON scraped_reels(user_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at ON scraped_reels(created_at DESC);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id ON user_cookies(user_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_posted_reels_pipeline_id ON posted_reels(pipeline_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_posted_reels_posted_at ON posted_reels(posted_at);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_is_active ON pipelines(is_active);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_reel_cache_reel_url ON reel_cache(reel_url);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_reel_cache_created_at ON reel_cache(created_at);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_sync_status_username ON sync_status(username);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_sync_status_status ON sync_status(status);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_reel_url ON pending_posts(reel_url);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_status ON pending_posts(status);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at ON pending_posts(created_at DESC);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_scheduled_time ON scheduled_posts(scheduled_time);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_status ON scheduled_posts(status);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_pipeline_id ON scheduled_posts(pipeline_id);")
+        # ========== CREATE INDEXES ==========
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id 
+            ON scraped_reels(user_id);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at 
+            ON scraped_reels(created_at DESC);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id 
+            ON user_cookies(user_id);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_reels_pipeline_id 
+            ON posted_reels(pipeline_id);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_reels_posted_at 
+            ON posted_reels(posted_at);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pipelines_is_active 
+            ON pipelines(is_active);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id 
+            ON pipeline_runs(pipeline_id);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_reel_cache_reel_url 
+            ON reel_cache(reel_url);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_reel_cache_created_at 
+            ON reel_cache(created_at);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sync_status_username 
+            ON sync_status(username);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sync_status_status 
+            ON sync_status(status);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pending_posts_reel_url 
+            ON pending_posts(reel_url);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pending_posts_status 
+            ON pending_posts(status);
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at 
+            ON pending_posts(created_at DESC);
+        """)
         
         conn.commit()
         app.logger.info("✅ Database tables ready with all columns")
@@ -249,66 +286,6 @@ def init_db():
 # Initialize database on startup
 init_db()
 
-# ============== RANDOM TIME GENERATOR ==============
-
-def generate_random_post_times(num_posts, start_hour=8, end_hour=22):
-    """Generate random post times spread throughout the day."""
-    if num_posts == 0:
-        return []
-    
-    if num_posts == 1:
-        random_hour = random.randint(start_hour, end_hour - 1)
-        random_minute = random.randint(0, 59)
-        random_time = datetime.utcnow().replace(
-            hour=random_hour,
-            minute=random_minute,
-            second=0,
-            microsecond=0
-        )
-        if random_time < datetime.utcnow():
-            random_time += timedelta(days=1)
-        return [random_time]
-    
-    total_minutes = (end_hour - start_hour) * 60
-    min_spacing = 60
-    max_attempts = 100
-    
-    valid_times = []
-    for attempt in range(max_attempts):
-        minutes = sorted([random.randint(0, total_minutes - 60) for _ in range(num_posts)])
-        valid = True
-        for i in range(1, len(minutes)):
-            if minutes[i] - minutes[i-1] < min_spacing:
-                valid = False
-                break
-        if valid:
-            valid_times = minutes
-            break
-    
-    if not valid_times:
-        spacing = total_minutes // num_posts
-        valid_times = [i * spacing + random.randint(-spacing//4, spacing//4) for i in range(num_posts)]
-        valid_times = sorted([max(0, min(total_minutes - 60, t)) for t in valid_times])
-    
-    times = []
-    base_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    for minute in valid_times:
-        hour = start_hour + (minute // 60)
-        minute_of_hour = minute % 60
-        post_time = base_time.replace(
-            hour=hour,
-            minute=minute_of_hour,
-            second=0,
-            microsecond=0
-        )
-        post_time += timedelta(seconds=random.randint(0, 3599))
-        while post_time < datetime.utcnow():
-            post_time += timedelta(days=1)
-        times.append(post_time)
-    
-    return sorted(times)
-
 # ============== CAPTION FETCH TRACKING ==============
 CAPTION_FETCH_STATUS = {}
 
@@ -317,8 +294,10 @@ CAPTION_FETCH_STATUS = {}
 CAPTION_SERVICE_URL = os.environ.get('CAPTION_SERVICE_URL', 'https://copytxt-caption-automation.onrender.com/api/caption')
 
 def fetch_captions_batch(reel_urls):
+    """Fetch captions from the caption service."""
     if not reel_urls:
         return {}
+    
     try:
         response = requests.post(
             f"{CAPTION_SERVICE_URL}/batch",
@@ -326,6 +305,7 @@ def fetch_captions_batch(reel_urls):
             timeout=60,
             headers={"Content-Type": "application/json"}
         )
+        
         if response.status_code == 200:
             data = response.json()
             if data.get('success'):
@@ -340,6 +320,7 @@ def fetch_captions_batch(reel_urls):
         return {}
 
 def fetch_caption_from_service(reel_url):
+    """Fetch a single caption from the caption service."""
     try:
         response = requests.post(
             CAPTION_SERVICE_URL,
@@ -347,6 +328,7 @@ def fetch_caption_from_service(reel_url):
             timeout=30,
             headers={"Content-Type": "application/json"}
         )
+        
         if response.status_code == 200:
             data = response.json()
             if data.get('success'):
@@ -357,8 +339,10 @@ def fetch_caption_from_service(reel_url):
         return None
 
 def process_reels_with_captions(reels):
+    """Process reels - fetch captions for those without them."""
     urls_to_fetch = []
     processed_reels = []
+    
     for reel in reels:
         if isinstance(reel, str):
             urls_to_fetch.append(reel)
@@ -383,14 +367,17 @@ def process_reels_with_captions(reels):
         for reel in processed_reels:
             if reel.get('url') in captions_map:
                 reel['caption'] = captions_map[reel['url']] or ''
+    
     return processed_reels
 
 # ============== SYNC STATUS FUNCTIONS ==============
 
 def update_sync_status(username, status, total_reels=0, captions_fetched=0, captions_skipped=0, errors=0, job_id=None):
+    """Update sync status in the database."""
     conn = get_db_connection()
     if not conn:
         return
+    
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -414,15 +401,27 @@ def update_sync_status(username, status, total_reels=0, captions_fetched=0, capt
         app.logger.error(f"Failed to update sync status: {e}")
 
 def get_sync_status(username):
+    """Get sync status for a username."""
     conn = get_db_connection()
     if not conn:
         return None
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT username, status, total_reels, captions_fetched, captions_skipped, errors,
-                   started_at, completed_at, last_updated, job_id
-            FROM sync_status WHERE username = %s
+            SELECT 
+                username,
+                status,
+                total_reels,
+                captions_fetched,
+                captions_skipped,
+                errors,
+                started_at,
+                completed_at,
+                last_updated,
+                job_id
+            FROM sync_status
+            WHERE username = %s
         """, (username,))
         result = cur.fetchone()
         cur.close()
@@ -435,7 +434,10 @@ def get_sync_status(username):
 # ============== BACKGROUND SYNC FUNCTION ==============
 
 def sync_captions_background(username):
+    """Trigger caption sync in background for a username with status tracking."""
     import threading
+    
+    # Generate job_id in the outer scope
     job_id = str(uuid.uuid4())
     
     def run_sync():
@@ -456,7 +458,8 @@ def sync_captions_background(username):
                         SELECT 1 FROM jsonb_array_elements(results) AS elem
                         WHERE elem->>'username' = %s
                     )
-                    ORDER BY created_at DESC LIMIT 1
+                    ORDER BY created_at DESC
+                    LIMIT 1
                 """, (username,))
                 
                 result = cur.fetchone()
@@ -476,10 +479,12 @@ def sync_captions_background(username):
                 urls_to_fetch = []
                 reel_positions = []
                 
+                # Find the profile and collect URLs needing captions
                 for profile_idx, profile in enumerate(results):
                     if profile.get('username') == username:
                         reels = profile.get('reels', [])
                         total_reels = len(reels)
+                        
                         app.logger.info(f"[Job {job_id}] 📹 Found {total_reels} reels for @{username}")
                         update_sync_status(username, 'syncing', total_reels, 0, 0, 0, job_id)
                         
@@ -497,19 +502,23 @@ def sync_captions_background(username):
                                 reel_url = str(reel)
                                 urls_to_fetch.append(reel_url)
                                 reel_positions.append((profile_idx, reel_idx))
+                        
                         break
                 
                 app.logger.info(f"[Job {job_id}] 📤 {len(urls_to_fetch)} URLs need captions")
                 
+                # Process each URL individually
                 for idx, (reel_url, (profile_idx, reel_idx)) in enumerate(zip(urls_to_fetch, reel_positions)):
                     try:
                         app.logger.info(f"[Job {job_id}] 📞 [{idx+1}/{len(urls_to_fetch)}] Calling caption service...")
+                        
                         response = requests.post(
                             CAPTION_SERVICE_URL,
                             json={"url": reel_url},
                             timeout=30,
                             headers={"Content-Type": "application/json"}
                         )
+                        
                         if response.status_code == 200:
                             data = response.json()
                             if data.get('success'):
@@ -526,22 +535,29 @@ def sync_captions_background(username):
                         else:
                             app.logger.error(f"[Job {job_id}] ❌ Service error: {response.status_code}")
                             errors += 1
+                            
                     except Exception as e:
                         app.logger.error(f"[Job {job_id}] ❌ Service exception: {e}")
                         errors += 1
                     
+                    # Small delay to avoid rate limiting
                     time.sleep(1)
+                    
+                    # Update progress every few captions
                     if (captions_fetched + errors) % 2 == 0 or idx == len(urls_to_fetch) - 1:
                         update_sync_status(username, 'syncing', total_reels, captions_fetched, captions_skipped, errors, job_id)
                 
+                # Save updated results
                 if updated:
                     cur.execute("""
-                        UPDATE scraped_reels SET results = %s, updated_at = NOW()
+                        UPDATE scraped_reels 
+                        SET results = %s, updated_at = NOW()
                         WHERE id = %s
                     """, (json.dumps(results), result['id']))
                     conn.commit()
                     app.logger.info(f"[Job {job_id}] 💾 Saved {captions_fetched} captions to database")
                     
+                    # Update reel_cache
                     for profile in results:
                         for reel in profile.get('reels', []):
                             if isinstance(reel, dict):
@@ -552,45 +568,56 @@ def sync_captions_background(username):
                                         INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
                                         VALUES (%s, '', %s, NOW())
                                         ON CONFLICT (reel_url) DO UPDATE SET 
-                                            caption = EXCLUDED.caption, created_at = NOW()
+                                            caption = EXCLUDED.caption,
+                                            created_at = NOW()
                                     """, (reel_url, caption))
                     conn.commit()
                 
+                # Final status
                 final_status = 'completed' if errors == 0 else 'partial'
                 update_sync_status(username, final_status, total_reels, captions_fetched, captions_skipped, errors, job_id)
                 app.logger.info(f"[Job {job_id}] ✅ Done: {captions_fetched} fetched, {errors} errors")
                 
                 cur.close()
                 conn.close()
+                
             except Exception as e:
                 app.logger.error(f"[Job {job_id}] ❌ Error: {e}")
                 import traceback
                 app.logger.error(traceback.format_exc())
                 update_sync_status(username, 'error', 0, 0, 0, 1, job_id)
     
+    # Start the thread
     thread = threading.Thread(target=run_sync)
     thread.daemon = True
     thread.start()
+    
+    # Return the job_id from the outer scope
     return job_id
 
 # ============== COOKIE STORAGE FUNCTIONS ==============
 
 def get_user_id():
+    """Get or create a persistent user ID."""
     user_id = FIXED_USER_ID
+    # Only store small session data
     session['user_id'] = user_id
     return user_id
 
 def save_cookies_to_db(cookies_data, username):
+    """Save cookies to Neon PostgreSQL."""
     user_id = get_user_id()
     conn = get_db_connection()
     if not conn:
         return False
+    
     try:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO user_cookies (user_id, cookie_data, username, updated_at)
             VALUES (%s, %s, %s, NOW())
-            ON CONFLICT (user_id) DO UPDATE SET 
+            ON CONFLICT (user_id) 
+            DO UPDATE SET 
                 cookie_data = EXCLUDED.cookie_data,
                 username = EXCLUDED.username,
                 updated_at = NOW()
@@ -606,14 +633,21 @@ def save_cookies_to_db(cookies_data, username):
         conn.close()
 
 def get_cookies_from_db():
+    """Get cookies from Neon PostgreSQL."""
     user_id = get_user_id()
     conn = get_db_connection()
     if not conn:
         return None
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT cookie_data, username, updated_at FROM user_cookies WHERE user_id = %s", (user_id,))
+        cur.execute("""
+            SELECT cookie_data, username, updated_at 
+            FROM user_cookies 
+            WHERE user_id = %s
+        """, (user_id,))
         result = cur.fetchone()
+        
         if result:
             return {
                 'cookie_data': result['cookie_data'],
@@ -629,10 +663,12 @@ def get_cookies_from_db():
         conn.close()
 
 def clear_cookies_from_db():
+    """Clear cookies from Neon PostgreSQL."""
     user_id = get_user_id()
     conn = get_db_connection()
     if not conn:
         return False
+    
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM user_cookies WHERE user_id = %s", (user_id,))
@@ -646,10 +682,14 @@ def clear_cookies_from_db():
         cur.close()
         conn.close()
 
+# ============== GET EXISTING REEL URLS ==============
+
 def get_existing_reel_urls(username):
+    """Get all reel URLs already stored for a username."""
     conn = get_db_connection()
     if not conn:
         return set()
+    
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -658,13 +698,17 @@ def get_existing_reel_urls(username):
                 SELECT 1 FROM jsonb_array_elements(results) AS elem
                 WHERE elem->>'username' = %s
             )
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC
+            LIMIT 1
         """, (username,))
+        
         result = cur.fetchone()
         if not result:
             return set()
+        
         results = result[0]
         existing_urls = set()
+        
         for profile in results:
             if profile.get('username') == username:
                 reels = profile.get('reels', [])
@@ -676,7 +720,9 @@ def get_existing_reel_urls(username):
                     elif isinstance(reel, str):
                         existing_urls.add(reel)
                 break
+        
         return existing_urls
+        
     except Exception as e:
         app.logger.error(f"Error getting existing URLs: {e}")
         return set()
@@ -687,6 +733,7 @@ def get_existing_reel_urls(username):
 # ============== ENCRYPTION FUNCTIONS ==============
 
 def get_encryption_key():
+    """Generate or retrieve a stable encryption key for credentials."""
     env_key = os.environ.get('ENCRYPTION_KEY')
     if env_key:
         try:
@@ -707,14 +754,17 @@ def get_encryption_key():
         iterations=100000,
     )
     key = base64.urlsafe_b64encode(kdf.derive(app.secret_key.encode()))
+
     try:
         with open(key_file, 'wb') as f:
             f.write(key)
     except Exception:
         pass
+
     return key
 
 def encrypt_credentials(identifier, password):
+    """Encrypt credentials or cookie data. Returns base64 string or None."""
     try:
         key = get_encryption_key()
         f = Fernet(key)
@@ -722,13 +772,31 @@ def encrypt_credentials(identifier, password):
         if isinstance(password, str) and password.startswith('['):
             try:
                 data = json.loads(password)
-                data_dict = {'type': 'cookies', 'data': data, 'timestamp': time.time()}
+                data_dict = {
+                    'type': 'cookies',
+                    'data': data,
+                    'timestamp': time.time()
+                }
             except Exception:
-                data_dict = {'type': 'credentials', 'identifier': identifier, 'password': password, 'timestamp': time.time()}
+                data_dict = {
+                    'type': 'credentials',
+                    'identifier': identifier,
+                    'password': password,
+                    'timestamp': time.time()
+                }
         elif isinstance(password, (list, dict)):
-            data_dict = {'type': 'cookies', 'data': password, 'timestamp': time.time()}
+            data_dict = {
+                'type': 'cookies',
+                'data': password,
+                'timestamp': time.time()
+            }
         else:
-            data_dict = {'type': 'credentials', 'identifier': identifier, 'password': password, 'timestamp': time.time()}
+            data_dict = {
+                'type': 'credentials',
+                'identifier': identifier,
+                'password': password,
+                'timestamp': time.time()
+            }
 
         encrypted = f.encrypt(json.dumps(data_dict).encode())
         return base64.urlsafe_b64encode(encrypted).decode()
@@ -737,9 +805,11 @@ def encrypt_credentials(identifier, password):
         return None
 
 def decrypt_credentials(encrypted_data):
+    """Decrypt credentials. Returns (data, type) or None."""
     try:
         key = get_encryption_key()
         f = Fernet(key)
+
         decoded = base64.urlsafe_b64decode(encrypted_data)
         decrypted = f.decrypt(decoded)
         data = json.loads(decrypted)
@@ -756,6 +826,7 @@ def decrypt_credentials(encrypted_data):
         return None
 
 def write_netscape_cookies(cookie_data, filepath):
+    """Write a list of cookie dicts to a Netscape cookie file."""
     with open(filepath, 'w') as f:
         f.write("# Netscape HTTP Cookie File\n")
         for cookie in cookie_data:
@@ -788,6 +859,8 @@ def is_valid_instagram_url(url: str) -> bool:
 # ============== YT-DLP FUNCTIONS ==============
 
 def get_cookie_file():
+    """Get cookies from database only - NOT from session to keep cookie small."""
+    # 🔥 FIX: Only use database, not session
     db_cookies = get_cookies_from_db()
     if db_cookies:
         cookie_data = db_cookies.get('cookie_data', [])
@@ -799,6 +872,8 @@ def get_cookie_file():
             app.logger.info(f"Using cookies from database → {cookie_file}")
             return cookie_file
     
+    # 🔥 REMOVED: Don't check session for cookie_file
+    
     cookies_json_env = os.environ.get('COOKIES_JSON')
     if cookies_json_env:
         try:
@@ -808,6 +883,7 @@ def get_cookie_file():
             return cookie_file
         except Exception as e:
             app.logger.error(f"Failed to parse COOKIES_JSON: {e}")
+    
     return None
 
 def base_ydl_opts(extra=None):
@@ -818,7 +894,11 @@ def base_ydl_opts(extra=None):
         "format": "best",
         "nocheckcertificate": True,
         "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
         },
     }
 
@@ -832,6 +912,10 @@ def base_ydl_opts(extra=None):
     return opts
 
 def get_video_with_captions(reel_url):
+    """
+    Extract both direct video URL and caption from Instagram reel.
+    Returns: (direct_url, caption, thumbnail)
+    """
     try:
         opts = {
             "quiet": True,
@@ -839,22 +923,34 @@ def get_video_with_captions(reel_url):
             "noplaylist": True,
             "format": "best[ext=mp4]/best",
             "nocheckcertificate": True,
-            "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            },
             "extract_flat": False,
             "writeinfo": True
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(reel_url, download=False)
+            
+            # Extract caption/description
             caption = info.get('description') or info.get('title') or ''
+            
+            # Clean up caption
             caption = caption.strip()
             if len(caption) > 5000:
                 caption = caption[:4997] + "..."
+            
+            # Get direct video URL
             entries = info.get("entries") if "entries" in info else [info]
             entries = [e for e in entries if e]
             target = entries[0] if entries else None
             if not target:
                 return None, None, None
+            
+            # Get thumbnail
             thumbnail = target.get('thumbnail') or info.get('thumbnail')
+            
+            # Get direct video URL
             formats = target.get("formats", [])
             if not formats:
                 video_url = target.get("url") or target.get("webpage_url")
@@ -866,12 +962,15 @@ def get_video_with_captions(reel_url):
                         break
                 if not video_url:
                     video_url = formats[0].get("url") if formats else None
+            
             return video_url, caption, thumbnail
+            
     except Exception as e:
         app.logger.error(f"Error extracting video with captions: {e}")
         return None, None, None
 
 def get_direct_video_url(url, media_id=None):
+    """Extract direct video URL from Instagram URL."""
     opts = base_ydl_opts({"format": "best[ext=mp4]/best"})
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -897,22 +996,34 @@ def get_direct_video_url(url, media_id=None):
         return None
 
 def get_direct_url_with_caption_cache(reel_url):
+    """
+    Get direct video URL and caption with caching.
+    Returns: (direct_url, caption)
+    """
     conn = get_db_connection()
     if not conn:
         video_url, caption, _ = get_video_with_captions(reel_url)
         return video_url, caption
+    
     try:
+        # Check cache first
         cur = conn.cursor()
         cur.execute("""
             SELECT direct_url, caption FROM reel_cache 
             WHERE reel_url = %s AND created_at > NOW() - INTERVAL '7 days'
         """, (reel_url,))
         result = cur.fetchone()
+        
         if result and result[0]:
             app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
             return result[0], result[1] or ''
+        
+        # Get direct URL and caption using yt-dlp
+        app.logger.info(f"⏳ Fetching direct URL and caption for: {reel_url[:50]}...")
         direct_url, caption, _ = get_video_with_captions(reel_url)
+        
         if direct_url:
+            # Cache it
             cur.execute("""
                 INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
                 VALUES (%s, %s, %s, NOW())
@@ -923,7 +1034,9 @@ def get_direct_url_with_caption_cache(reel_url):
             """, (reel_url, direct_url, caption or ''))
             conn.commit()
             app.logger.info(f"✅ Cached direct URL and caption for: {reel_url[:50]}...")
+        
         return direct_url, caption
+        
     except Exception as e:
         app.logger.error(f"Error getting cached direct URL: {e}")
         video_url, caption, _ = get_video_with_captions(reel_url)
@@ -933,12 +1046,15 @@ def get_direct_url_with_caption_cache(reel_url):
         conn.close()
 
 def download_video_file(url, media_id=None):
+    """Download video file and return filepath."""
     job_dir = os.path.join('/tmp', f"igdl_{uuid.uuid4().hex[:8]}")
     os.makedirs(job_dir, exist_ok=True)
     outtmpl = os.path.join(job_dir, "%(id)s.%(ext)s")
+
     opts = base_ydl_opts({"outtmpl": outtmpl})
     if media_id:
         opts["playlist_items"] = None
+
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -948,6 +1064,7 @@ def download_video_file(url, media_id=None):
     except Exception as e:
         shutil.rmtree(job_dir, ignore_errors=True)
         raise Exception("Download failed: " + str(e))
+
     entries = info.get("entries") if "entries" in info else [info]
     entries = [e for e in entries if e]
     target = None
@@ -955,15 +1072,19 @@ def download_video_file(url, media_id=None):
         target = next((e for e in entries if e.get("id") == media_id), None)
     if target is None and entries:
         target = entries[0]
+
     if target is None:
         shutil.rmtree(job_dir, ignore_errors=True)
         raise Exception("No video found to download.")
+
     filepath = target.get("requested_downloads", [{}])[0].get("filepath") or os.path.join(
         job_dir, f"{target.get('id')}.{target.get('ext', 'mp4')}"
     )
+
     if not os.path.exists(filepath):
         shutil.rmtree(job_dir, ignore_errors=True)
         raise Exception("File was fetched but couldn't be located.")
+
     return filepath, job_dir, target
 
 def clean_error(msg: str) -> str:
@@ -1016,12 +1137,16 @@ def upload_video_to_bluesky(session_data, video_url, text, thumbnail_url=None):
         app.logger.info(f"Downloading video from: {video_url}")
         video_response = requests.get(video_url, stream=True, timeout=120)
         video_response.raise_for_status()
+
         content_type = video_response.headers.get("content-type", "video/mp4")
         if not content_type.startswith("video/"):
             content_type = "video/mp4"
+
         app.logger.info("Uploading video to Bluesky...")
         blob_response = upload_bluesky_blob(session_data, video_response.content, content_type)
+
         did = session_data["did"]
+
         record = {
             "$type": "app.bsky.feed.post",
             "text": text or "Instagram video",
@@ -1029,18 +1154,27 @@ def upload_video_to_bluesky(session_data, video_url, text, thumbnail_url=None):
             "embed": {
                 "$type": "app.bsky.embed.video",
                 "video": blob_response["blob"],
-                "aspectRatio": {"width": 720, "height": 1280}
+                "aspectRatio": {
+                    "width": 720,
+                    "height": 1280
+                }
             }
         }
+
         app.logger.info("Creating Bluesky post...")
         response = requests.post(
             "https://bsky.social/xrpc/com.atproto.repo.createRecord",
-            json={"repo": did, "collection": "app.bsky.feed.post", "record": record},
+            json={
+                "repo": did,
+                "collection": "app.bsky.feed.post",
+                "record": record
+            },
             headers={"Authorization": f"Bearer {session_data['accessJwt']}"},
             timeout=30
         )
         response.raise_for_status()
         return response.json()
+
     except Exception as e:
         raise Exception(f"Failed to upload video to Bluesky: {str(e)}")
 
@@ -1055,15 +1189,29 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
             if not identifier or not password:
                 identifier = session.get('bluesky_identifier')
                 password = session.get('bluesky_password')
+
         if not identifier or not password:
             raise Exception("Bluesky credentials not configured.")
+
         session_data = create_bluesky_session(identifier, password)
         result = upload_video_to_bluesky(session_data, video_url, text, thumbnail_url)
+
         uri_parts = result.get("uri", "").split("/")
         post_id = uri_parts[-1] if uri_parts else ""
-        return {"success": True, "post_uri": result.get("uri"), "post_cid": result.get("cid"), "post_id": post_id, "message": "Video posted to Bluesky successfully!"}
+
+        return {
+            "success": True,
+            "post_uri": result.get("uri"),
+            "post_cid": result.get("cid"),
+            "post_id": post_id,
+            "message": "Video posted to Bluesky successfully!"
+        }
+
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 # ============== ZERNIO (FACEBOOK) INTEGRATION ==============
 
@@ -1071,19 +1219,54 @@ ZERNIO_API_KEY = os.environ.get('ZERNIO_API_KEY', 'sk_48ad5dd4a9d9bd8e2561633862
 ZERNIO_BASE_URL = "https://zernio.com/api/v1"
 
 def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None):
-    headers = {"Authorization": f"Bearer {ZERNIO_API_KEY}", "Content-Type": "application/json"}
+    """
+    Publish a video to Facebook via Zernio
+    
+    Args:
+        video_url: URL of the video to publish (should be direct video URL)
+        text: Caption text
+        account_id: Zernio Facebook account ID
+        publish_now: If True, publish immediately. If False and scheduled_time provided, schedule.
+        scheduled_time: ISO format datetime string (e.g., "2026-09-03T10:00:00Z")
+    
+    Returns:
+        dict: Response from Zernio API
+    """
+    headers = {
+        "Authorization": f"Bearer {ZERNIO_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
     payload = {
         "content": text,
-        "platforms": [{"platform": "facebook", "accountId": account_id}],
-        "mediaItems": [{"type": "video", "url": video_url}]
+        "platforms": [
+            {
+                "platform": "facebook",
+                "accountId": account_id
+            }
+        ],
+        "mediaItems": [
+            {
+                "type": "video",
+                "url": video_url
+            }
+        ]
     }
+    
     if publish_now:
         payload["publishNow"] = True
     elif scheduled_time:
         payload["scheduledFor"] = scheduled_time
         payload["timezone"] = "UTC"
+    
     try:
-        response = requests.post(f"{ZERNIO_BASE_URL}/posts", headers=headers, json=payload, timeout=120)
+        response = requests.post(
+            f"{ZERNIO_BASE_URL}/posts",
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+        
         if response.status_code in [200, 201]:
             return response.json()
         else:
@@ -1092,13 +1275,21 @@ def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled
         return {"error": str(e)}
 
 def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_time=None):
+    """Publish a video to all connected Facebook accounts"""
     results = {}
+    
+    # Get accounts from Zernio API dynamically
     try:
-        headers = {"Authorization": f"Bearer {ZERNIO_API_KEY}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {ZERNIO_API_KEY}",
+            "Content-Type": "application/json"
+        }
         response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        
         if response.status_code == 200:
             data = response.json()
             accounts = data.get('accounts', [])
+            
             for account in accounts:
                 if account.get('platform') == 'facebook':
                     account_id = account.get('_id')
@@ -1110,22 +1301,35 @@ def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_t
                         publish_now=publish_now,
                         scheduled_time=scheduled_time
                     )
-                    results[account_id] = {"account_name": account_name, "result": result}
+                    results[account_id] = {
+                        "account_name": account_name,
+                        "result": result
+                    }
     except Exception as e:
         app.logger.error(f"Error getting Zernio accounts: {e}")
+    
     return results
 
 # ============== DUAL REQUEST CAPTION FETCH ==============
 
 def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_username):
+    """
+    Trigger two caption fetch requests:
+    1. Immediate - wakes up Render
+    2. After 1 minute - actually fetches the caption
+    
+    This ensures the second request succeeds even if Render was sleeping.
+    """
     import threading
     import uuid
     from datetime import datetime
     import time
     
     job_id = str(uuid.uuid4())
+    
     app.logger.info(f"📤 [Job {job_id}] Triggering dual caption fetch for: {reel_url[:50]}...")
     
+    # Track the job status
     CAPTION_FETCH_STATUS[reel_url] = {
         'status': 'pending',
         'job_id': job_id,
@@ -1141,8 +1345,10 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
     }
     
     def send_request_1():
+        """First request - wakes up Render (short timeout)."""
         try:
             app.logger.info(f"📞 [Job {job_id}] Request 1 (WAKE-UP) sent...")
+            
             response = requests.post(
                 CAPTION_SERVICE_URL,
                 json={
@@ -1156,23 +1362,29 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
                 timeout=3,
                 headers={"Content-Type": "application/json"}
             )
+            
             app.logger.info(f"⏰ [Job {job_id}] Request 1 completed: {response.status_code}")
             CAPTION_FETCH_STATUS[reel_url]['request_1_sent'] = True
             CAPTION_FETCH_STATUS[reel_url]['request_1_status'] = response.status_code
+            
         except requests.exceptions.Timeout:
-            app.logger.info(f"⏰ [Job {job_id}] Request 1 timed out (expected)")
+            app.logger.info(f"⏰ [Job {job_id}] Request 1 timed out (expected - Render waking up)")
             CAPTION_FETCH_STATUS[reel_url]['request_1_sent'] = True
             CAPTION_FETCH_STATUS[reel_url]['request_1_status'] = 'timeout'
+            
         except Exception as e:
             app.logger.error(f"❌ [Job {job_id}] Request 1 error: {e}")
             CAPTION_FETCH_STATUS[reel_url]['request_1_sent'] = True
             CAPTION_FETCH_STATUS[reel_url]['request_1_status'] = str(e)
     
     def send_request_2():
+        """Second request - actually fetches the caption (after Render is awake)."""
         try:
             app.logger.info(f"⏳ [Job {job_id}] Waiting 60 seconds before request 2...")
             time.sleep(60)
+            
             app.logger.info(f"📞 [Job {job_id}] Request 2 (REAL FETCH) sent...")
+            
             response = requests.post(
                 CAPTION_SERVICE_URL,
                 json={
@@ -1186,6 +1398,7 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
                 timeout=60,
                 headers={"Content-Type": "application/json"}
             )
+            
             if response.status_code == 200:
                 app.logger.info(f"✅ [Job {job_id}] Request 2 completed successfully!")
                 CAPTION_FETCH_STATUS[reel_url]['request_2_sent'] = True
@@ -1198,12 +1411,14 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
                 CAPTION_FETCH_STATUS[reel_url]['request_2_status'] = response.status_code
                 CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
                 CAPTION_FETCH_STATUS[reel_url]['message'] = f'Request 2 failed: {response.status_code}'
+                
         except requests.exceptions.Timeout:
             app.logger.error(f"❌ [Job {job_id}] Request 2 timed out")
             CAPTION_FETCH_STATUS[reel_url]['request_2_sent'] = True
             CAPTION_FETCH_STATUS[reel_url]['request_2_status'] = 'timeout'
             CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
             CAPTION_FETCH_STATUS[reel_url]['message'] = 'Request 2 timed out'
+            
         except Exception as e:
             app.logger.error(f"❌ [Job {job_id}] Request 2 error: {e}")
             CAPTION_FETCH_STATUS[reel_url]['request_2_sent'] = True
@@ -1211,9 +1426,11 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
             CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
             CAPTION_FETCH_STATUS[reel_url]['message'] = f'Request 2 error: {str(e)}'
     
+    # Start both threads
     thread1 = threading.Thread(target=send_request_1)
     thread1.daemon = True
     thread1.start()
+    
     thread2 = threading.Thread(target=send_request_2)
     thread2.daemon = True
     thread2.start()
@@ -1228,13 +1445,28 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
         }
     }
 
-def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, profile_username, max_retries=3):
+def trigger_caption_fetch_with_dual_requests_and_retry(
+    reel_url, 
+    pipeline_id, 
+    profile_username,
+    max_retries=3
+):
+    """
+    Dual request with retry for maximum reliability.
+    
+    Flow:
+    1. Immediate wake-up request
+    2. Wait 60 seconds
+    3. Real fetch request (with retries if needed)
+    4. If both fail, use fallback
+    """
     import threading
     import uuid
     from datetime import datetime
     import time
     
     job_id = str(uuid.uuid4())
+    
     app.logger.info(f"📤 [Job {job_id}] Starting DUAL+RETRY caption fetch for: {reel_url[:50]}...")
     
     CAPTION_FETCH_STATUS[reel_url] = {
@@ -1252,8 +1484,10 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
     }
     
     def send_wakeup():
+        """Send immediate wake-up request."""
         try:
             app.logger.info(f"💤 [Job {job_id}] Sending wake-up request...")
+            
             requests.post(
                 CAPTION_SERVICE_URL,
                 json={
@@ -1267,33 +1501,43 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
                 timeout=2,
                 headers={"Content-Type": "application/json"}
             )
+            
             app.logger.info(f"✅ [Job {job_id}] Wake-up request sent")
             CAPTION_FETCH_STATUS[reel_url]['wake_up_sent'] = True
+            
+            # Update pending post in database
             conn = get_db_connection()
             if conn:
                 cur = conn.cursor()
                 cur.execute("""
-                    UPDATE pending_posts SET wakeup_sent = TRUE 
+                    UPDATE pending_posts 
+                    SET wakeup_sent = TRUE 
                     WHERE reel_url = %s AND status IN ('pending', 'processing')
                 """, (reel_url,))
                 conn.commit()
                 cur.close()
                 conn.close()
+            
         except Exception as e:
             app.logger.info(f"⏰ [Job {job_id}] Wake-up request timed out (expected)")
             CAPTION_FETCH_STATUS[reel_url]['wake_up_sent'] = True
     
     def send_real_fetch_with_retry():
+        """Send real fetch request with retry logic."""
+        # Wait 60 seconds for Render to wake up
         app.logger.info(f"⏳ [Job {job_id}] Waiting 60 seconds for Render to wake up...")
         time.sleep(60)
+        
         max_attempts = max_retries
         base_delay = 5
         
         for attempt in range(max_attempts):
             try:
                 app.logger.info(f"📞 [Job {job_id}] Real fetch attempt {attempt + 1}/{max_attempts}...")
+                
                 CAPTION_FETCH_STATUS[reel_url]['real_fetch_attempts'] = attempt + 1
                 CAPTION_FETCH_STATUS[reel_url]['message'] = f'Real fetch attempt {attempt + 1}'
+                
                 response = requests.post(
                     CAPTION_SERVICE_URL,
                     json={
@@ -1308,24 +1552,30 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
                     timeout=45,
                     headers={"Content-Type": "application/json"}
                 )
+                
                 if response.status_code == 200:
                     app.logger.info(f"✅ [Job {job_id}] Real fetch successful! (attempt {attempt + 1})")
                     CAPTION_FETCH_STATUS[reel_url]['real_fetch_status'] = 'success'
                     CAPTION_FETCH_STATUS[reel_url]['status'] = 'processing'
                     CAPTION_FETCH_STATUS[reel_url]['message'] = 'Caption service processing'
+                    
+                    # Update pending post
                     conn = get_db_connection()
                     if conn:
                         cur = conn.cursor()
                         cur.execute("""
-                            UPDATE pending_posts SET real_fetch_attempts = %s
+                            UPDATE pending_posts 
+                            SET real_fetch_attempts = %s
                             WHERE reel_url = %s AND status IN ('pending', 'processing')
                         """, (attempt + 1, reel_url))
                         conn.commit()
                         cur.close()
                         conn.close()
                     return
+                    
                 elif response.status_code in [502, 503, 504]:
                     app.logger.warning(f"⚠️ [Job {job_id}] Gateway error (attempt {attempt + 1})")
+                    
                     if attempt < max_attempts - 1:
                         delay = base_delay * (2 ** attempt)
                         app.logger.info(f"⏳ [Job {job_id}] Retrying in {delay}s...")
@@ -1337,14 +1587,17 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
                         CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
                         CAPTION_FETCH_STATUS[reel_url]['message'] = 'Gateway errors after all attempts'
                         return
+                        
                 else:
                     app.logger.error(f"❌ [Job {job_id}] Real fetch failed: {response.status_code}")
                     CAPTION_FETCH_STATUS[reel_url]['real_fetch_status'] = 'failed'
                     CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
                     CAPTION_FETCH_STATUS[reel_url]['message'] = f'Error {response.status_code}'
                     return
+                    
             except requests.exceptions.Timeout:
                 app.logger.warning(f"⚠️ [Job {job_id}] Timeout (attempt {attempt + 1})")
+                
                 if attempt < max_attempts - 1:
                     delay = base_delay * (2 ** attempt)
                     app.logger.info(f"⏳ [Job {job_id}] Retrying in {delay}s...")
@@ -1356,8 +1609,10 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
                     CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
                     CAPTION_FETCH_STATUS[reel_url]['message'] = 'Timeout after all attempts'
                     return
+                    
             except Exception as e:
                 app.logger.error(f"❌ [Job {job_id}] Real fetch error: {e}")
+                
                 if attempt < max_attempts - 1:
                     delay = base_delay * (2 ** attempt)
                     app.logger.info(f"⏳ [Job {job_id}] Retrying in {delay}s...")
@@ -1373,9 +1628,11 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
             CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
             CAPTION_FETCH_STATUS[reel_url]['message'] = 'All retry attempts exhausted'
     
+    # Start both threads
     thread_wakeup = threading.Thread(target=send_wakeup)
     thread_wakeup.daemon = True
     thread_wakeup.start()
+    
     thread_real = threading.Thread(target=send_real_fetch_with_retry)
     thread_real.daemon = True
     thread_real.start()
@@ -1392,20 +1649,32 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
     }
 
 def trigger_caption_fetch_async(reel_url, pipeline_id, profile_username):
+    """
+    Original async caption fetch - kept for backwards compatibility.
+    Now uses dual request by default.
+    """
     return trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, profile_username)
 
 def get_caption_fetch_status(reel_url):
+    """
+    Get the status of a caption fetch job.
+    """
     status = CAPTION_FETCH_STATUS.get(reel_url)
     if status:
         return status
-    return {'status': 'not_found', 'message': 'No caption fetch job found for this URL'}
+    return {
+        'status': 'not_found',
+        'message': 'No caption fetch job found for this URL'
+    }
 
 # ============== PENDING POST FUNCTIONS ==============
 
 def create_pending_post(reel_url, direct_video_url, pipeline_id, profile_username, facebook_account_id):
+    """Create a pending post entry for a reel waiting for caption."""
     conn = get_db_connection()
     if not conn:
         return None
+    
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -1420,26 +1689,32 @@ def create_pending_post(reel_url, direct_video_url, pipeline_id, profile_usernam
                 updated_at = NOW()
             RETURNING id
         """, (reel_url, direct_video_url, pipeline_id, profile_username, facebook_account_id))
+        
         result = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
+        
         app.logger.info(f"📝 Created pending post for: {reel_url[:50]}...")
         return result[0] if result else None
+        
     except Exception as e:
         app.logger.error(f"Failed to create pending post: {e}")
         return None
 
 def get_pending_post(reel_url):
+    """Get a pending post by reel URL - only pending or processing."""
     conn = get_db_connection()
     if not conn:
         return None
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
             SELECT * FROM pending_posts 
             WHERE reel_url = %s AND status IN ('pending', 'processing')
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC
+            LIMIT 1
         """, (reel_url,))
         result = cur.fetchone()
         cur.close()
@@ -1450,9 +1725,11 @@ def get_pending_post(reel_url):
         return None
 
 def update_pending_post_status(post_id, status, error_message=None, facebook_post_id=None, facebook_post_url=None):
+    """Update pending post status."""
     conn = get_db_connection()
     if not conn:
         return False
+    
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -1475,28 +1752,36 @@ def update_pending_post_status(post_id, status, error_message=None, facebook_pos
         return False
 
 def process_pending_post(post):
+    """Process a pending post - post to Facebook with caption."""
     try:
         app.logger.info(f"📤 Processing pending post for: {post['reel_url'][:50]}...")
+        
         update_pending_post_status(post['id'], 'processing')
+        
         caption = get_caption_for_reel(post['reel_url'], post['profile_username'], post['pipeline_id'])
+        
         if not caption or not caption.strip():
             app.logger.error(f"❌ No caption available for: {post['reel_url'][:50]}...")
             update_pending_post_status(post['id'], 'failed', 'No caption available')
             return False
+        
         result = publish_to_facebook(
             video_url=post['direct_video_url'],
             text=caption,
             account_id=post['facebook_account_id'],
             publish_now=True
         )
+        
         if result and not result.get('error'):
             post_id = result.get('post', {}).get('_id') or result.get('post_id')
             post_url = None
+            
             platforms = result.get('post', {}).get('platforms', [])
             for platform in platforms:
                 if platform.get('platform') == 'facebook':
                     post_url = platform.get('publishedUrl')
                     break
+            
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
                 reel_url=post['reel_url'],
@@ -1506,13 +1791,23 @@ def process_pending_post(post):
                 facebook_post_url=post_url,
                 status='success'
             )
+            
             update_pipeline_stats(post['pipeline_id'], 0, 0)
-            update_pending_post_status(post['id'], 'completed', None, post_id, post_url)
+            
+            update_pending_post_status(
+                post['id'], 
+                'completed', 
+                None, 
+                post_id, 
+                post_url
+            )
+            
             app.logger.info(f"✅ Pending post completed and stats updated: {post['reel_url'][:50]}...")
             return True
         else:
             error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
             update_pending_post_status(post['id'], 'failed', str(error_msg))
+            
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
                 reel_url=post['reel_url'],
@@ -1521,12 +1816,16 @@ def process_pending_post(post):
                 status='failed',
                 error_message=str(error_msg)
             )
+            
             update_pipeline_stats(post['pipeline_id'], 0, 0)
+            
             app.logger.error(f"❌ Pending post failed: {post['reel_url'][:50]}... - {error_msg}")
             return False
+            
     except Exception as e:
         app.logger.error(f"❌ Error processing pending post: {e}")
         update_pending_post_status(post['id'], 'failed', str(e))
+        
         try:
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
@@ -1539,22 +1838,29 @@ def process_pending_post(post):
             update_pipeline_stats(post['pipeline_id'], 0, 0)
         except:
             pass
+        
         return False
 
 def get_caption_for_reel(reel_url, profile_username, pipeline_id):
+    """Get caption for a reel from database."""
     conn = get_db_connection()
     if not conn:
         return None
+    
     try:
         cur = conn.cursor()
+        
+        # 1. Check scraped_reels
         cur.execute("""
             SELECT results FROM scraped_reels 
             WHERE EXISTS (
                 SELECT 1 FROM jsonb_array_elements(results) AS elem
                 WHERE elem->>'username' = %s
             )
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC
+            LIMIT 1
         """, (profile_username,))
+        
         result = cur.fetchone()
         if result:
             results = result[0]
@@ -1567,15 +1873,27 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id):
                             caption = reel.get('caption', '')
                             if caption and caption.strip():
                                 return caption
-        cur.execute("SELECT caption FROM posted_reels WHERE pipeline_id = %s AND reel_url = %s", (pipeline_id, reel_url))
+        
+        # 2. Check posted_reels
+        cur.execute("""
+            SELECT caption FROM posted_reels 
+            WHERE pipeline_id = %s AND reel_url = %s
+        """, (pipeline_id, reel_url))
         result = cur.fetchone()
         if result and result[0] and result[0].strip():
             return result[0]
-        cur.execute("SELECT caption FROM reel_cache WHERE reel_url = %s", (reel_url,))
+        
+        # 3. Check reel_cache
+        cur.execute("""
+            SELECT caption FROM reel_cache 
+            WHERE reel_url = %s
+        """, (reel_url,))
         result = cur.fetchone()
         if result and result[0] and result[0].strip():
             return result[0]
+        
         return None
+        
     except Exception as e:
         app.logger.error(f"Error getting caption: {e}")
         return None
@@ -1586,30 +1904,42 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id):
 # ============== PIPELINE FUNCTIONS ==============
 
 def get_unposted_reels(profile_username, pipeline_id, limit=10):
+    """Get unposted reels with captions for a profile."""
     conn = get_db_connection()
     if not conn:
         return []
+    
     try:
         cur = conn.cursor()
+        
         cur.execute("""
-            SELECT results FROM scraped_reels 
+            SELECT 
+                results
+            FROM scraped_reels 
             WHERE EXISTS (
                 SELECT 1 FROM jsonb_array_elements(results) AS elem
                 WHERE elem->>'username' = %s
             )
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC
+            LIMIT 1
         """, (profile_username,))
+        
         result = cur.fetchone()
         if not result:
             return []
+        
         results = result[0]
         profile_reels = []
         for item in results:
             if item.get('username') == profile_username:
                 profile_reels = item.get('reels', [])
-                break
-        cur.execute("SELECT reel_url FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
+                break        
+        cur.execute("""
+            SELECT reel_url FROM posted_reels 
+            WHERE pipeline_id = %s
+        """, (pipeline_id,))
         posted_urls = {row[0] for row in cur.fetchall()}
+        
         unposted = []
         for reel in profile_reels:
             if isinstance(reel, str):
@@ -1618,12 +1948,17 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
             elif isinstance(reel, dict):
                 reel_url = reel.get('url')
                 if reel_url and reel_url not in posted_urls:
-                    unposted.append({"url": reel_url, "caption": reel.get('caption', '')})
+                    unposted.append({
+                        "url": reel_url,
+                        "caption": reel.get('caption', '')
+                    })
             else:
                 reel_url = str(reel)
                 if reel_url not in posted_urls:
                     unposted.append({"url": reel_url, "caption": ""})
+        
         return unposted[:limit]
+        
     except Exception as e:
         app.logger.error(f"Error getting unposted reels: {e}")
         return []
@@ -1634,11 +1969,14 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
 def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=None, 
                         facebook_post_id=None, facebook_post_url=None, 
                         status='success', error_message=None):
+    """Mark a reel as posted with caption and update pipeline stats."""
     conn = get_db_connection()
     if not conn:
         return False
+    
     try:
         cur = conn.cursor()
+        
         cur.execute("""
             INSERT INTO posted_reels (
                 pipeline_id, reel_url, direct_video_url, caption,
@@ -1655,14 +1993,24 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
                 posted_at = NOW()
         """, (pipeline_id, reel_url, direct_video_url, caption, 
               facebook_post_id, facebook_post_url, status, error_message))
+        
         if status == 'success':
-            cur.execute("SELECT COUNT(*) FROM posted_reels WHERE pipeline_id = %s AND status = 'success'", (pipeline_id,))
-            total_posted = cur.fetchone()[0]
             cur.execute("""
-                UPDATE pipelines SET total_posted = %s, last_run = NOW(), updated_at = NOW()
+                SELECT COUNT(*) FROM posted_reels 
+                WHERE pipeline_id = %s AND status = 'success'
+            """, (pipeline_id,))
+            total_posted = cur.fetchone()[0]
+            
+            cur.execute("""
+                UPDATE pipelines 
+                SET total_posted = %s,
+                    last_run = NOW(),
+                    updated_at = NOW()
                 WHERE id = %s
             """, (total_posted, pipeline_id))
+            
             app.logger.info(f"📊 Updated pipeline {pipeline_id} total_posted to: {total_posted}")
+        
         conn.commit()
         app.logger.info(f"✅ Marked reel as posted: {reel_url[:50]}... (status: {status})")
         return True
@@ -1674,20 +2022,35 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
         conn.close()
 
 def update_pipeline_stats(pipeline_id, posted_count, failed_count):
+    """Update pipeline statistics - ALWAYS use actual count from posted_reels."""
     conn = get_db_connection()
     if not conn:
         return False
+    
     try:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM posted_reels WHERE pipeline_id = %s AND status = 'success'", (pipeline_id,))
-        total_posted = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM posted_reels WHERE pipeline_id = %s AND status = 'failed'", (pipeline_id,))
-        total_failed = cur.fetchone()[0]
+        
         cur.execute("""
-            UPDATE pipelines SET total_posted = %s, last_run = NOW(), updated_at = NOW()
+            SELECT COUNT(*) FROM posted_reels 
+            WHERE pipeline_id = %s AND status = 'success'
+        """, (pipeline_id,))
+        total_posted = cur.fetchone()[0]
+        
+        cur.execute("""
+            SELECT COUNT(*) FROM posted_reels 
+            WHERE pipeline_id = %s AND status = 'failed'
+        """, (pipeline_id,))
+        total_failed = cur.fetchone()[0]
+        
+        cur.execute("""
+            UPDATE pipelines 
+            SET total_posted = %s,
+                last_run = NOW(),
+                updated_at = NOW()
             WHERE id = %s
         """, (total_posted, pipeline_id))
         conn.commit()
+        
         app.logger.info(f"📊 Pipeline {pipeline_id} stats synced: {total_posted} posted, {total_failed} failed")
         return True
     except Exception as e:
@@ -1698,9 +2061,11 @@ def update_pipeline_stats(pipeline_id, posted_count, failed_count):
         conn.close()
 
 def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed', error_message=None):
+    """Log a pipeline run"""
     conn = get_db_connection()
     if not conn:
         return False
+    
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -1717,9 +2082,11 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
         conn.close()
 
 def cache_direct_url(reel_url, direct_url, caption=''):
+    """Cache a direct URL for future use."""
     conn = get_db_connection()
     if not conn:
         return False
+    
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -1741,17 +2108,25 @@ def cache_direct_url(reel_url, direct_url, caption=''):
         conn.close()
 
 def get_direct_url_from_cache_only(reel_url):
+    """Get direct URL from cache ONLY - no external requests."""
     conn = get_db_connection()
     if not conn:
         return None
+    
     try:
         cur = conn.cursor()
-        cur.execute("SELECT direct_url FROM reel_cache WHERE reel_url = %s AND created_at > NOW() - INTERVAL '30 days'", (reel_url,))
+        cur.execute("""
+            SELECT direct_url FROM reel_cache 
+            WHERE reel_url = %s AND created_at > NOW() - INTERVAL '30 days'
+        """, (reel_url,))
         result = cur.fetchone()
+        
         if result and result[0]:
             app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
             return result[0]
+        
         return None
+        
     except Exception as e:
         app.logger.error(f"Cache lookup error: {e}")
         return None
@@ -1759,9 +2134,8 @@ def get_direct_url_from_cache_only(reel_url):
         cur.close()
         conn.close()
 
-# ============== UPDATED RUN_PIPELINE WITH RANDOM SCHEDULING ==============
-
 def run_pipeline(pipeline_id):
+    """Execute a single pipeline - uses dual request for captions."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -1774,62 +2148,83 @@ def run_pipeline(pipeline_id):
         
         if not pipeline:
             return {"error": "Pipeline not found"}
+        
         if not pipeline['is_active']:
             return {"error": "Pipeline is inactive"}
         
-        unposted = get_unposted_reels(pipeline['profile_username'], pipeline['id'], pipeline['daily_limit'])
+        unposted = get_unposted_reels(
+            pipeline['profile_username'], 
+            pipeline['id'], 
+            pipeline['daily_limit']
+        )
         
         if not unposted:
             log_pipeline_run(pipeline['id'], 0, 0, 'completed', 'No unposted reels found')
             return {"message": "No unposted reels to post", "posted": 0}
         
-        # Generate random post times
-        num_posts = len(unposted)
-        post_times = generate_random_post_times(num_posts, start_hour=8, end_hour=22)
-        
-        scheduled_count = 0
+        posted_count = 0
         failed_count = 0
         pending_count = 0
         
-        for idx, reel in enumerate(unposted):
+        for reel in unposted:
             try:
                 reel_url = reel['url']
                 app.logger.info(f"📝 Processing: {reel_url[:50]}...")
+                
                 caption = get_caption_for_reel(reel_url, pipeline['profile_username'], pipeline['id'])
                 
                 if caption and caption.strip():
                     app.logger.info(f"✅ Found caption: {caption[:50]}...")
+                    
                     direct_video_url = get_direct_video_url(reel_url)
                     if not direct_video_url:
                         direct_video_url = get_direct_url_from_cache_only(reel_url)
                     
                     if direct_video_url:
-                        scheduled_time = post_times[idx] if idx < len(post_times) else None
-                        if not scheduled_time:
-                            hours_from_now = random.randint(1, 24)
-                            scheduled_time = datetime.utcnow() + timedelta(hours=hours_from_now)
-                            scheduled_time = scheduled_time.replace(minute=random.randint(0, 59), second=0)
+                        result = publish_to_facebook(
+                            video_url=direct_video_url,
+                            text=caption,
+                            account_id=pipeline['facebook_account_id'],
+                            publish_now=True
+                        )
                         
-                        cur = conn.cursor()
-                        cur.execute("""
-                            INSERT INTO scheduled_posts (
-                                reel_url, direct_video_url, caption, pipeline_id, scheduled_time
+                        if result and not result.get('error'):
+                            post_id = result.get('post', {}).get('_id') or result.get('post_id')
+                            post_url = None
+                            
+                            platforms = result.get('post', {}).get('platforms', [])
+                            for platform in platforms:
+                                if platform.get('platform') == 'facebook':
+                                    post_url = platform.get('publishedUrl')
+                                    break
+                            
+                            mark_reel_as_posted(
+                                pipeline_id=pipeline['id'],
+                                reel_url=reel_url,
+                                direct_video_url=direct_video_url,
+                                caption=caption,
+                                facebook_post_id=post_id,
+                                facebook_post_url=post_url,
+                                status='success'
                             )
-                            VALUES (%s, %s, %s, %s, %s)
-                            ON CONFLICT (reel_url) DO UPDATE SET
-                                scheduled_time = EXCLUDED.scheduled_time,
-                                updated_at = NOW()
-                        """, (reel_url, direct_video_url, caption, pipeline['id'], scheduled_time))
-                        conn.commit()
-                        cur.close()
-                        scheduled_count += 1
-                        time_str = scheduled_time.strftime('%Y-%m-%d %H:%M:%S UTC')
-                        app.logger.info(f"📅 Scheduled post at {time_str}: {reel_url[:50]}...")
+                            posted_count += 1
+                            app.logger.info(f"✅ Posted immediately: {reel_url[:50]}...")
+                        else:
+                            error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+                            mark_reel_as_posted(
+                                pipeline_id=pipeline['id'],
+                                reel_url=reel_url,
+                                direct_video_url=direct_video_url,
+                                caption=caption,
+                                status='failed',
+                                error_message=str(error_msg)
+                            )
+                            failed_count += 1
                     else:
                         failed_count += 1
-                        app.logger.error(f"❌ Could not get video URL: {reel_url[:50]}...")
                 else:
-                    app.logger.info(f"⏳ No caption, creating pending post: {reel_url[:50]}...")
+                    app.logger.info(f"⏳ No caption, using DUAL+RETRY: {reel_url[:50]}...")
+                    
                     direct_video_url = get_direct_video_url(reel_url)
                     if not direct_video_url:
                         direct_video_url = get_direct_url_from_cache_only(reel_url)
@@ -1842,9 +2237,13 @@ def run_pipeline(pipeline_id):
                             profile_username=pipeline['profile_username'],
                             facebook_account_id=pipeline['facebook_account_id']
                         )
+                        
                         if post_id:
                             trigger_caption_fetch_with_dual_requests_and_retry(
-                                reel_url, pipeline['id'], pipeline['profile_username'], max_retries=3
+                                reel_url,
+                                pipeline['id'],
+                                pipeline['profile_username'],
+                                max_retries=3
                             )
                             pending_count += 1
                             app.logger.info(f"⏳ Dual request sent for: {reel_url[:50]}...")
@@ -1852,20 +2251,24 @@ def run_pipeline(pipeline_id):
                             failed_count += 1
                     else:
                         failed_count += 1
+                    
             except Exception as e:
                 app.logger.error(f"Error processing reel: {e}")
                 failed_count += 1
         
-        update_pipeline_stats(pipeline['id'], scheduled_count, failed_count)
-        log_pipeline_run(pipeline['id'], scheduled_count, failed_count, 'completed' if failed_count == 0 else 'partial')
+        update_pipeline_stats(pipeline['id'], posted_count, failed_count)
+        
+        log_pipeline_run(pipeline['id'], posted_count, failed_count, 
+                        'completed' if failed_count == 0 else 'partial')
         
         return {
-            "message": f"Scheduled {scheduled_count} posts at random times, {pending_count} pending captions, {failed_count} failed",
-            "scheduled": scheduled_count,
+            "message": f"Posted {posted_count} reels, {pending_count} pending, {failed_count} failed",
+            "posted": posted_count,
             "pending": pending_count,
             "failed": failed_count,
             "total": len(unposted)
         }
+        
     except Exception as e:
         app.logger.error(f"Pipeline execution error: {e}")
         log_pipeline_run(pipeline_id, 0, 0, 'error', str(e))
@@ -1874,125 +2277,56 @@ def run_pipeline(pipeline_id):
         conn.close()
 
 def run_all_active_pipelines():
+    """Run all active pipelines"""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT id FROM pipelines WHERE is_active = TRUE")
         pipelines = cur.fetchall()
         cur.close()
+        
         results = []
         for pipeline in pipelines:
             result = run_pipeline(pipeline['id'])
-            results.append({"pipeline_id": pipeline['id'], "result": result})
-        return {"message": f"Ran {len(pipelines)} pipelines", "results": results}
+            results.append({
+                "pipeline_id": pipeline['id'],
+                "result": result
+            })
+        
+        return {
+            "message": f"Ran {len(pipelines)} pipelines",
+            "results": results
+        }
+        
     except Exception as e:
         return {"error": str(e)}
     finally:
         conn.close()
 
-# ============== SCHEDULER ENDPOINTS ==============
-
-@app.route("/api/scheduler/process", methods=["POST"])
-def process_scheduled_posts():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT * FROM scheduled_posts 
-            WHERE status = 'pending' AND scheduled_time <= NOW()
-            ORDER BY scheduled_time ASC LIMIT 5
-        """)
-        due_posts = cur.fetchall()
-        if not due_posts:
-            return jsonify({"status": "success", "message": "No posts due", "posted": 0})
-        posted_count = 0
-        failed_count = 0
-        for post in due_posts:
-            try:
-                delay_seconds = random.randint(30, 300)
-                app.logger.info(f"⏳ Waiting {delay_seconds}s before posting...")
-                time.sleep(delay_seconds)
-                cur.execute("SELECT * FROM pipelines WHERE id = %s", (post['pipeline_id'],))
-                pipeline = cur.fetchone()
-                if not pipeline:
-                    continue
-                result = publish_to_facebook(
-                    video_url=post['direct_video_url'],
-                    text=post['caption'],
-                    account_id=pipeline['facebook_account_id'],
-                    publish_now=True
-                )
-                if result and not result.get('error'):
-                    mark_reel_as_posted(
-                        pipeline_id=post['pipeline_id'],
-                        reel_url=post['reel_url'],
-                        direct_video_url=post['direct_video_url'],
-                        caption=post['caption'],
-                        facebook_post_id=result.get('post', {}).get('_id'),
-                        status='success'
-                    )
-                    cur.execute("""
-                        UPDATE scheduled_posts SET status = 'posted', posted_at = NOW(), updated_at = NOW()
-                        WHERE id = %s
-                    """, (post['id'],))
-                    conn.commit()
-                    posted_count += 1
-                    app.logger.info(f"✅ Posted scheduled post: {post['reel_url'][:50]}...")
-                else:
-                    failed_count += 1
-                    cur.execute("""
-                        UPDATE scheduled_posts SET status = 'failed', error_message = %s, updated_at = NOW()
-                        WHERE id = %s
-                    """, (str(result.get('error', 'Unknown error')), post['id']))
-                    conn.commit()
-            except Exception as e:
-                app.logger.error(f"Error processing scheduled post: {e}")
-                failed_count += 1
-        return jsonify({"status": "success", "posted": posted_count, "failed": failed_count})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route("/api/scheduler/daily", methods=["POST"])
-def daily_scheduler():
-    app.logger.info("🕐 Running daily scheduler at midnight...")
-    result = run_all_active_pipelines()
-    try:
-        conn = get_db_connection()
-        if conn:
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE scheduled_posts SET status = 'failed', error_message = 'Expired - not posted within 48 hours'
-                WHERE status = 'pending' AND scheduled_time < NOW() - INTERVAL '48 hours'
-            """)
-            conn.commit()
-            cur.close()
-            conn.close()
-            app.logger.info(f"🧹 Cleaned up old scheduled posts")
-    except Exception as e:
-        app.logger.error(f"Cleanup error: {e}")
-    return jsonify({"status": "success", "message": "Daily scheduler completed at midnight", "result": result})
-
 def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
+    """
+    Ensure a reel has a caption - uses async fetch if missing.
+    """
     conn = get_db_connection()
     if not conn:
         return None
+    
     try:
         cur = conn.cursor()
+        
         cur.execute("""
             SELECT results FROM scraped_reels 
             WHERE EXISTS (
                 SELECT 1 FROM jsonb_array_elements(results) AS elem
                 WHERE elem->>'username' = %s
             )
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC
+            LIMIT 1
         """, (profile_username,))
+        
         result = cur.fetchone()
         if result:
             results = result[0]
@@ -2006,14 +2340,21 @@ def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
                                 if caption and caption.strip():
                                     app.logger.info(f"📝 Found caption in scraped_reels")
                                     return caption
-        cur.execute("SELECT caption FROM posted_reels WHERE pipeline_id = %s AND reel_url = %s", (pipeline_id, reel_url))
+        
+        cur.execute("""
+            SELECT caption FROM posted_reels 
+            WHERE pipeline_id = %s AND reel_url = %s
+        """, (pipeline_id, reel_url))
         result = cur.fetchone()
         if result and result[0] and result[0].strip():
             app.logger.info(f"📝 Found caption in posted_reels")
             return result[0]
+        
         app.logger.info(f"🔥 Caption not found, triggering dual fetch for: {reel_url[:50]}...")
         trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, profile_username)
+        
         return None
+        
     except Exception as e:
         app.logger.error(f"Error ensuring caption: {e}")
         return None
@@ -2031,21 +2372,31 @@ def index():
 
 @app.route("/api/cookies/upload", methods=["POST"])
 def upload_cookies():
+    """Upload cookies.json file (saves to Neon PostgreSQL)."""
     if 'cookies_file' not in request.files:
         return jsonify({"error": "No file uploaded", "status": "error"}), 400
+
     file = request.files['cookies_file']
     if file.filename == '':
         return jsonify({"error": "No file selected", "status": "error"}), 400
+
     if not file.filename.endswith('.json'):
         return jsonify({"error": "File must be a JSON file", "status": "error"}), 400
+
     try:
         content = file.read().decode('utf-8')
         cookies_data = json.loads(content)
+
         if not isinstance(cookies_data, list):
             return jsonify({"error": "Invalid cookie format - expected an array", "status": "error"}), 400
-        has_session = any(isinstance(c, dict) and c.get('name') in ('sessionid', 'ds_user_id') for c in cookies_data)
+
+        has_session = any(
+            isinstance(c, dict) and c.get('name') in ('sessionid', 'ds_user_id')
+            for c in cookies_data
+        )
         if not has_session:
             return jsonify({"error": "No session cookies found. Make sure you're logged into Instagram.", "status": "error"}), 400
+
         username = None
         for cookie in cookies_data:
             if isinstance(cookie, dict) and cookie.get('name') == 'ds_user':
@@ -2058,15 +2409,39 @@ def upload_cookies():
                 elif ':' in value:
                     username = value.split(':')[0]
                 break
+
         user_id = get_user_id()
+        
         success = save_cookies_to_db(cookies_data, username or 'Instagram User')
+        
         if not success:
             return jsonify({"error": "Failed to save cookies to database", "status": "error"}), 500
+
+        # 🔥 FIX: Store only small data in session, not the cookies
         session['instagram_username'] = username or 'Instagram User'
         session['instagram_saved'] = True
-        response = jsonify({"status": "success", "message": "Cookies uploaded and saved to database!", "username": username or 'Instagram User'})
-        response.set_cookie('user_id', user_id, max_age=30*24*60*60, path='/', secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')), httponly=True, samesite='Lax')
+        # 🔥 REMOVED: session['instagram_encrypted'] = encrypted
+        # 🔥 REMOVED: session['cookies_data'] = cookies_data
+        # 🔥 REMOVED: session['username'] = username
+
+        response = jsonify({
+            "status": "success",
+            "message": "Cookies uploaded and saved to database!",
+            "username": username or 'Instagram User'
+        })
+        
+        response.set_cookie(
+            'user_id',
+            user_id,
+            max_age=30*24*60*60,
+            path='/',
+            secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
+            httponly=True,
+            samesite='Lax'
+        )
+        
         return response
+
     except json.JSONDecodeError:
         return jsonify({"error": "Invalid JSON file", "status": "error"}), 400
     except Exception as e:
@@ -2075,16 +2450,37 @@ def upload_cookies():
 
 @app.route("/api/instagram/cookies_status", methods=["GET"])
 def instagram_cookies_status():
+    """Check if Instagram cookies are saved - ONLY check database."""
     db_cookies = get_cookies_from_db()
     if db_cookies:
-        return jsonify({"status": "success", "has_cookies": True, "username": db_cookies.get('username', 'Instagram User'), "message": "Cookies are saved in database"})
-    return jsonify({"status": "success", "has_cookies": False, "message": "No saved cookies found"})
+        return jsonify({
+            "status": "success",
+            "has_cookies": True,
+            "username": db_cookies.get('username', 'Instagram User'),
+            "message": "Cookies are saved in database"
+        })
+    
+    # 🔥 REMOVED: Don't check session for encrypted cookies
+    
+    return jsonify({
+        "status": "success",
+        "has_cookies": False,
+        "message": "No saved cookies found"
+    })
 
 @app.route("/api/cookies/clear", methods=["POST"])
 def clear_cookies():
+    """Clear uploaded cookies from Neon PostgreSQL and session."""
     clear_cookies_from_db()
+    
+    # 🔥 Clear only small session data
     session.pop('instagram_username', None)
     session.pop('instagram_saved', None)
+    # 🔥 REMOVED: session.pop('instagram_encrypted', None)
+    # 🔥 REMOVED: session.pop('cookies_data', None)
+    # 🔥 REMOVED: session.pop('username', None)
+    # 🔥 REMOVED: session.pop('cookie_file', None)
+
     for file in ['cookies_netscape.txt', 'instagram_cookies_persistent.txt']:
         path = os.path.join('/tmp', file)
         if os.path.exists(path):
@@ -2092,23 +2488,35 @@ def clear_cookies():
                 os.remove(path)
             except Exception:
                 pass
-    return jsonify({"status": "success", "message": "Cookies cleared successfully"})
+
+    return jsonify({
+        "status": "success",
+        "message": "Cookies cleared successfully"
+    })
 
 # ============== SCRAPE PROXY ==============
 
 @app.route("/api/scrape/proxy", methods=["POST"])
 def scrape_proxy():
+    """Proxy endpoint that only fetches NEW reels."""
     data = request.get_json(silent=True) or {}
     usernames = data.get("usernames", [])
     max_reels = data.get("maxReels", 50)
     fetch_captions = data.get("fetch_captions", True)
+    
     app.logger.info(f"📝 Scraping usernames: {usernames}")
     app.logger.info(f"📝 Max reels: {max_reels}")
+    
     cookies = None
+    
+    # 🔥 FIX: Only get cookies from database
     db_cookies = get_cookies_from_db()
     if db_cookies:
         cookies = db_cookies.get('cookie_data', [])
         app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from Neon DB")
+    
+    # 🔥 REMOVED: Don't check session for encrypted cookies
+    
     if not cookies:
         cookies_json_env = os.environ.get('COOKIES_JSON')
         if cookies_json_env:
@@ -2117,27 +2525,45 @@ def scrape_proxy():
                 app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from env")
             except:
                 pass
+    
     if not cookies:
-        return jsonify({"status": "error", "error": "No Instagram cookies found. Please upload your cookies.json file first."}), 400
+        return jsonify({
+            "status": "error",
+            "error": "No Instagram cookies found. Please upload your cookies.json file first."
+        }), 400
+    
     data['cookies'] = cookies
+    
     try:
         existing_urls = {}
         for username in usernames:
             existing_urls[username] = get_existing_reel_urls(username)
             app.logger.info(f"📊 @{username}: {len(existing_urls[username])} existing reels")
-        response = requests.post('https://ig-reels-scraper.onrender.com/api/scrape/start', json=data, headers={'Content-Type': 'application/json'}, timeout=60)
+        
+        response = requests.post(
+            'https://ig-reels-scraper.onrender.com/api/scrape/start',
+            json=data,
+            headers={'Content-Type': 'application/json'},
+            timeout=60
+        )
+        
         app.logger.info(f"Proxy: Render responded with status {response.status_code}")
+        
         if response.status_code == 200:
             result_data = response.json()
             results = result_data.get('results', [])
+            
             new_results = []
             total_new_reels = 0
+            
             for profile in results:
                 username = profile.get('username')
                 if not username:
                     continue
+                
                 existing = existing_urls.get(username, set())
                 reels = profile.get('reels', [])
+                
                 new_reels = []
                 for reel in reels:
                     if isinstance(reel, str):
@@ -2149,6 +2575,7 @@ def scrape_proxy():
                         if url and url not in existing:
                             new_reels.append(reel)
                             existing.add(url)
+                
                 if new_reels:
                     profile['reels'] = new_reels
                     new_results.append(profile)
@@ -2156,12 +2583,15 @@ def scrape_proxy():
                     app.logger.info(f"✅ @{username}: {len(new_reels)} new reels found")
                 else:
                     app.logger.info(f"ℹ️ @{username}: No new reels found")
+            
             if new_results:
                 with app.test_request_context():
                     store_scraped_data()
                     app.logger.info(f"✅ Stored {total_new_reels} new reels for {len(new_results)} profiles")
+                
                 if fetch_captions:
                     app.logger.info(f"📝 Auto-fetching captions for {total_new_reels} new reels...")
+                    
                     all_reel_urls = []
                     for profile in new_results:
                         reels = profile.get('reels', [])
@@ -2172,8 +2602,10 @@ def scrape_proxy():
                                 url = reel.get('url')
                                 if url:
                                     all_reel_urls.append(url)
+                    
                     if all_reel_urls:
                         captions_map = fetch_captions_batch(all_reel_urls)
+                        
                         for profile in new_results:
                             reels = profile.get('reels', [])
                             processed_reels = []
@@ -2181,58 +2613,109 @@ def scrape_proxy():
                                 if isinstance(reel, str):
                                     reel_url = reel
                                     caption = captions_map.get(reel_url, '')
-                                    processed_reels.append({"url": reel_url, "caption": caption or ''})
+                                    processed_reels.append({
+                                        "url": reel_url,
+                                        "caption": caption or ''
+                                    })
                                 elif isinstance(reel, dict):
                                     reel_url = reel.get('url')
                                     if reel_url:
                                         caption = captions_map.get(reel_url, '')
-                                        processed_reels.append({"url": reel_url, "caption": caption or ''})
+                                        processed_reels.append({
+                                            "url": reel_url,
+                                            "caption": caption or ''
+                                        })
                                     else:
                                         processed_reels.append(reel)
                                 else:
                                     processed_reels.append(reel)
                             profile['reels'] = processed_reels
+                        
                         app.logger.info(f"✅ Added captions to {len(all_reel_urls)} new reels")
+                
                 extracted_usernames = [p.get('username') for p in new_results if p.get('username')]
-                return jsonify({"status": "success", "job_id": result_data.get('job_id') or str(uuid.uuid4()), "usernames": extracted_usernames, "message": f"Found {total_new_reels} new reels across {len(new_results)} profiles", "results": new_results, "auto_sync": False, "new_reels": total_new_reels, "profiles_with_new": len(new_results)}), 200
+                
+                return jsonify({
+                    "status": "success",
+                    "job_id": result_data.get('job_id') or str(uuid.uuid4()),
+                    "usernames": extracted_usernames,
+                    "message": f"Found {total_new_reels} new reels across {len(new_results)} profiles",
+                    "results": new_results,
+                    "auto_sync": False,
+                    "new_reels": total_new_reels,
+                    "profiles_with_new": len(new_results)
+                }), 200
             else:
-                return jsonify({"status": "success", "message": "No new reels found for the requested profiles", "usernames": usernames, "results": []}), 200
+                return jsonify({
+                    "status": "success",
+                    "message": "No new reels found for the requested profiles",
+                    "usernames": usernames,
+                    "results": []
+                }), 200
+        
         return jsonify(response.json()), response.status_code
+        
     except requests.exceptions.Timeout:
-        return jsonify({"status": "error", "error": "Render service timed out. Please try again."}), 504
+        return jsonify({
+            "status": "error",
+            "error": "Render service timed out. Please try again."
+        }), 504
     except requests.exceptions.ConnectionError:
-        return jsonify({"status": "error", "error": "Could not connect to Render service. Please try again later."}), 503
+        return jsonify({
+            "status": "error",
+            "error": "Could not connect to Render service. Please try again later."
+        }), 503
     except Exception as e:
         app.logger.error(f"Proxy error: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
-# ============== SCRAPED DATA STORAGE ==============
+# ============== SCRAPED DATA STORAGE (DATABASE) ==============
 
 def store_scraped_data_internal(job_id, results, usernames, status='completed'):
+    """Internal function to store scraped data in database."""
     if not results:
         return False
+    
     user_id = get_user_id()
     conn = get_db_connection()
     if not conn:
         return False
+    
     try:
         total_profiles = len(results)
         total_reels = 0
         for profile in results:
             if profile.get('reels'):
                 total_reels += len(profile.get('reels', []))
+        
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO scraped_reels (user_id, job_id, usernames, results, status, total_profiles, total_reels, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id, job_id) DO UPDATE SET 
-                results = EXCLUDED.results, usernames = EXCLUDED.usernames,
-                status = EXCLUDED.status, total_profiles = EXCLUDED.total_profiles,
-                total_reels = EXCLUDED.total_reels, updated_at = NOW()
-        """, (user_id, job_id or f"job_{datetime.utcnow().isoformat()}", usernames, json.dumps(results), status, total_profiles, total_reels))
+            ON CONFLICT (user_id, job_id) 
+            DO UPDATE SET 
+                results = EXCLUDED.results,
+                usernames = EXCLUDED.usernames,
+                status = EXCLUDED.status,
+                total_profiles = EXCLUDED.total_profiles,
+                total_reels = EXCLUDED.total_reels,
+                updated_at = NOW()
+        """, (
+            user_id, 
+            job_id or f"job_{datetime.utcnow().isoformat()}", 
+            usernames,
+            json.dumps(results),
+            status,
+            total_profiles,
+            total_reels
+        ))
         conn.commit()
         app.logger.info(f"Stored {total_profiles} profiles from job {job_id}")
         return True
+        
     except Exception as e:
         app.logger.error(f"Database store error: {e}")
         return False
@@ -2242,26 +2725,34 @@ def store_scraped_data_internal(job_id, results, usernames, status='completed'):
 
 @app.route("/api/scraped/store", methods=["POST"])
 def store_scraped_data():
+    """Store scraped data from Render - merges with existing data."""
     data = request.get_json(silent=True) or {}
     results = data.get("results", [])
     job_id = data.get("job_id")
+    
     if not results:
         return jsonify({"error": "No results provided"}), 400
+    
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         user_id = get_user_id()
         all_usernames = []
         processed_results = []
+        
         for profile in results:
             username = profile.get('username')
             if username:
                 all_usernames.append(username)
+            
             existing_urls = get_existing_reel_urls(username)
             new_reels = profile.get('reels', [])
+            
             merged_reels = []
             existing_reels_dict = {}
+            
             if existing_urls:
                 cur = conn.cursor()
                 cur.execute("""
@@ -2270,10 +2761,12 @@ def store_scraped_data():
                         SELECT 1 FROM jsonb_array_elements(results) AS elem
                         WHERE elem->>'username' = %s
                     )
-                    ORDER BY created_at DESC LIMIT 1
+                    ORDER BY created_at DESC
+                    LIMIT 1
                 """, (username,))
                 result = cur.fetchone()
                 cur.close()
+                
                 if result:
                     existing_results = result[0]
                     for p in existing_results:
@@ -2286,8 +2779,10 @@ def store_scraped_data():
                                 elif isinstance(reel, str):
                                     existing_reels_dict[reel] = {"url": reel, "caption": ""}
                             break
+            
             for url, reel_data in existing_reels_dict.items():
                 merged_reels.append(reel_data)
+            
             for reel in new_reels:
                 if isinstance(reel, dict):
                     url = reel.get('url')
@@ -2298,21 +2793,48 @@ def store_scraped_data():
                     if reel not in existing_reels_dict:
                         merged_reels.append({"url": reel, "caption": ""})
                         existing_reels_dict[reel] = {"url": reel, "caption": ""}
-            merged_profile = {"username": username, "reels": merged_reels, "status": profile.get('status', 'ok')}
+            
+            merged_profile = {
+                "username": username,
+                "reels": merged_reels,
+                "status": profile.get('status', 'ok')
+            }
             processed_results.append(merged_profile)
+        
         total_reels = sum(len(p.get('reels', [])) for p in processed_results)
+        
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO scraped_reels (user_id, job_id, usernames, results, status, total_profiles, total_reels, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id, job_id) DO UPDATE SET 
-                results = EXCLUDED.results, usernames = EXCLUDED.usernames,
-                status = EXCLUDED.status, total_profiles = EXCLUDED.total_profiles,
-                total_reels = EXCLUDED.total_reels, updated_at = NOW()
-        """, (user_id, job_id or f"job_{datetime.utcnow().isoformat()}", all_usernames, json.dumps(processed_results), 'completed', len(processed_results), total_reels))
+            ON CONFLICT (user_id, job_id) 
+            DO UPDATE SET 
+                results = EXCLUDED.results,
+                usernames = EXCLUDED.usernames,
+                status = EXCLUDED.status,
+                total_profiles = EXCLUDED.total_profiles,
+                total_reels = EXCLUDED.total_reels,
+                updated_at = NOW()
+        """, (
+            user_id,
+            job_id or f"job_{datetime.utcnow().isoformat()}",
+            all_usernames,
+            json.dumps(processed_results),
+            'completed',
+            len(processed_results),
+            total_reels
+        ))
         conn.commit()
+        
         app.logger.info(f"✅ Merged: {len(processed_results)} profiles with {total_reels} total reels")
-        return jsonify({"status": "success", "message": f"Merged {len(processed_results)} profiles with {total_reels} total reels", "profiles": len(processed_results), "reels": total_reels})
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Merged {len(processed_results)} profiles with {total_reels} total reels",
+            "profiles": len(processed_results),
+            "reels": total_reels
+        })
+        
     except Exception as e:
         app.logger.error(f"Storage error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2324,18 +2846,33 @@ def store_scraped_data():
 
 @app.route("/api/scraped/latest", methods=["GET"])
 def get_scraped_data():
+    """Get ALL scraped data from PostgreSQL - show all profiles from all jobs."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT results, total_profiles, total_reels, usernames, created_at FROM scraped_reels ORDER BY created_at DESC")
+        
+        cur.execute("""
+            SELECT 
+                results,
+                total_profiles,
+                total_reels,
+                usernames,
+                created_at
+            FROM scraped_reels 
+            ORDER BY created_at DESC
+        """)
+        
         all_results = cur.fetchall()
+        
         if all_results:
             combined_results = []
             seen_usernames = set()
             total_profiles = 0
             total_reels = 0
+            
             for entry in all_results:
                 results = entry['results']
                 if results and isinstance(results, list):
@@ -2344,7 +2881,11 @@ def get_scraped_data():
                         if username:
                             if username not in seen_usernames:
                                 seen_usernames.add(username)
-                                combined_results.append({'username': username, 'reels': profile.get('reels', []), 'status': profile.get('status', 'ok')})
+                                combined_results.append({
+                                    'username': username,
+                                    'reels': profile.get('reels', []),
+                                    'status': profile.get('status', 'ok')
+                                })
                                 total_profiles += 1
                                 total_reels += len(profile.get('reels', []))
                             else:
@@ -2357,16 +2898,33 @@ def get_scraped_data():
                                                 existing_reels.append(reel)
                                         total_reels += len(new_reels)
                                         break
+            
             combined_results.sort(key=lambda x: len(x.get('reels', [])), reverse=True)
+            
             all_usernames = []
             cur.execute("SELECT DISTINCT unnest(usernames) as username FROM scraped_reels WHERE usernames IS NOT NULL AND array_length(usernames, 1) > 0")
             username_rows = cur.fetchall()
             for row in username_rows:
                 if row['username']:
                     all_usernames.append(row['username'])
-            return jsonify({"status": "success", "results": combined_results, "total_profiles": len(combined_results), "total_reels": total_reels, "usernames": list(seen_usernames), "all_usernames": all_usernames, "job_count": len(all_results), "message": f"Loaded {len(combined_results)} unique profiles with {total_reels} total reels"})
+            
+            return jsonify({
+                "status": "success",
+                "results": combined_results,
+                "total_profiles": len(combined_results),
+                "total_reels": total_reels,
+                "usernames": list(seen_usernames),
+                "all_usernames": all_usernames,
+                "job_count": len(all_results),
+                "message": f"Loaded {len(combined_results)} unique profiles with {total_reels} total reels"
+            })
         else:
-            return jsonify({"status": "success", "results": [], "message": "No scraped data found in database"})
+            return jsonify({
+                "status": "success",
+                "results": [],
+                "message": "No scraped data found in database"
+            })
+            
     except Exception as e:
         app.logger.error(f"Database error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2376,23 +2934,51 @@ def get_scraped_data():
 
 @app.route("/api/scraped/delete", methods=["POST"])
 def delete_scraped_by_username():
+    """Delete scraped data for a specific username - PERMANENT DELETE from database."""
     data = request.get_json(silent=True) or {}
     username = data.get("username", "").strip()
+    
     if not username:
         return jsonify({"error": "Username is required"}), 400
+    
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM scraped_reels WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(results) AS r WHERE r->>'username' = %s)", (username,))
+        
+        cur.execute("""
+            SELECT COUNT(*) FROM scraped_reels 
+            WHERE EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS r 
+                WHERE r->>'username' = %s
+            )
+        """, (username,))
         jobs_count = cur.fetchone()[0]
+        
         app.logger.info(f"📊 Found {jobs_count} jobs containing username: {username}")
-        cur.execute("DELETE FROM scraped_reels WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(results) AS r WHERE r->>'username' = %s)", (username,))
+        
+        cur.execute("""
+            DELETE FROM scraped_reels 
+            WHERE EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS r 
+                WHERE r->>'username' = %s
+            )
+        """, (username,))
+        
         deleted_count = cur.rowcount
         conn.commit()
+        
         app.logger.info(f"✅ PERMANENTLY DELETED {deleted_count} jobs for username: {username}")
-        return jsonify({"status": "success", "message": f"Permanently deleted {deleted_count} jobs for @{username}", "deleted_count": deleted_count, "jobs_found": jobs_count})
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Permanently deleted {deleted_count} jobs for @{username}",
+            "deleted_count": deleted_count,
+            "jobs_found": jobs_count
+        })
+        
     except Exception as e:
         app.logger.error(f"❌ Delete error: {e}")
         conn.rollback()
@@ -2407,10 +2993,12 @@ def delete_scraped_by_username():
 def fetch_info():
     data = request.get_json(silent=True) or {}
     url = (data.get("url") or "").strip()
+
     if not url:
         return jsonify({"error": "Paste an Instagram link first."}), 400
     if not is_valid_instagram_url(url):
         return jsonify({"error": "That doesn't look like an instagram.com link."}), 400
+
     try:
         with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -2418,34 +3006,50 @@ def fetch_info():
         return jsonify({"error": clean_error(str(e))}), 422
     except Exception as e:
         return jsonify({"error": clean_error(str(e))}), 422
+
     entries = info.get("entries") if "entries" in info else [info]
     entries = [e for e in entries if e]
+
     items = []
     for e in entries:
-        items.append({"id": e.get("id"), "title": (e.get("title") or e.get("description") or "Instagram video").strip()[:140], "thumbnail": e.get("thumbnail"), "duration": e.get("duration"), "uploader": e.get("uploader") or e.get("uploader_id"), "ext": e.get("ext", "mp4")})
+        items.append({
+            "id": e.get("id"),
+            "title": (e.get("title") or e.get("description") or "Instagram video").strip()[:140],
+            "thumbnail": e.get("thumbnail"),
+            "duration": e.get("duration"),
+            "uploader": e.get("uploader") or e.get("uploader_id"),
+            "ext": e.get("ext", "mp4"),
+        })
+
     if not items:
         return jsonify({"error": "No downloadable video found at that link."}), 422
+
     return jsonify({"items": items, "source_url": url})
 
 @app.route("/api/download", methods=["GET"])
 def download_video():
     url = (request.args.get("url") or "").strip()
     media_id = (request.args.get("id") or "").strip()
+
     if not is_valid_instagram_url(url):
         return jsonify({"error": "Invalid or missing url."}), 400
+
     try:
         direct_url = get_direct_video_url(url, media_id)
         if direct_url:
             return jsonify({"download_url": direct_url})
     except Exception as e:
         app.logger.warning(f"Direct URL failed: {e}")
+
     try:
         filepath, job_dir, target = download_video_file(url, media_id)
         download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
+
         @after_this_request
         def cleanup(response):
             shutil.rmtree(job_dir, ignore_errors=True)
             return response
+
         return send_file(filepath, as_attachment=True, download_name=download_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2456,26 +3060,48 @@ def api_download():
     url = data.get("url", "").strip()
     media_id = data.get("media_id", "").strip()
     action = data.get("action", "url_only")
+
     if not url:
         return jsonify({"error": "Missing 'url' parameter"}), 400
     if not is_valid_instagram_url(url):
         return jsonify({"error": "Invalid Instagram URL"}), 400
+
     try:
-        response = {"status": "success", "url": url, "media_id": media_id, "action": action, "timestamp": datetime.utcnow().isoformat()}
+        response = {
+            "status": "success",
+            "url": url,
+            "media_id": media_id,
+            "action": action,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
         with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
+
         entries = info.get("entries") if "entries" in info else [info]
         entries = [e for e in entries if e]
+
         if not entries:
             return jsonify({"error": "No videos found"}), 422
+
         target = entries[0]
         if media_id:
             target = next((e for e in entries if e.get("id") == media_id), None) or target
-        video_info = {"id": target.get("id"), "title": target.get("title", "Instagram video"), "duration": target.get("duration"), "uploader": target.get("uploader") or target.get("uploader_id"), "thumbnail": target.get("thumbnail"), "ext": target.get("ext", "mp4")}
+
+        video_info = {
+            "id": target.get("id"),
+            "title": target.get("title", "Instagram video"),
+            "duration": target.get("duration"),
+            "uploader": target.get("uploader") or target.get("uploader_id"),
+            "thumbnail": target.get("thumbnail"),
+            "ext": target.get("ext", "mp4")
+        }
         response["video_info"] = video_info
+
         session['current_video_url'] = get_direct_video_url(url, media_id)
         session['current_video_title'] = video_info.get('title')
         session['current_video_thumbnail'] = video_info.get('thumbnail')
+
         if action == "url_only":
             direct_url = get_direct_video_url(url, media_id)
             if direct_url:
@@ -2483,17 +3109,23 @@ def api_download():
             else:
                 response["download_url"] = f"/api/download?url={url}&id={media_id}"
                 response["warning"] = "Direct URL not available, using streaming fallback"
+
         elif action == "download":
             filepath, job_dir, target = download_video_file(url, media_id)
             download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
+
             @after_this_request
             def cleanup(response_obj):
                 shutil.rmtree(job_dir, ignore_errors=True)
                 return response_obj
+
             return send_file(filepath, as_attachment=True, download_name=download_name)
+
         else:
             return jsonify({"error": f"Unknown action: {action}"}), 400
+
         return jsonify(response)
+
     except Exception as e:
         return jsonify({"error": clean_error(str(e))}), 500
 
@@ -2505,10 +3137,13 @@ def save_bluesky_credentials():
     identifier = data.get("identifier", "").strip()
     password = data.get("password", "").strip()
     remember = data.get("remember", True)
+
     if not identifier or not password:
         return jsonify({"error": "Missing identifier or password"}), 400
+
     try:
         session_data = create_bluesky_session(identifier, password)
+
         if remember:
             encrypted = encrypt_credentials(identifier, password)
             if encrypted:
@@ -2519,7 +3154,14 @@ def save_bluesky_credentials():
                 session['bluesky_handle'] = session_data.get('handle', identifier)
                 session['bluesky_did'] = session_data.get('did')
                 session['bluesky_saved'] = True
-        return jsonify({"status": "success", "message": "Credentials saved successfully!", "handle": session_data.get('handle'), "did": session_data.get('did'), "remembered": remember})
+
+        return jsonify({
+            "status": "success",
+            "message": "Credentials saved successfully!",
+            "handle": session_data.get('handle'),
+            "did": session_data.get('did'),
+            "remembered": remember
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 401
 
@@ -2527,11 +3169,23 @@ def save_bluesky_credentials():
 def bluesky_credentials_status():
     encrypted = session.get('bluesky_encrypted')
     identifier = session.get('bluesky_identifier')
+
     if encrypted:
         decrypted = decrypt_credentials(encrypted)
         if decrypted:
-            return jsonify({"status": "success", "has_credentials": True, "identifier": identifier or decrypted[0], "handle": session.get('bluesky_handle', identifier or decrypted[0]), "message": "Credentials are saved and valid"})
-    return jsonify({"status": "success", "has_credentials": False, "message": "No saved credentials found"})
+            return jsonify({
+                "status": "success",
+                "has_credentials": True,
+                "identifier": identifier or decrypted[0],
+                "handle": session.get('bluesky_handle', identifier or decrypted[0]),
+                "message": "Credentials are saved and valid"
+            })
+
+    return jsonify({
+        "status": "success",
+        "has_credentials": False,
+        "message": "No saved credentials found"
+    })
 
 @app.route("/api/bluesky/clear_credentials", methods=["POST"])
 def clear_bluesky_credentials():
@@ -2541,7 +3195,10 @@ def clear_bluesky_credentials():
     session.pop('bluesky_handle', None)
     session.pop('bluesky_did', None)
     session.pop('bluesky_saved', None)
-    return jsonify({"status": "success", "message": "Credentials cleared successfully"})
+    return jsonify({
+        "status": "success",
+        "message": "Credentials cleared successfully"
+    })
 
 @app.route("/api/bluesky/post", methods=["POST"])
 def bluesky_post():
@@ -2551,12 +3208,16 @@ def bluesky_post():
     identifier = data.get("identifier", "").strip()
     password = data.get("password", "").strip()
     remember = data.get("remember", True)
+
     if not url and session.get('current_video_url'):
         url = session.get('current_video_url')
         text = text or session.get('current_video_title', 'Instagram video')
+
     if not url:
         return jsonify({"error": "No video URL provided. Please fetch a video first."}), 400
+
     thumbnail_url = session.get('current_video_thumbnail')
+
     if identifier and password:
         try:
             test_session = create_bluesky_session(identifier, password)
@@ -2572,12 +3233,32 @@ def bluesky_post():
                     session['bluesky_saved'] = True
         except Exception as e:
             return jsonify({"error": f"Invalid credentials: {str(e)}"}), 401
+
     try:
-        result = post_to_bluesky(video_url=url, text=text, thumbnail_url=thumbnail_url, identifier=identifier or None, password=password or None)
+        result = post_to_bluesky(
+            video_url=url,
+            text=text,
+            thumbnail_url=thumbnail_url,
+            identifier=identifier or None,
+            password=password or None
+        )
+
         if result["success"]:
-            return jsonify({"status": "success", "post_uri": result.get("post_uri"), "post_cid": result.get("post_cid"), "post_id": result.get("post_id"), "message": result.get("message"), "video_url": url, "saved": bool(session.get('bluesky_saved'))})
+            return jsonify({
+                "status": "success",
+                "post_uri": result.get("post_uri"),
+                "post_cid": result.get("post_cid"),
+                "post_id": result.get("post_id"),
+                "message": result.get("message"),
+                "video_url": url,
+                "saved": bool(session.get('bluesky_saved'))
+            })
         else:
-            return jsonify({"status": "error", "error": result.get("error")}), 500
+            return jsonify({
+                "status": "error",
+                "error": result.get("error")
+            }), 500
+
     except Exception as e:
         return jsonify({"error": clean_error(str(e))}), 500
 
@@ -2585,74 +3266,171 @@ def bluesky_post():
 
 @app.route('/api/zernio/publish', methods=['POST'])
 def zernio_publish():
+    """Publish a video to Facebook via Zernio"""
     data = request.get_json(silent=True) or {}
+    
     video_url = data.get('video_url')
     text = data.get('text', 'Check out this video! 🎬')
     account_id = data.get('account_id')
     publish_now = data.get('publish_now', True)
     scheduled_time = data.get('scheduled_time')
+    
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
+    
     if account_id:
-        result = publish_to_facebook(video_url=video_url, text=text, account_id=account_id, publish_now=publish_now, scheduled_time=scheduled_time)
+        result = publish_to_facebook(
+            video_url=video_url,
+            text=text,
+            account_id=account_id,
+            publish_now=publish_now,
+            scheduled_time=scheduled_time
+        )
         return jsonify(result)
-    results = publish_video_to_all_accounts(video_url=video_url, text=text, publish_now=publish_now, scheduled_time=scheduled_time)
-    return jsonify({"status": "success", "message": f"Published to {len(results)} accounts", "results": results})
+    
+    results = publish_video_to_all_accounts(
+        video_url=video_url,
+        text=text,
+        publish_now=publish_now,
+        scheduled_time=scheduled_time
+    )
+    
+    return jsonify({
+        "status": "success",
+        "message": f"Published to {len(results)} accounts",
+        "results": results
+    })
 
 @app.route('/api/zernio/status', methods=['GET'])
 def zernio_status():
+    """Check Zernio connection status"""
     try:
-        headers = {"Authorization": f"Bearer {ZERNIO_API_KEY}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {ZERNIO_API_KEY}",
+            "Content-Type": "application/json"
+        }
         response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
-        return jsonify({"status": "connected" if response.status_code == 200 else "error", "status_code": response.status_code, "message": "Zernio API is accessible" if response.status_code == 200 else "Failed to connect"})
+        
+        return jsonify({
+            "status": "connected" if response.status_code == 200 else "error",
+            "status_code": response.status_code,
+            "message": "Zernio API is accessible" if response.status_code == 200 else "Failed to connect"
+        })
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 @app.route('/api/zernio/accounts', methods=['GET'])
 def zernio_list_accounts():
+    """List all connected Zernio Facebook accounts (dynamic from API)"""
     try:
-        headers = {"Authorization": f"Bearer {ZERNIO_API_KEY}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {ZERNIO_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
         response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        
         if response.status_code == 200:
             data = response.json()
             accounts = data.get('accounts', [])
+            
             facebook_accounts = []
             for account in accounts:
                 if account.get('platform') == 'facebook':
-                    facebook_accounts.append({"id": account.get('_id'), "name": account.get('displayName', 'Unknown'), "page_id": account.get('profileData', {}).get('id', 'N/A'), "username": account.get('username', 'N/A'), "status": account.get('platformStatus', 'unknown')})
-            return jsonify({"status": "success", "accounts": facebook_accounts, "total": len(facebook_accounts)})
+                    facebook_accounts.append({
+                        "id": account.get('_id'),
+                        "name": account.get('displayName', 'Unknown'),
+                        "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                        "username": account.get('username', 'N/A'),
+                        "status": account.get('platformStatus', 'unknown')
+                    })
+            
+            return jsonify({
+                "status": "success",
+                "accounts": facebook_accounts,
+                "total": len(facebook_accounts)
+            })
         else:
-            return jsonify({"status": "error", "message": f"Zernio API returned {response.status_code}", "accounts": []}), 500
+            return jsonify({
+                "status": "error",
+                "message": f"Zernio API returned {response.status_code}",
+                "accounts": []
+            }), 500
+            
     except Exception as e:
         app.logger.error(f"Error fetching Zernio accounts: {e}")
-        return jsonify({"status": "error", "message": str(e), "accounts": []}), 500
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "accounts": []
+        }), 500
 
 # ============== SYNC STATUS ROUTE ==============
 
 @app.route("/api/sync-status/<username>", methods=["GET"])
 def get_sync_status_endpoint(username):
+    """Get the current sync status for a username."""
     status = get_sync_status(username)
     if status:
         total = status['total_reels'] or 1
         progress = min(100, int((status['captions_fetched'] / total) * 100)) if total > 0 else 0
-        return jsonify({"status": "success", "sync": {"username": status['username'], "status": status['status'], "total_reels": status['total_reels'], "captions_fetched": status['captions_fetched'], "captions_skipped": status['captions_skipped'], "errors": status['errors'], "progress": progress, "started_at": status['started_at'], "completed_at": status['completed_at'], "last_updated": status['last_updated']}})
+        
+        return jsonify({
+            "status": "success",
+            "sync": {
+                "username": status['username'],
+                "status": status['status'],
+                "total_reels": status['total_reels'],
+                "captions_fetched": status['captions_fetched'],
+                "captions_skipped": status['captions_skipped'],
+                "errors": status['errors'],
+                "progress": progress,
+                "started_at": status['started_at'],
+                "completed_at": status['completed_at'],
+                "last_updated": status['last_updated']
+            }
+        })
     else:
-        return jsonify({"status": "success", "sync": None, "message": "No sync status found for this username"})
+        return jsonify({
+            "status": "success",
+            "sync": None,
+            "message": "No sync status found for this username"
+        })
 
 @app.route("/api/sync-captions", methods=["POST"])
 def sync_captions():
+    """
+    Sync captions for a specific username.
+    Fetches captions for ALL reels of that profile using the caption service.
+    """
     data = request.get_json(silent=True) or {}
     username = data.get("username", "").strip()
+    
     if not username:
         return jsonify({"error": "Username is required"}), 400
+    
     app.logger.info(f"📝 Syncing captions for @{username}")
+    
     job_id = sync_captions_background(username)
-    return jsonify({"status": "accepted", "job_id": job_id, "message": f"Caption sync started for @{username}. Check /api/sync-status/{username} for progress.", "username": username}), 202
+    
+    return jsonify({
+        "status": "accepted",
+        "job_id": job_id,
+        "message": f"Caption sync started for @{username}. Check /api/sync-status/{username} for progress.",
+        "username": username
+    }), 202
 
 # ============== CAPTION WEBHOOK ==============
 
 @app.route("/api/webhook/caption", methods=["POST"])
 def webhook_caption():
+    """
+    Webhook endpoint for caption service to call back with the caption.
+    When caption arrives, checks for pending post and posts to Facebook.
+    """
     data = request.get_json(silent=True) or {}
     reel_url = data.get('reel_url')
     caption = data.get('caption')
@@ -2661,30 +3439,42 @@ def webhook_caption():
     error = data.get('error')
     profile_username = data.get('profile_username')
     pipeline_id = data.get('pipeline_id')
+    
     app.logger.info(f"📥 [Job {job_id}] Webhook received for: {reel_url[:50] if reel_url else 'unknown'}...")
     app.logger.info(f"   Caption: {caption[:50] if caption else 'None'}...")
     app.logger.info(f"   Status: {status}")
+    
     if not reel_url:
         return jsonify({"status": "error", "message": "reel_url required"}), 400
+    
+    # Update status in tracking
     if reel_url in CAPTION_FETCH_STATUS:
         CAPTION_FETCH_STATUS[reel_url]['status'] = status
         CAPTION_FETCH_STATUS[reel_url]['message'] = 'Webhook received'
         CAPTION_FETCH_STATUS[reel_url]['completed_at'] = datetime.utcnow().isoformat()
         CAPTION_FETCH_STATUS[reel_url]['webhook_received'] = True
+        
         if caption:
             CAPTION_FETCH_STATUS[reel_url]['caption'] = caption[:200]
             CAPTION_FETCH_STATUS[reel_url]['caption_length'] = len(caption)
+    
+    # Store caption in database if successful
     if status == 'completed' and caption:
         try:
             conn = get_db_connection()
             if conn:
                 cur = conn.cursor()
+                
+                # 1. Store in reel_cache
                 cur.execute("""
                     INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
                     VALUES (%s, '', %s, NOW())
                     ON CONFLICT (reel_url) DO UPDATE SET 
-                        caption = EXCLUDED.caption, created_at = NOW()
+                        caption = EXCLUDED.caption,
+                        created_at = NOW()
                 """, (reel_url, caption))
+                
+                # 2. Update scraped_reels if we have profile_username
                 if profile_username:
                     cur.execute("""
                         SELECT id, results FROM scraped_reels 
@@ -2692,15 +3482,19 @@ def webhook_caption():
                             SELECT 1 FROM jsonb_array_elements(results) AS elem
                             WHERE elem->>'username' = %s
                         )
-                        ORDER BY created_at DESC LIMIT 1
+                        ORDER BY created_at DESC
+                        LIMIT 1
                     """, (profile_username,))
+                    
                     result = cur.fetchone()
                     if result:
                         row_id = result[0]
                         results = result[1]
                         updated = False
+                        
                         if isinstance(results, str):
                             results = json.loads(results)
+                        
                         for profile_idx, profile in enumerate(results):
                             if profile.get('username') == profile_username:
                                 reels = profile.get('reels', [])
@@ -2711,70 +3505,120 @@ def webhook_caption():
                                             updated = True
                                             break
                                 break
+                        
                         if updated:
                             cur.execute("""
-                                UPDATE scraped_reels SET results = %s, updated_at = NOW()
+                                UPDATE scraped_reels 
+                                SET results = %s, updated_at = NOW()
                                 WHERE id = %s
                             """, (json.dumps(results), row_id))
                             conn.commit()
                             app.logger.info(f"💾 [Job {job_id}] Caption stored in scraped_reels")
-                cur.execute("UPDATE posted_reels SET caption = %s WHERE reel_url = %s AND (caption IS NULL OR caption = '')", (caption, reel_url))
+                
+                # 3. Update posted_reels
+                cur.execute("""
+                    UPDATE posted_reels 
+                    SET caption = %s 
+                    WHERE reel_url = %s AND (caption IS NULL OR caption = '')
+                """, (caption, reel_url))
                 conn.commit()
+                
+                # ========== 🔥 CHECK FOR PENDING POST FIRST ==========
                 app.logger.info(f"🔍 [Job {job_id}] Checking for pending post: {reel_url[:50]}...")
                 pending = get_pending_post(reel_url)
+                
                 if pending:
                     app.logger.info(f"🔥 [Job {job_id}] Found pending post! Processing...")
+                    
                     success = process_pending_post(pending)
+                    
                     if success:
                         app.logger.info(f"✅ [Job {job_id}] Pending post processed successfully!")
                     else:
                         app.logger.error(f"❌ [Job {job_id}] Failed to process pending post")
+                        
                         cur.execute("""
-                            UPDATE pending_posts SET status = 'failed', error_message = 'Processing failed', updated_at = NOW()
+                            UPDATE pending_posts 
+                            SET status = 'failed',
+                                error_message = 'Processing failed',
+                                updated_at = NOW()
                             WHERE reel_url = %s AND status IN ('pending', 'processing')
                         """, (reel_url,))
                         conn.commit()
                 else:
                     app.logger.info(f"ℹ️ [Job {job_id}] No pending post found")
-                    cur.execute("SELECT COUNT(*) FROM posted_reels WHERE reel_url = %s AND status = 'success'", (reel_url,))
+                    
+                    cur.execute("""
+                        SELECT COUNT(*) FROM posted_reels 
+                        WHERE reel_url = %s AND status = 'success'
+                    """, (reel_url,))
                     already_posted = cur.fetchone()[0] > 0
+                    
                     if already_posted:
                         app.logger.info(f"✅ [Job {job_id}] Reel already posted, updating pending_posts to completed")
                         cur.execute("""
-                            UPDATE pending_posts SET status = 'completed', caption = %s, webhook_received = TRUE, updated_at = NOW()
+                            UPDATE pending_posts 
+                            SET status = 'completed',
+                                caption = %s,
+                                webhook_received = TRUE,
+                                updated_at = NOW()
                             WHERE reel_url = %s AND status IN ('pending', 'processing')
                         """, (caption, reel_url))
                         conn.commit()
                     else:
                         app.logger.info(f"ℹ️ [Job {job_id}] No pending post, caption stored for future use")
                         cur.execute("""
-                            UPDATE pending_posts SET caption = %s, webhook_received = TRUE, updated_at = NOW()
+                            UPDATE pending_posts 
+                            SET caption = %s,
+                                webhook_received = TRUE,
+                                updated_at = NOW()
                             WHERE reel_url = %s
                         """, (caption, reel_url))
                         conn.commit()
+                
                 cur.execute("""
-                    UPDATE pending_posts SET webhook_received = TRUE, updated_at = NOW()
+                    UPDATE pending_posts 
+                    SET webhook_received = TRUE,
+                        updated_at = NOW()
                     WHERE reel_url = %s AND status IN ('pending', 'processing')
                 """, (reel_url,))
                 conn.commit()
+                
                 cur.close()
                 conn.close()
-                return jsonify({"status": "success", "message": "Caption stored and pending post processed", "job_id": job_id, "pending_processed": bool(pending) if 'pending' in locals() else False})
+                
+                return jsonify({
+                    "status": "success",
+                    "message": "Caption stored and pending post processed",
+                    "job_id": job_id,
+                    "pending_processed": bool(pending) if 'pending' in locals() else False
+                })
+                
         except Exception as e:
             app.logger.error(f"❌ [Job {job_id}] Failed to store caption: {e}")
             import traceback
             app.logger.error(traceback.format_exc())
-            return jsonify({"status": "error", "message": f"Failed to store caption: {str(e)}", "job_id": job_id}), 500
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to store caption: {str(e)}",
+                "job_id": job_id
+            }), 500
+    
     elif status == 'failed':
         app.logger.warning(f"⚠️ [Job {job_id}] Caption fetch failed: {error}")
+        
         if reel_url in CAPTION_FETCH_STATUS:
             CAPTION_FETCH_STATUS[reel_url]['error'] = error
+        
         try:
             conn = get_db_connection()
             if conn:
                 cur = conn.cursor()
                 cur.execute("""
-                    UPDATE pending_posts SET status = 'failed', error_message = %s, updated_at = NOW()
+                    UPDATE pending_posts 
+                    SET status = 'failed',
+                        error_message = %s,
+                        updated_at = NOW()
                     WHERE reel_url = %s AND status IN ('pending', 'processing')
                 """, (error or 'Caption fetch failed', reel_url))
                 conn.commit()
@@ -2783,50 +3627,92 @@ def webhook_caption():
                 app.logger.info(f"✅ [Job {job_id}] Marked pending post as failed")
         except Exception as e:
             app.logger.error(f"❌ [Job {job_id}] Failed to mark pending post as failed: {e}")
-    return jsonify({"status": "success", "message": "Webhook received", "job_id": job_id})
+    
+    return jsonify({
+        "status": "success",
+        "message": "Webhook received",
+        "job_id": job_id
+    })
 
 # ============== CAPTION STATUS ROUTES ==============
 
 @app.route("/api/caption-status/<path:reel_url>", methods=["GET"])
 def get_caption_status(reel_url):
+    """Get caption fetch status for a specific reel."""
     decoded_url = re.sub(r'^/(.+)$', r'\1', reel_url)
     status = get_caption_fetch_status(decoded_url)
-    return jsonify({"status": "success", "reel_url": decoded_url, "fetch_status": status})
+    return jsonify({
+        "status": "success",
+        "reel_url": decoded_url,
+        "fetch_status": status
+    })
 
 @app.route("/api/caption-status-dual/<path:reel_url>", methods=["GET"])
 def get_caption_status_dual(reel_url):
+    """Get detailed status of dual caption fetch."""
     decoded_url = re.sub(r'^/(.+)$', r'\1', reel_url)
     status = CAPTION_FETCH_STATUS.get(decoded_url, {})
-    return jsonify({"status": "success", "reel_url": decoded_url, "fetch_status": status, "dual_request_details": {"wake_up_sent": status.get('wake_up_sent', False), "real_fetch_attempts": status.get('real_fetch_attempts', 0), "webhook_received": status.get('webhook_received', False), "retry_count": status.get('retry_count', 0)}})
+    
+    return jsonify({
+        "status": "success",
+        "reel_url": decoded_url,
+        "fetch_status": status,
+        "dual_request_details": {
+            "wake_up_sent": status.get('wake_up_sent', False),
+            "real_fetch_attempts": status.get('real_fetch_attempts', 0),
+            "webhook_received": status.get('webhook_received', False),
+            "retry_count": status.get('retry_count', 0)
+        }
+    })
 
 @app.route("/api/caption-status", methods=["GET"])
 def get_all_caption_status():
-    return jsonify({"status": "success", "total": len(CAPTION_FETCH_STATUS), "statuses": CAPTION_FETCH_STATUS})
+    """Get all caption fetch statuses."""
+    return jsonify({
+        "status": "success",
+        "total": len(CAPTION_FETCH_STATUS),
+        "statuses": CAPTION_FETCH_STATUS
+    })
 
 # ============== PIPELINE API ROUTES ==============
 
 @app.route('/api/pipelines', methods=['GET'])
 def get_pipelines():
+    """Get all pipelines"""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT p.*, COUNT(pr.id) as total_posted_count,
-                   SUM(CASE WHEN pr.status = 'success' THEN 1 ELSE 0 END) as success_count,
-                   SUM(CASE WHEN pr.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-                   MAX(pr.posted_at) as last_post_time
+            SELECT 
+                p.*,
+                COUNT(pr.id) as total_posted_count,
+                SUM(CASE WHEN pr.status = 'success' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN pr.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                MAX(pr.posted_at) as last_post_time
             FROM pipelines p
             LEFT JOIN posted_reels pr ON p.id = pr.pipeline_id
-            GROUP BY p.id ORDER BY p.created_at DESC
+            GROUP BY p.id
+            ORDER BY p.created_at DESC
         """)
         pipelines = cur.fetchall()
+        
         for pipeline in pipelines:
-            cur.execute("SELECT COUNT(*) as pending_count FROM pending_posts WHERE pipeline_id = %s AND status IN ('pending', 'processing')", (pipeline['id'],))
+            cur.execute("""
+                SELECT COUNT(*) as pending_count 
+                FROM pending_posts 
+                WHERE pipeline_id = %s AND status IN ('pending', 'processing')
+            """, (pipeline['id'],))
             pending = cur.fetchone()
             pipeline['pending_posts'] = pending['pending_count'] if pending else 0
-        return jsonify({"status": "success", "pipelines": pipelines})
+        
+        return jsonify({
+            "status": "success",
+            "pipelines": pipelines
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -2835,25 +3721,38 @@ def get_pipelines():
 
 @app.route('/api/pipelines', methods=['POST'])
 def create_pipeline():
+    """Create a new pipeline"""
     data = request.get_json(silent=True) or {}
+    
     name = data.get('name')
     profile_username = data.get('profile_username')
     facebook_account_id = data.get('facebook_account_id')
     daily_limit = data.get('daily_limit', 2)
+    
     if not name or not profile_username or not facebook_account_id:
         return jsonify({"error": "name, profile_username, and facebook_account_id are required"}), 400
+    
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO pipelines (id, name, profile_username, facebook_account_id, daily_limit, is_active)
-            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE) RETURNING id
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE)
+            RETURNING id
         """, (name, profile_username, facebook_account_id, daily_limit))
+        
         pipeline_id = cur.fetchone()[0]
         conn.commit()
-        return jsonify({"status": "success", "message": "Pipeline created", "pipeline_id": pipeline_id})
+        
+        return jsonify({
+            "status": "success",
+            "message": "Pipeline created",
+            "pipeline_id": pipeline_id
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -2862,31 +3761,52 @@ def create_pipeline():
 
 @app.route('/api/pipelines/<pipeline_id>', methods=['PUT'])
 def update_pipeline(pipeline_id):
+    """Update a pipeline"""
     data = request.get_json(silent=True) or {}
+    
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         updates = []
         params = []
+        
         if 'name' in data:
-            updates.append("name = %s"); params.append(data['name'])
+            updates.append("name = %s")
+            params.append(data['name'])
         if 'profile_username' in data:
-            updates.append("profile_username = %s"); params.append(data['profile_username'])
+            updates.append("profile_username = %s")
+            params.append(data['profile_username'])
         if 'facebook_account_id' in data:
-            updates.append("facebook_account_id = %s"); params.append(data['facebook_account_id'])
+            updates.append("facebook_account_id = %s")
+            params.append(data['facebook_account_id'])
         if 'daily_limit' in data:
-            updates.append("daily_limit = %s"); params.append(data['daily_limit'])
+            updates.append("daily_limit = %s")
+            params.append(data['daily_limit'])
         if 'is_active' in data:
-            updates.append("is_active = %s"); params.append(data['is_active'])
+            updates.append("is_active = %s")
+            params.append(data['is_active'])
+        
         if not updates:
             return jsonify({"error": "No fields to update"}), 400
+        
         updates.append("updated_at = NOW()")
         params.append(pipeline_id)
+        
         cur = conn.cursor()
-        cur.execute(f"UPDATE pipelines SET {', '.join(updates)} WHERE id = %s", params)
+        cur.execute(f"""
+            UPDATE pipelines 
+            SET {', '.join(updates)}
+            WHERE id = %s
+        """, params)
         conn.commit()
-        return jsonify({"status": "success", "message": "Pipeline updated"})
+        
+        return jsonify({
+            "status": "success",
+            "message": "Pipeline updated"
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -2895,6 +3815,7 @@ def update_pipeline(pipeline_id):
 
 @app.route('/api/pipelines/<pipeline_id>/run', methods=['POST'])
 def run_pipeline_endpoint(pipeline_id):
+    """Run a single pipeline"""
     result = run_pipeline(pipeline_id)
     if result.get('error'):
         return jsonify(result), 500
@@ -2902,6 +3823,7 @@ def run_pipeline_endpoint(pipeline_id):
 
 @app.route('/api/pipelines/run-all', methods=['POST'])
 def run_all_pipelines_endpoint():
+    """Run all active pipelines"""
     result = run_all_active_pipelines()
     if result.get('error'):
         return jsonify(result), 500
@@ -2909,15 +3831,27 @@ def run_all_pipelines_endpoint():
 
 @app.route('/api/pipelines/<pipeline_id>/reset', methods=['POST'])
 def reset_pipeline(pipeline_id):
+    """Reset posted status for a pipeline (for testing)"""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
-        cur.execute("UPDATE pipelines SET total_posted = 0, updated_at = NOW() WHERE id = %s", (pipeline_id,))
+        cur.execute("""
+            UPDATE pipelines 
+            SET total_posted = 0,
+                updated_at = NOW()
+            WHERE id = %s
+        """, (pipeline_id,))
         conn.commit()
-        return jsonify({"status": "success", "message": "Pipeline reset - all reels marked as unposted"})
+        
+        return jsonify({
+            "status": "success",
+            "message": "Pipeline reset - all reels marked as unposted"
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -2926,20 +3860,44 @@ def reset_pipeline(pipeline_id):
 
 @app.route('/api/pipelines/<pipeline_id>/pending', methods=['GET'])
 def get_pending_posts(pipeline_id):
+    """Get pending posts for a pipeline."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT id, reel_url, direct_video_url, pipeline_id, profile_username,
-                   facebook_account_id, caption, created_at, updated_at, status,
-                   attempts, error_message, facebook_post_id, facebook_post_url,
-                   wakeup_sent, real_fetch_attempts, webhook_received
-            FROM pending_posts WHERE pipeline_id = %s ORDER BY created_at DESC
+            SELECT 
+                id,
+                reel_url,
+                direct_video_url,
+                pipeline_id,
+                profile_username,
+                facebook_account_id,
+                caption,
+                created_at,
+                updated_at,
+                status,
+                attempts,
+                error_message,
+                facebook_post_id,
+                facebook_post_url,
+                wakeup_sent,
+                real_fetch_attempts,
+                webhook_received
+            FROM pending_posts
+            WHERE pipeline_id = %s
+            ORDER BY created_at DESC
         """, (pipeline_id,))
         pending = cur.fetchall()
-        return jsonify({"status": "success", "pending": pending, "count": len(pending)})
+        
+        return jsonify({
+            "status": "success",
+            "pending": pending,
+            "count": len(pending)
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -2948,18 +3906,36 @@ def get_pending_posts(pipeline_id):
 
 @app.route('/api/pipelines/<pipeline_id>/posted', methods=['GET'])
 def get_posted_reels(pipeline_id):
+    """Get posted reels for a pipeline with captions"""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT reel_url, direct_video_url, caption, facebook_post_id,
-                   facebook_post_url, posted_at, status, error_message
-            FROM posted_reels WHERE pipeline_id = %s ORDER BY posted_at DESC LIMIT 50
+            SELECT 
+                reel_url,
+                direct_video_url,
+                caption,
+                facebook_post_id,
+                facebook_post_url,
+                posted_at,
+                status,
+                error_message
+            FROM posted_reels
+            WHERE pipeline_id = %s
+            ORDER BY posted_at DESC
+            LIMIT 50
         """, (pipeline_id,))
         posted = cur.fetchall()
-        return jsonify({"status": "success", "posted": posted, "count": len(posted)})
+        
+        return jsonify({
+            "status": "success",
+            "posted": posted,
+            "count": len(posted)
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -2970,27 +3946,44 @@ def get_posted_reels(pipeline_id):
 
 @app.route('/api/pipelines/<pipeline_id>', methods=['GET'])
 def get_pipeline(pipeline_id):
+    """Get a single pipeline by ID"""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT p.*, COUNT(pr.id) as total_posted_count,
-                   SUM(CASE WHEN pr.status = 'success' THEN 1 ELSE 0 END) as success_count,
-                   SUM(CASE WHEN pr.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-                   MAX(pr.posted_at) as last_post_time
+            SELECT 
+                p.*,
+                COUNT(pr.id) as total_posted_count,
+                SUM(CASE WHEN pr.status = 'success' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN pr.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                MAX(pr.posted_at) as last_post_time
             FROM pipelines p
             LEFT JOIN posted_reels pr ON p.id = pr.pipeline_id
-            WHERE p.id = %s GROUP BY p.id
+            WHERE p.id = %s
+            GROUP BY p.id
         """, (pipeline_id,))
+        
         pipeline = cur.fetchone()
+        
         if not pipeline:
             return jsonify({"error": "Pipeline not found"}), 404
-        cur.execute("SELECT COUNT(*) as pending_count FROM pending_posts WHERE pipeline_id = %s AND status IN ('pending', 'processing')", (pipeline_id,))
+        
+        cur.execute("""
+            SELECT COUNT(*) as pending_count 
+            FROM pending_posts 
+            WHERE pipeline_id = %s AND status IN ('pending', 'processing')
+        """, (pipeline_id,))
         pending = cur.fetchone()
         pipeline['pending_posts'] = pending['pending_count'] if pending else 0
-        return jsonify({"status": "success", "pipeline": pipeline})
+        
+        return jsonify({
+            "status": "success",
+            "pipeline": pipeline
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -3001,26 +3994,49 @@ def get_pipeline(pipeline_id):
 
 @app.route('/api/pipelines/<pipeline_id>', methods=['DELETE'])
 def delete_pipeline(pipeline_id):
+    """Delete a pipeline and all its associated data."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor()
+        
         cur.execute("SELECT id, name FROM pipelines WHERE id = %s", (pipeline_id,))
         pipeline = cur.fetchone()
+        
         if not pipeline:
             return jsonify({"error": "Pipeline not found"}), 404
+        
         pipeline_name = pipeline[1]
+        
         cur.execute("DELETE FROM pending_posts WHERE pipeline_id = %s", (pipeline_id,))
         pending_deleted = cur.rowcount
+        
         cur.execute("DELETE FROM posted_reels WHERE pipeline_id = %s", (pipeline_id,))
         posted_deleted = cur.rowcount
+        
         cur.execute("DELETE FROM pipeline_runs WHERE pipeline_id = %s", (pipeline_id,))
         runs_deleted = cur.rowcount
+        
         cur.execute("DELETE FROM pipelines WHERE id = %s", (pipeline_id,))
+        
         conn.commit()
+        
         app.logger.info(f"🗑️ Deleted pipeline '{pipeline_name}' (ID: {pipeline_id}) with {pending_deleted} pending, {posted_deleted} posted reels, and {runs_deleted} runs")
-        return jsonify({"status": "success", "message": f"Pipeline '{pipeline_name}' deleted successfully", "deleted": {"pipeline_id": pipeline_id, "pipeline_name": pipeline_name, "pending_posts_deleted": pending_deleted, "posted_reels_deleted": posted_deleted, "runs_deleted": runs_deleted}})
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Pipeline '{pipeline_name}' deleted successfully",
+            "deleted": {
+                "pipeline_id": pipeline_id,
+                "pipeline_name": pipeline_name,
+                "pending_posts_deleted": pending_deleted,
+                "posted_reels_deleted": posted_deleted,
+                "runs_deleted": runs_deleted
+            }
+        })
+        
     except Exception as e:
         app.logger.error(f"Delete pipeline error: {e}")
         conn.rollback()
@@ -3033,44 +4049,82 @@ def delete_pipeline(pipeline_id):
 
 @app.route("/api/process-reels", methods=["POST"])
 def process_reels():
+    """
+    Process reels from scraper - JUST STORE them in reel_cache.
+    Download URLs will be generated when needed (UI or pipeline).
+    This is FAST and won't timeout.
+    """
     data = request.get_json(silent=True) or {}
+    
     reel_urls = data.get("reels")
     job_id = data.get("job_id")
     chunk = data.get("chunk", 1)
     total_chunks = data.get("total_chunks", 1)
+    
     if not reel_urls or not isinstance(reel_urls, list):
         return jsonify({"error": "Missing or invalid 'reels' list"}), 400
+    
     app.logger.info(f"📥 [Job {job_id}] Received chunk {chunk}/{total_chunks} with {len(reel_urls)} reels")
+    
     if len(reel_urls) == 0:
-        return jsonify({"status": "success", "message": "No reels to process", "job_id": job_id, "count": 0})
+        return jsonify({
+            "status": "success",
+            "message": "No reels to process",
+            "job_id": job_id,
+            "count": 0
+        })
+    
     try:
         conn = get_db_connection()
         if not conn:
             return jsonify({"error": "Database connection failed"}), 500
+        
         cur = conn.cursor()
+        
+        # ✅ JUST STORE - NO URL GENERATION
+        # This is fast - just inserts URLs into the database
         stored_count = 0
         for reel_url in reel_urls:
             try:
                 cur.execute("""
                     INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
                     VALUES (%s, '', '', NOW())
-                    ON CONFLICT (reel_url) DO UPDATE SET created_at = NOW()
+                    ON CONFLICT (reel_url) DO UPDATE SET 
+                        created_at = NOW()
                 """, (reel_url,))
                 stored_count += 1
             except Exception as e:
                 app.logger.warning(f"⚠️ Failed to store reel: {reel_url[:50]}... - {e}")
+        
         conn.commit()
         cur.close()
         conn.close()
+        
         app.logger.info(f"✅ [Job {job_id}] Stored {stored_count}/{len(reel_urls)} reels (chunk {chunk}/{total_chunks})")
+        
+        # If this is the last chunk, log completion
         if chunk == total_chunks:
             app.logger.info(f"🎉 [Job {job_id}] All {total_chunks} chunks received! Total reels: {len(reel_urls) * total_chunks}")
-        return jsonify({"status": "success", "message": f"Stored {stored_count} reels", "job_id": job_id, "chunk": chunk, "total_chunks": total_chunks, "stored": stored_count, "total": len(reel_urls)})
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Stored {stored_count} reels",
+            "job_id": job_id,
+            "chunk": chunk,
+            "total_chunks": total_chunks,
+            "stored": stored_count,
+            "total": len(reel_urls)
+        })
+        
     except Exception as e:
         app.logger.error(f"❌ [Job {job_id}] Error processing reels: {e}")
         import traceback
         app.logger.error(traceback.format_exc())
-        return jsonify({"status": "error", "error": str(e), "job_id": job_id}), 500
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "job_id": job_id
+        }), 500
 
 # ============== DEBUG ROUTES ==============
 
@@ -3080,53 +4134,111 @@ def debug_cookies():
     if cookie_file and os.path.exists(cookie_file):
         with open(cookie_file, 'r') as f:
             first_lines = f.readlines()[:10]
-        return jsonify({"cookie_file_exists": True, "cookie_file_path": cookie_file, "sample_cookies": first_lines, "has_session_cookie": any("sessionid" in line for line in first_lines), "username": session.get('instagram_username') or 'Unknown', "has_encrypted": bool(session.get('instagram_encrypted')), "session_permanent": session.permanent})
-    return jsonify({"cookie_file_exists": False, "message": "No cookie file found", "has_encrypted": bool(session.get('instagram_encrypted')), "session_permanent": session.permanent})
+
+        return jsonify({
+            "cookie_file_exists": True,
+            "cookie_file_path": cookie_file,
+            "sample_cookies": first_lines,
+            "has_session_cookie": any("sessionid" in line for line in first_lines),
+            "username": session.get('instagram_username') or 'Unknown',
+            "has_encrypted": bool(session.get('instagram_encrypted')),
+            "session_permanent": session.permanent
+        })
+    return jsonify({
+        "cookie_file_exists": False,
+        "message": "No cookie file found",
+        "has_encrypted": bool(session.get('instagram_encrypted')),
+        "session_permanent": session.permanent
+    })
 
 @app.route("/api/debug/session", methods=["GET"])
 def debug_session():
+    """Debug endpoint to check session contents."""
     db_cookies = get_cookies_from_db()
-    return jsonify({"session_keys": list(session.keys()), "session_size": len(str(dict(session))), "instagram_username": session.get('instagram_username'), "instagram_saved": session.get('instagram_saved', False), "session_permanent": session.permanent, "db_cookies": db_cookies is not None, "db_username": db_cookies.get('username') if db_cookies else None, "user_id_from_cookie": request.cookies.get('user_id'), "user_id_from_session": session.get('user_id'), "note": "Large cookie data is stored in database, not session"})
+    return jsonify({
+        "session_keys": list(session.keys()),
+        "session_size": len(str(dict(session))),
+        "instagram_username": session.get('instagram_username'),
+        "instagram_saved": session.get('instagram_saved', False),
+        "session_permanent": session.permanent,
+        "db_cookies": db_cookies is not None,
+        "db_username": db_cookies.get('username') if db_cookies else None,
+        "user_id_from_cookie": request.cookies.get('user_id'),
+        "user_id_from_session": session.get('user_id'),
+        "note": "Large cookie data is stored in database, not session"
+    })
 
 @app.route("/api/init", methods=["GET"])
 def init_session():
+    """Initialize session and return user_id - DON'T store large data."""
     user_id = FIXED_USER_ID
     session['user_id'] = user_id
+    
     db_cookies = get_cookies_from_db()
+    
     if db_cookies:
+        # Store only the username, not the cookies
         session['instagram_username'] = db_cookies.get('username', 'Instagram User')
         session['instagram_saved'] = True
-    return jsonify({"status": "success", "user_id": user_id, "has_cookies": bool(db_cookies)})
+    
+    return jsonify({
+        "status": "success",
+        "user_id": user_id,
+        "has_cookies": bool(db_cookies)
+    })
 
 @app.route("/api/session/clear-large", methods=["POST"])
 def clear_large_session():
+    """Clear large session data to fix cookie size issue."""
     session.pop('instagram_encrypted', None)
     session.pop('cookies_data', None)
     session.pop('username', None)
     session.pop('cookie_file', None)
-    return jsonify({"status": "success", "message": "Large session data cleared. Session size should now be under 4KB.", "new_session_size": len(str(dict(session)))})
+    
+    return jsonify({
+        "status": "success",
+        "message": "Large session data cleared. Session size should now be under 4KB.",
+        "new_session_size": len(str(dict(session)))
+    })
 
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     cookie_status = "configured" if get_cookie_file() else "not configured"
-    return jsonify({"status": "running", "version": "1.4.0", "cookies": cookie_status, "zernio_connected": bool(ZERNIO_API_KEY), "download_history_count": 0, "recent_downloads": []})
+    return jsonify({
+        "status": "running",
+        "version": "1.4.0",
+        "cookies": cookie_status,
+        "zernio_connected": bool(ZERNIO_API_KEY),
+        "download_history_count": 0,
+        "recent_downloads": []
+    })
 
 @app.route("/api/pending-posts", methods=["GET"])
 def get_all_pending_posts():
+    """Get all pending posts across all pipelines."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT pp.*, p.name as pipeline_name
+            SELECT 
+                pp.*,
+                p.name as pipeline_name
             FROM pending_posts pp
             LEFT JOIN pipelines p ON pp.pipeline_id = p.id
             WHERE pp.status IN ('pending', 'processing')
             ORDER BY pp.created_at DESC
         """)
         pending = cur.fetchall()
-        return jsonify({"status": "success", "pending": pending, "count": len(pending)})
+        
+        return jsonify({
+            "status": "success",
+            "pending": pending,
+            "count": len(pending)
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -3137,20 +4249,43 @@ def get_all_pending_posts():
 
 @app.route("/api/keep-alive", methods=["GET"])
 def keep_alive():
-    return jsonify({"status": "ok", "timestamp": datetime.utcnow().isoformat(), "message": "I'm alive!"})
+    """Simple endpoint to keep Render awake."""
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "message": "I'm alive!"
+    })
 
 @app.route("/api/pipelines/<pipeline_id>/sync-stats", methods=["POST"])
 def sync_pipeline_stats(pipeline_id):
+    """Sync pipeline stats with actual posted_reels count."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM posted_reels WHERE pipeline_id = %s AND status = 'success'", (pipeline_id,))
+        cur.execute("""
+            SELECT COUNT(*) FROM posted_reels 
+            WHERE pipeline_id = %s AND status = 'success'
+        """, (pipeline_id,))
         actual_count = cur.fetchone()[0]
-        cur.execute("UPDATE pipelines SET total_posted = %s, updated_at = NOW() WHERE id = %s", (actual_count, pipeline_id))
+        
+        cur.execute("""
+            UPDATE pipelines 
+            SET total_posted = %s,
+                updated_at = NOW()
+            WHERE id = %s
+        """, (actual_count, pipeline_id))
         conn.commit()
-        return jsonify({"status": "success", "pipeline_id": pipeline_id, "total_posted": actual_count, "message": f"Pipeline stats synced: {actual_count} total posted"})
+        
+        return jsonify({
+            "status": "success",
+            "pipeline_id": pipeline_id,
+            "total_posted": actual_count,
+            "message": f"Pipeline stats synced: {actual_count} total posted"
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -3161,7 +4296,16 @@ def sync_pipeline_stats(pipeline_id):
 
 @app.after_request
 def after_request(response):
-    response.set_cookie('user_id', FIXED_USER_ID, max_age=30*24*60*60, path='/', secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')), httponly=True, samesite='Lax')
+    """Ensure user_id cookie is set on every response."""
+    response.set_cookie(
+        'user_id',
+        FIXED_USER_ID,
+        max_age=30*24*60*60,
+        path='/',
+        secure=os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL')),
+        httponly=True,
+        samesite='Lax'
+    )
     return response
 
 if __name__ == "__main__":
