@@ -3013,8 +3013,6 @@ console.log('✅ Fetchgram loaded successfully!');
 
 
 
-
-
 // ==================== ZERNIO KEYS MANAGEMENT ====================
 
 let zernioKeys = [];
@@ -3071,9 +3069,6 @@ function renderZernioKeys(keys) {
     
     keys.forEach(key => {
         const isActive = key.is_active;
-        const remaining = key.remaining || (key.daily_limit - key.today_usage);
-        const usagePercent = key.daily_limit > 0 ? Math.round((key.today_usage / key.daily_limit) * 100) : 0;
-        const statusColor = usagePercent > 90 ? 'var(--error)' : usagePercent > 70 ? 'var(--warning)' : 'var(--success)';
         
         html += `
             <div class="zernio-key-card ${isActive ? '' : 'inactive'}">
@@ -3098,29 +3093,14 @@ function renderZernioKeys(keys) {
                         <span class="key-value key-masked">${key.api_key_masked || '***'}</span>
                     </div>
                     <div class="key-detail">
-                        <span class="key-label">Daily Limit:</span>
-                        <span class="key-value">${key.daily_limit}</span>
+                        <span class="key-label">Facebook Account:</span>
+                        <span class="key-value">${escapeHtml(key.facebook_account_id || 'N/A')}</span>
                     </div>
+                    ${key.facebook_page_name ? `
                     <div class="key-detail">
-                        <span class="key-label">Used Today:</span>
-                        <span class="key-value" style="color: ${statusColor};">${key.today_usage || 0} (${usagePercent}%)</span>
-                    </div>
-                    <div class="key-detail">
-                        <span class="key-label">Remaining:</span>
-                        <span class="key-value" style="color: ${remaining > 0 ? 'var(--success)' : 'var(--error)'};">${remaining}</span>
-                    </div>
-                    <div class="key-usage-bar">
-                        <div class="key-usage-fill" style="width: ${Math.min(usagePercent, 100)}%; background: ${statusColor};"></div>
-                    </div>
-                    ${key.last_used ? `
-                    <div class="key-detail">
-                        <span class="key-label">Last Used:</span>
-                        <span class="key-value" style="font-size: 11px; color: var(--text-muted);">${new Date(key.last_used).toLocaleString()}</span>
+                        <span class="key-label">Page Name:</span>
+                        <span class="key-value">${escapeHtml(key.facebook_page_name)}</span>
                     </div>` : ''}
-                    <div class="key-detail">
-                        <span class="key-label">Total Usage:</span>
-                        <span class="key-value" style="font-size: 11px; color: var(--text-muted);">${key.usage_count || 0} posts</span>
-                    </div>
                     ${key.accounts_count !== undefined ? `
                     <div class="key-detail">
                         <span class="key-label">Accounts Found:</span>
@@ -3221,9 +3201,10 @@ document.getElementById('save-zernio-key-btn')?.addEventListener('click', async 
             
             document.getElementById('zernio-key-api').value = '';
             
-            // Reload keys
+            // ⭐ Reload EVERYTHING
             loadZernioKeys();
             loadZernioAccounts(); // Refresh account list
+            loadPipelines(); // Refresh pipelines
             
             setTimeout(() => {
                 document.getElementById('add-zernio-key-modal').hidden = true;
@@ -3262,6 +3243,7 @@ async function deleteZernioKey(keyId, keyName) {
             showToast(`✅ Zernio key "${keyName}" deleted`, 'success');
             loadZernioKeys();
             loadZernioAccounts(); // Refresh account list
+            loadPipelines();
         } else {
             showToast(`❌ ${data.error || 'Failed to delete key'}`, 'error');
         }
@@ -3287,6 +3269,7 @@ async function toggleZernioKey(keyId, currentActive) {
             showToast(`✅ Key ${!currentActive ? 'activated' : 'deactivated'}`, 'success');
             loadZernioKeys();
             loadZernioAccounts(); // Refresh account list
+            loadPipelines();
         } else {
             showToast(`❌ ${data.error || 'Failed to toggle key'}`, 'error');
         }
@@ -3301,9 +3284,12 @@ document.getElementById('refresh-zernio-keys-btn')?.addEventListener('click', fu
     this.disabled = true;
     this.textContent = '⏳';
     loadZernioKeys();
+    loadZernioAccounts();
+    loadPipelines();
     setTimeout(() => {
         this.disabled = false;
         this.textContent = '🔄 Refresh';
+        showToast('🔄 Keys and accounts refreshed', 'info');
     }, 2000);
 });
 
