@@ -416,9 +416,34 @@ def load_zernio_keys():
         ZERNIO_KEYS = {}
         ZERNIO_KEY_USAGE = {}
         
+        zernio_base_url = get_zernio_base_url()
+        
         for key in keys:
-            ZERNIO_KEYS[str(key['id'])] = dict(key)
-            ZERNIO_KEY_USAGE[str(key['id'])] = {
+            key_id = str(key['id'])
+            
+            # Try to fetch account count for this key
+            account_count = 0
+            try:
+                headers = {
+                    "Authorization": f"Bearer {key['api_key']}",
+                    "Content-Type": "application/json"
+                }
+                response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    accounts = data.get('accounts', [])
+                    for account in accounts:
+                        if account.get('platform') == 'facebook':
+                            account_count += 1
+            except Exception as e:
+                app.logger.warning(f"Could not fetch account count for key {key['name']}: {e}")
+            
+            # Store key data with account count
+            key_data = dict(key)
+            key_data['account_count'] = account_count
+            ZERNIO_KEYS[key_id] = key_data
+            
+            ZERNIO_KEY_USAGE[key_id] = {
                 'today': 0,
                 'last_reset': datetime.utcnow().date()
             }
@@ -2985,27 +3010,70 @@ def zernio_status():
 
 @app.route('/api/zernio/accounts', methods=['GET'])
 def zernio_list_accounts():
+    """List all connected Zernio Facebook accounts - uses the BEST available key."""
     try:
+        # Get the best available key
         key = get_best_zernio_key()
         if not key:
-            return jsonify({"status": "error", "message": "No Zernio keys available", "accounts": []}), 503
+            return jsonify({
+                "status": "error", 
+                "message": "No Zernio keys available. Please add a key first.", 
+                "accounts": []
+            }), 503
         
+        # Use the key's actual API key
         zernio_base_url = get_zernio_base_url()
-        headers = {"Authorization": f"Bearer {key['api_key']}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {key['api_key']}", 
+            "Content-Type": "application/json"
+        }
+        
+        app.logger.info(f"🔑 Fetching accounts with key: {key['name']}")
+        
         response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
         
         if response.status_code == 200:
             data = response.json()
             accounts = data.get('accounts', [])
+            
             facebook_accounts = []
             for account in accounts:
                 if account.get('platform') == 'facebook':
-                    facebook_accounts.append({"id": account.get('_id'), "name": account.get('displayName', 'Unknown'), "page_id": account.get('profileData', {}).get('id', 'N/A'), "username": account.get('username', 'N/A'), "status": account.get('platformStatus', 'unknown')})
-            return jsonify({"status": "success", "accounts": facebook_accounts, "total": len(facebook_accounts)})
+                    facebook_accounts.append({
+                        "id": account.get('_id'),
+                        "name": account.get('displayName', 'Unknown'),
+                        "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                        "username": account.get('username', 'N/A'),
+                        "status": account.get('platformStatus', 'unknown')
+                    })
+            
+            app.logger.info(f"✅ Found {len(facebook_accounts)} Facebook accounts for key: {key['name']}")
+            
+            return jsonify({
+                "status": "success", 
+                "accounts": facebook_accounts, 
+                "total": len(facebook_accounts),
+                "key_name": key['name'],
+                "key_id": key['id']
+            })
         else:
-            return jsonify({"status": "error", "message": f"Zernio API returned {response.status_code}", "accounts": []}), 500
+            app.logger.error(f"❌ Zernio API error: {response.status_code} - {response.text[:200]}")
+            return jsonify({
+                "status": "error", 
+                "message": f"Zernio API returned {response.status_code}", 
+                "accounts": []
+            }), 500
+            
+    except requests.exceptions.Timeout:
+        app.logger.error("❌ Zernio API timeout")
+        return jsonify({"status": "error", "message": "Connection timeout", "accounts": []}), 500
+    except requests.exceptions.ConnectionError as e:
+        app.logger.error(f"❌ Zernio connection error: {e}")
+        return jsonify({"status": "error", "message": str(e), "accounts": []}), 500
     except Exception as e:
-        app.logger.error(f"Error fetching Zernio accounts: {e}")
+        app.logger.error(f"❌ Error fetching Zernio accounts: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
         return jsonify({"status": "error", "message": str(e), "accounts": []}), 500
 
 # ============== ZERNIO KEYS API ==============
@@ -3070,23 +3138,64 @@ def get_zernio_keys():
 
 @app.route('/api/zernio/keys', methods=['POST'])
 def create_zernio_key():
-    """Add a new Zernio key."""
+    """Add a new Zernio key - auto-discovers accounts."""
     data = request.get_json(silent=True) or {}
     
-    name = data.get('name')
     api_key = data.get('api_key')
-    facebook_account_id = data.get('facebook_account_id')
-    facebook_page_name = data.get('facebook_page_name', '')
+    name = data.get('name')
     daily_limit = data.get('daily_limit', 50)
     
-    if not name or not api_key or not facebook_account_id:
-        return jsonify({"error": "name, api_key, and facebook_account_id are required"}), 400
+    if not api_key:
+        return jsonify({"error": "API key is required"}), 400
+    
+    if not name:
+        name = f"Key {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
     
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
     
     try:
+        # First, validate the key and fetch accounts
+        zernio_base_url = get_zernio_base_url()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        app.logger.info(f"🔍 Validating key: {api_key[:10]}...")
+        
+        response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
+        
+        if response.status_code != 200:
+            return jsonify({
+                "error": f"Invalid API key or unable to connect. Status: {response.status_code}"
+            }), 400
+        
+        data = response.json()
+        accounts = data.get('accounts', [])
+        
+        facebook_accounts = []
+        for account in accounts:
+            if account.get('platform') == 'facebook':
+                facebook_accounts.append({
+                    "id": account.get('_id'),
+                    "name": account.get('displayName', 'Unknown'),
+                    "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                    "status": account.get('platformStatus', 'unknown')
+                })
+        
+        if not facebook_accounts:
+            return jsonify({
+                "error": "No Facebook accounts found for this API key. Please check your key."
+            }), 400
+        
+        app.logger.info(f"✅ Found {len(facebook_accounts)} Facebook accounts")
+        
+        # Use the first Facebook account as the default
+        first_account = facebook_accounts[0]
+        
+        # Save the key
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO zernio_keys (
@@ -3094,7 +3203,7 @@ def create_zernio_key():
             )
             VALUES (%s, %s, %s, %s, %s)
             RETURNING id
-        """, (name, api_key, facebook_account_id, facebook_page_name, daily_limit))
+        """, (name, api_key, first_account['id'], first_account['name'], daily_limit))
         
         key_id = cur.fetchone()[0]
         conn.commit()
@@ -3106,11 +3215,18 @@ def create_zernio_key():
         
         return jsonify({
             "status": "success",
-            "message": f"Zernio key '{name}' added",
-            "key_id": key_id
+            "message": f"Zernio key '{name}' added with {len(facebook_accounts)} Facebook accounts",
+            "key_id": key_id,
+            "accounts_found": len(facebook_accounts),
+            "accounts": facebook_accounts
         })
         
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "Connection timeout - please check your key"}), 400
+    except requests.exceptions.ConnectionError:
+        return jsonify({"error": "Could not connect to Zernio API"}), 400
     except Exception as e:
+        app.logger.error(f"Error adding key: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/zernio/keys/<key_id>', methods=['PUT'])
@@ -3398,6 +3514,34 @@ def webhook_caption():
         except Exception as e:
             app.logger.error(f"❌ [Job {job_id}] Failed to mark pending post as failed: {e}")
     return jsonify({"status": "success", "message": "Webhook received", "job_id": job_id})
+
+
+
+
+
+@app.route('/api/zernio/debug', methods=['GET'])
+def debug_zernio_keys():
+    """Debug endpoint to check Zernio keys."""
+    result = {
+        "keys_in_cache": list(ZERNIO_KEYS.keys()),
+        "keys_count": len(ZERNIO_KEYS),
+        "key_details": []
+    }
+    
+    for key_id, key_data in ZERNIO_KEYS.items():
+        result["key_details"].append({
+            "id": key_id,
+            "name": key_data.get('name'),
+            "api_key_masked": key_data.get('api_key', '')[:10] + '...',
+            "is_active": key_data.get('is_active'),
+            "account_count": key_data.get('account_count', 0)
+        })
+    
+    return jsonify(result)
+
+
+
+
 
 # ============== CAPTION STATUS ROUTES ==============
 
