@@ -2984,31 +2984,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
 console.log('✅ Fetchgram loaded successfully!');
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ==================== ZERNIO KEYS MANAGEMENT ====================
 
 let zernioKeys = [];
@@ -3217,7 +3192,7 @@ document.getElementById('save-zernio-key-btn')?.addEventListener('click', async 
             
             // ⭐ CRITICAL FIX: Reload EVERYTHING
             loadZernioKeys();        // Refresh key list
-            loadZernioAccounts();    // Refresh Facebook accounts for dropdown
+            loadZernioAccounts();    // ✅ Refresh Facebook accounts for dropdown
             loadPipelines();         // Refresh pipelines with new accounts
             populatePipelineFilter(); // Refresh scheduled jobs filter
             
@@ -3259,7 +3234,7 @@ async function deleteZernioKey(keyId, keyName) {
             
             // ⭐ CRITICAL FIX: Reload EVERYTHING
             loadZernioKeys();        // Refresh key list
-            loadZernioAccounts();    // Refresh Facebook accounts for dropdown
+            loadZernioAccounts();    // ✅ Refresh Facebook accounts for dropdown
             loadPipelines();         // Refresh pipelines
             populatePipelineFilter(); // Refresh scheduled jobs filter
             
@@ -3289,7 +3264,7 @@ async function toggleZernioKey(keyId, currentActive) {
             
             // ⭐ CRITICAL FIX: Reload EVERYTHING
             loadZernioKeys();        // Refresh key list
-            loadZernioAccounts();    // Refresh Facebook accounts for dropdown
+            loadZernioAccounts();    // ✅ Refresh Facebook accounts for dropdown
             loadPipelines();         // Refresh pipelines
             populatePipelineFilter(); // Refresh scheduled jobs filter
             
@@ -3309,7 +3284,7 @@ document.getElementById('refresh-zernio-keys-btn')?.addEventListener('click', fu
     
     // ⭐ Refresh everything
     loadZernioKeys();
-    loadZernioAccounts();
+    loadZernioAccounts();    // ✅ Refresh Facebook accounts
     loadPipelines();
     populatePipelineFilter();
     
@@ -3421,10 +3396,8 @@ function populatePipelineFacebookAccounts(accounts) {
     });
 }
 
-// Load keys on page load
+// ==================== LOAD ZERNIO KEYS ON PAGE LOAD ====================
+
 document.addEventListener('DOMContentLoaded', function() {
     loadZernioKeys();
 });
-
-// ⭐ Also make sure loadZernioAccounts is called from the main init
-// (This is already in your main script, but ensure it's there)
