@@ -3090,7 +3090,7 @@ def zernio_list_accounts():
 
 @app.route('/api/zernio/keys', methods=['GET'])
 def get_zernio_keys():
-    """Get all Zernio keys with usage stats."""
+    """Get all Zernio keys with their Facebook accounts."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
@@ -3114,25 +3114,62 @@ def get_zernio_keys():
         """)
         keys = cur.fetchall()
         
-        # Add today's usage
-        today = datetime.utcnow().date()
+        zernio_base_url = get_zernio_base_url()
+        
         for key in keys:
-            key_id = str(key['id'])
-            usage = ZERNIO_KEY_USAGE.get(key_id, {}).get('today', 0)
-            
-            # Reset if new day
-            if key_id in ZERNIO_KEY_USAGE and ZERNIO_KEY_USAGE[key_id]['last_reset'] != today:
-                ZERNIO_KEY_USAGE[key_id]['today'] = 0
-                ZERNIO_KEY_USAGE[key_id]['last_reset'] = today
-                usage = 0
-            
-            key['today_usage'] = usage
-            key['remaining'] = key['daily_limit'] - usage
-            # Mask API key for security
+            # Mask API key
             if key['api_key'] and len(key['api_key']) > 10:
                 key['api_key_masked'] = key['api_key'][:8] + '...' + key['api_key'][-4:]
             else:
                 key['api_key_masked'] = '***'
+            
+            # ⭐ FETCH ALL Facebook accounts for this key from the API
+            key['accounts'] = []
+            key['account_count'] = 0
+            
+            try:
+                headers = {
+                    "Authorization": f"Bearer {key['api_key']}",
+                    "Content-Type": "application/json"
+                }
+                
+                app.logger.info(f"🔍 Fetching accounts for key: {key['name']}")
+                response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=15)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    accounts = data.get('accounts', [])
+                    
+                    facebook_accounts = []
+                    for account in accounts:
+                        if account.get('platform') == 'facebook':
+                            facebook_accounts.append({
+                                "id": account.get('_id'),
+                                "name": account.get('displayName', 'Unknown'),
+                                "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                                "status": account.get('platformStatus', 'unknown')
+                            })
+                    
+                    key['accounts'] = facebook_accounts
+                    key['account_count'] = len(facebook_accounts)
+                    app.logger.info(f"✅ Found {len(facebook_accounts)} accounts for key: {key['name']}")
+                else:
+                    app.logger.warning(f"⚠️ API returned {response.status_code} for key {key['name']}")
+                    key['accounts'] = []
+                    key['account_count'] = 0
+                    
+            except requests.exceptions.Timeout:
+                app.logger.warning(f"⏰ Timeout fetching accounts for key {key['name']}")
+                key['accounts'] = []
+                key['account_count'] = 0
+            except requests.exceptions.ConnectionError as e:
+                app.logger.warning(f"🔌 Connection error for key {key['name']}: {e}")
+                key['accounts'] = []
+                key['account_count'] = 0
+            except Exception as e:
+                app.logger.warning(f"❌ Error fetching accounts for key {key['name']}: {e}")
+                key['accounts'] = []
+                key['account_count'] = 0
         
         return jsonify({
             "status": "success",
@@ -3141,6 +3178,9 @@ def get_zernio_keys():
         })
         
     except Exception as e:
+        app.logger.error(f"❌ Error in get_zernio_keys: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()

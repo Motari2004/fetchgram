@@ -3066,6 +3066,7 @@ function renderZernioKeys(keys) {
     
     keys.forEach(key => {
         const isActive = key.is_active;
+        // ⭐ Use accounts from API response
         const accounts = key.accounts || [];
         const accountCount = accounts.length;
         
