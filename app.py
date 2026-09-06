@@ -2983,6 +2983,41 @@ def zernio_status():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+
+
+
+
+
+@app.route("/api/debug/zernio-memory", methods=["GET"])
+def debug_zernio_memory():
+    masked = {}
+    for key_id, key_data in ZERNIO_KEYS.items():
+        d = dict(key_data)
+        api_key = d.get('api_key', '')
+        if api_key and len(api_key) > 12:
+            d['api_key'] = api_key[:8] + '...' + api_key[-4:]
+        masked[key_id] = d
+ 
+    return jsonify({
+        "status": "success",
+        "note": "This is IN-MEMORY state on this specific lambda instance, not the database.",
+        "zernio_keys_in_memory": masked,
+        "zernio_key_usage_in_memory": {
+            k: {**v, 'last_reset': str(v.get('last_reset'))}
+            for k, v in ZERNIO_KEY_USAGE.items()
+        },
+        "total_keys_in_memory": len(ZERNIO_KEYS)
+    })
+
+
+
+
+
+
+
+
+
 @app.route('/api/zernio/accounts', methods=['GET'])
 def zernio_list_accounts():
     """List all connected Zernio Facebook accounts - uses the BEST available key."""
