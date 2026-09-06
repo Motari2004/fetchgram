@@ -4013,7 +4013,7 @@ def update_scheduled_post(post_id):
 def process_scheduled_posts():
     """
     Process scheduled posts that are due.
-    🔥 Fetches caption NOW during posting (original flow).
+    🔥 Posts immediately - NO DELAY!
     """
     conn = get_db_connection()
     if not conn:
@@ -4045,19 +4045,18 @@ def process_scheduled_posts():
         
         for post in due_posts:
             try:
-                # Add random delay for natural feel
-                delay_seconds = random.randint(30, 300)
-                app.logger.info(f"⏳ Waiting {delay_seconds}s before posting...")
-                time.sleep(delay_seconds)
+                # ✅ NO DELAY - Post immediately!
+                app.logger.info(f"📤 Posting due post: {post['reel_url'][:50]}...")
                 
                 # Get pipeline for this post
                 cur.execute("SELECT * FROM pipelines WHERE id = %s", (post['pipeline_id'],))
                 pipeline = cur.fetchone()
                 
                 if not pipeline:
+                    app.logger.error(f"❌ Pipeline not found for post: {post['id']}")
                     continue
                 
-                # 🔥 FETCH CAPTION NOW (if not already available)
+                # 🔥 Get caption (try database first, then fetch from service)
                 caption = post.get('caption', '')
                 
                 # Try to get caption from database first
@@ -4075,7 +4074,7 @@ def process_scheduled_posts():
                         app.logger.warning(f"⚠️ Could not fetch caption for: {post['reel_url'][:50]}...")
                 
                 if caption and caption.strip():
-                    # ✅ Has caption - Post to Facebook
+                    # ✅ Has caption - Post to Facebook IMMEDIATELY
                     app.logger.info(f"📤 Posting with caption: {caption[:50]}...")
                     
                     # Get pipeline's zernio_key_id if set
@@ -4113,18 +4112,21 @@ def process_scheduled_posts():
                         app.logger.info(f"✅ Posted due post at {time_str}: {post['reel_url'][:50]}...")
                     else:
                         failed_count += 1
+                        error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
                         cur.execute("""
                             UPDATE scheduled_posts 
                             SET status = 'failed', error_message = %s, updated_at = NOW()
                             WHERE id = %s
-                        """, (str(result.get('error', 'Unknown error')), post['id']))
+                        """, (str(error_msg), post['id']))
                         conn.commit()
+                        app.logger.error(f"❌ Failed to post: {error_msg}")
                 else:
-                    # ❌ No caption available - skip for now, try again next time
-                    app.logger.warning(f"⚠️ No caption for: {post['reel_url'][:50]}... - will retry")
+                    # ❌ No caption available - try again next time
+                    app.logger.warning(f"⚠️ No caption for: {post['reel_url'][:50]}... - will retry next run")
+                    # Keep as pending, will retry in next scheduler run
                     
             except Exception as e:
-                app.logger.error(f"Error processing scheduled post: {e}")
+                app.logger.error(f"❌ Error processing scheduled post: {e}")
                 failed_count += 1
         
         return jsonify({
@@ -4134,6 +4136,9 @@ def process_scheduled_posts():
         })
         
     except Exception as e:
+        app.logger.error(f"❌ Scheduler error: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
