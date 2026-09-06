@@ -251,50 +251,77 @@ init_db()
 
 # ============== RANDOM TIME GENERATOR ==============
 
-def generate_random_post_times(num_posts, start_hour=8, end_hour=22):
-    """Generate random post times spread throughout the day."""
+def generate_random_post_times(num_posts, start_hour=0, end_hour=23):
+    """
+    Generate random post times spread throughout the ENTIRE day.
+    
+    Args:
+        num_posts: Number of posts to schedule
+        start_hour: Earliest hour to post (default: 0 = 12:00 AM)
+        end_hour: Latest hour to post (default: 23 = 11:00 PM)
+    
+    Returns:
+        List of random datetime objects
+    """
     if num_posts == 0:
         return []
     
+    # If only 1 post, pick random time between start and end
     if num_posts == 1:
-        random_hour = random.randint(start_hour, end_hour - 1)
+        random_hour = random.randint(start_hour, end_hour)
         random_minute = random.randint(0, 59)
+        random_second = random.randint(0, 59)
         random_time = datetime.utcnow().replace(
             hour=random_hour,
             minute=random_minute,
-            second=0,
+            second=random_second,
             microsecond=0
         )
+        # If time has passed, move to tomorrow
         if random_time < datetime.utcnow():
             random_time += timedelta(days=1)
         return [random_time]
     
-    total_minutes = (end_hour - start_hour) * 60
-    min_spacing = 60
+    # Multiple posts - distribute randomly across the entire day
+    total_minutes = (end_hour - start_hour + 1) * 60
+    
+    # Generate random times ensuring minimum spacing (45 minutes between posts)
+    min_spacing = 45  # Minimum 45 minutes between posts
     max_attempts = 100
     
     valid_times = []
     for attempt in range(max_attempts):
-        minutes = sorted([random.randint(0, total_minutes - 60) for _ in range(num_posts)])
+        # Generate random points in the day
+        minutes = sorted([random.randint(0, total_minutes - 1) for _ in range(num_posts)])
+        
+        # Check spacing
         valid = True
         for i in range(1, len(minutes)):
             if minutes[i] - minutes[i-1] < min_spacing:
                 valid = False
                 break
+        
+        # Also check first and last are far enough apart
+        if valid and num_posts > 1:
+            if minutes[-1] - minutes[0] < min_spacing * (num_posts - 1):
+                valid = False
+        
         if valid:
             valid_times = minutes
             break
     
+    # If no valid times found, use evenly spaced times with random jitter
     if not valid_times:
         spacing = total_minutes // num_posts
-        valid_times = [i * spacing + random.randint(-spacing//4, spacing//4) for i in range(num_posts)]
-        valid_times = sorted([max(0, min(total_minutes - 60, t)) for t in valid_times])
+        valid_times = [i * spacing + random.randint(-spacing//3, spacing//3) for i in range(num_posts)]
+        valid_times = sorted([max(0, min(total_minutes - 1, t)) for t in valid_times])
     
+    # Convert minutes to actual times
     times = []
     base_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     
     for minute in valid_times:
-        hour = start_hour + (minute // 60)
+        hour = minute // 60
         minute_of_hour = minute % 60
         post_time = base_time.replace(
             hour=hour,
@@ -302,9 +329,13 @@ def generate_random_post_times(num_posts, start_hour=8, end_hour=22):
             second=0,
             microsecond=0
         )
+        # Add random seconds for more natural timing
         post_time += timedelta(seconds=random.randint(0, 3599))
+        
+        # If time has passed, move to tomorrow
         while post_time < datetime.utcnow():
             post_time += timedelta(days=1)
+        
         times.append(post_time)
     
     return sorted(times)
@@ -1762,6 +1793,7 @@ def get_direct_url_from_cache_only(reel_url):
 # ============== UPDATED RUN_PIPELINE WITH RANDOM SCHEDULING ==============
 
 def run_pipeline(pipeline_id):
+    """Execute a single pipeline - schedules posts at random times throughout the ENTIRE day."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -1783,9 +1815,9 @@ def run_pipeline(pipeline_id):
             log_pipeline_run(pipeline['id'], 0, 0, 'completed', 'No unposted reels found')
             return {"message": "No unposted reels to post", "posted": 0}
         
-        # Generate random post times
+        # 🔥 Generate random post times throughout the ENTIRE day (12:01 AM - 11:59 PM)
         num_posts = len(unposted)
-        post_times = generate_random_post_times(num_posts, start_hour=8, end_hour=22)
+        post_times = generate_random_post_times(num_posts, start_hour=0, end_hour=23)
         
         scheduled_count = 0
         failed_count = 0
@@ -1804,11 +1836,12 @@ def run_pipeline(pipeline_id):
                         direct_video_url = get_direct_url_from_cache_only(reel_url)
                     
                     if direct_video_url:
+                        # Use the generated random time (full day)
                         scheduled_time = post_times[idx] if idx < len(post_times) else None
                         if not scheduled_time:
                             hours_from_now = random.randint(1, 24)
                             scheduled_time = datetime.utcnow() + timedelta(hours=hours_from_now)
-                            scheduled_time = scheduled_time.replace(minute=random.randint(0, 59), second=0)
+                            scheduled_time = scheduled_time.replace(minute=random.randint(0, 59), second=random.randint(0, 59))
                         
                         cur = conn.cursor()
                         cur.execute("""
@@ -1823,7 +1856,7 @@ def run_pipeline(pipeline_id):
                         conn.commit()
                         cur.close()
                         scheduled_count += 1
-                        time_str = scheduled_time.strftime('%Y-%m-%d %H:%M:%S UTC')
+                        time_str = scheduled_time.strftime('%Y-%m-%d %I:%M:%S %p UTC')
                         app.logger.info(f"📅 Scheduled post at {time_str}: {reel_url[:50]}...")
                     else:
                         failed_count += 1
@@ -1860,7 +1893,7 @@ def run_pipeline(pipeline_id):
         log_pipeline_run(pipeline['id'], scheduled_count, failed_count, 'completed' if failed_count == 0 else 'partial')
         
         return {
-            "message": f"Scheduled {scheduled_count} posts at random times, {pending_count} pending captions, {failed_count} failed",
+            "message": f"Scheduled {scheduled_count} posts at random times throughout the day, {pending_count} pending captions, {failed_count} failed",
             "scheduled": scheduled_count,
             "pending": pending_count,
             "failed": failed_count,
@@ -1874,6 +1907,7 @@ def run_pipeline(pipeline_id):
         conn.close()
 
 def run_all_active_pipelines():
+    """Run all active pipelines"""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
