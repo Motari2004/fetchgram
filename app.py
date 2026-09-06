@@ -3015,11 +3015,12 @@ def zernio_list_accounts():
         # Get the best available key
         key = get_best_zernio_key()
         if not key:
+            app.logger.warning("⚠️ No Zernio keys available")
             return jsonify({
-                "status": "error", 
+                "status": "success",  # ✅ Return 200, not 503
                 "message": "No Zernio keys available. Please add a key first.", 
                 "accounts": []
-            }), 503
+            }), 200  # ✅ Return 200 with empty accounts
         
         # Use the key's actual API key
         zernio_base_url = get_zernio_base_url()
@@ -3059,10 +3060,22 @@ def zernio_list_accounts():
         else:
             app.logger.error(f"❌ Zernio API error: {response.status_code} - {response.text[:200]}")
             return jsonify({
-                "status": "error", 
+                "status": "success",  # ✅ Return 200
                 "message": f"Zernio API returned {response.status_code}", 
                 "accounts": []
-            }), 500
+            }), 200  # ✅ Return 200 with empty accounts
+            
+    except requests.exceptions.Timeout:
+        app.logger.error("❌ Zernio API timeout")
+        return jsonify({"status": "success", "message": "Connection timeout", "accounts": []}), 200
+    except requests.exceptions.ConnectionError as e:
+        app.logger.error(f"❌ Zernio connection error: {e}")
+        return jsonify({"status": "success", "message": str(e), "accounts": []}), 200
+    except Exception as e:
+        app.logger.error(f"❌ Error fetching Zernio accounts: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return jsonify({"status": "success", "message": str(e), "accounts": []}), 200
             
     except requests.exceptions.Timeout:
         app.logger.error("❌ Zernio API timeout")
