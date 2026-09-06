@@ -3041,6 +3041,13 @@ async function loadZernioKeys() {
     }
 }
 
+
+
+
+
+
+
+
 function renderZernioKeys(keys) {
     const container = document.getElementById('zernio-keys-list');
     
@@ -3066,7 +3073,7 @@ function renderZernioKeys(keys) {
     
     keys.forEach(key => {
         const isActive = key.is_active;
-        // ⭐ Use accounts from API response
+        // Use accounts from API response
         const accounts = key.accounts || [];
         const accountCount = accounts.length;
         
@@ -3094,7 +3101,7 @@ function renderZernioKeys(keys) {
                         <span class="key-value key-masked">${key.api_key_masked || '***'}</span>
                     </div>
                     
-                    <!-- ⭐ Show ALL Facebook accounts -->
+                    <!-- Show ALL Facebook accounts with ✅ -->
                     <div class="key-accounts-section">
                         <div class="key-detail" style="border-bottom: none; margin-bottom: 4px; font-weight: 600;">
                             <span class="key-label">Facebook Accounts:</span>
@@ -3107,9 +3114,7 @@ function renderZernioKeys(keys) {
                                     <span class="account-icon">📱</span>
                                     <span class="account-name">${escapeHtml(account.name)}</span>
                                     <span class="account-id">${escapeHtml(account.id)}</span>
-                                    <span class="account-status ${account.status === 'connected' ? 'connected' : ''}">
-                                        ${account.status === 'connected' ? '✅' : '⚠️'}
-                                    </span>
+                                    <span class="account-status">✅</span>
                                 </div>
                             `).join('')}
                         </div>
@@ -3137,6 +3142,11 @@ function renderZernioKeys(keys) {
         btn.addEventListener('click', () => toggleZernioKey(btn.dataset.id, btn.dataset.active === 'true'));
     });
 }
+
+
+
+
+
 
 // ==================== ADD ZERNIO KEY (SIMPLIFIED) ====================
 
