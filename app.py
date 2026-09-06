@@ -1976,6 +1976,180 @@ def run_all_active_pipelines():
     finally:
         conn.close()
 
+
+
+
+
+
+
+
+
+# ============== SCHEDULED POSTS ROUTES ==============
+
+@app.route('/api/scheduled-posts', methods=['GET'])
+def get_all_scheduled_posts():
+    """Get all scheduled posts with filters."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        status_filter = request.args.get('status', 'all')
+        pipeline_id = request.args.get('pipeline_id')
+        limit = request.args.get('limit', 50, type=int)
+        
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        query = """
+            SELECT 
+                sp.id,
+                sp.reel_url,
+                sp.direct_video_url,
+                sp.caption,
+                sp.scheduled_time,
+                sp.status,
+                sp.created_at,
+                sp.posted_at,
+                sp.error_message,
+                p.name as pipeline_name,
+                p.profile_username
+            FROM scheduled_posts sp
+            LEFT JOIN pipelines p ON sp.pipeline_id = p.id
+            WHERE 1=1
+        """
+        params = []
+        
+        if status_filter != 'all':
+            query += " AND sp.status = %s"
+            params.append(status_filter)
+        
+        if pipeline_id:
+            query += " AND sp.pipeline_id = %s"
+            params.append(pipeline_id)
+        
+        query += " ORDER BY sp.scheduled_time ASC LIMIT %s"
+        params.append(limit)
+        
+        cur.execute(query, params)
+        scheduled_posts = cur.fetchall()
+        
+        # Get counts by status
+        cur.execute("""
+            SELECT 
+                status,
+                COUNT(*) as count
+            FROM scheduled_posts
+            GROUP BY status
+        """)
+        counts = cur.fetchall()
+        count_dict = {c['status']: c['count'] for c in counts}
+        
+        return jsonify({
+            "status": "success",
+            "scheduled_posts": scheduled_posts,
+            "counts": {
+                "total": sum(count_dict.values()),
+                "pending": count_dict.get('pending', 0),
+                "posted": count_dict.get('posted', 0),
+                "failed": count_dict.get('failed', 0)
+            },
+            "total": len(scheduled_posts)
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error fetching scheduled posts: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/scheduled-posts/<post_id>', methods=['DELETE'])
+def delete_scheduled_post(post_id):
+    """Delete a scheduled post."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM scheduled_posts WHERE id = %s RETURNING id", (post_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+        
+        if deleted:
+            return jsonify({"status": "success", "message": "Post deleted"})
+        else:
+            return jsonify({"error": "Post not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/scheduled-posts/<post_id>', methods=['PUT'])
+def update_scheduled_post(post_id):
+    """Update a scheduled post (reschedule or change status)."""
+    data = request.get_json(silent=True) or {}
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        updates = []
+        params = []
+        
+        if 'scheduled_time' in data:
+            updates.append("scheduled_time = %s")
+            params.append(data['scheduled_time'])
+        
+        if 'status' in data:
+            updates.append("status = %s")
+            params.append(data['status'])
+        
+        if not updates:
+            return jsonify({"error": "No fields to update"}), 400
+        
+        updates.append("updated_at = NOW()")
+        params.append(post_id)
+        
+        cur.execute(f"""
+            UPDATE scheduled_posts 
+            SET {', '.join(updates)}
+            WHERE id = %s
+            RETURNING id
+        """, params)
+        
+        updated = cur.fetchone()
+        conn.commit()
+        
+        if updated:
+            return jsonify({"status": "success", "message": "Post updated"})
+        else:
+            return jsonify({"error": "Post not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ============== SCHEDULER ENDPOINTS ==============
 
 @app.route("/api/scheduler/process", methods=["POST"])

@@ -590,6 +590,72 @@
         <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
       </div>
     </div>
+
+    <!-- ============ SCHEDULED JOBS TOGGLE BUTTON ============ -->
+    <div style="display: flex; justify-content: center; margin: 20px 0;">
+      <button id="toggle-scheduled-jobs-btn" class="btn btn-primary" style="padding: 12px 32px; font-size: 16px;">
+        📅 View Scheduled Jobs
+      </button>
+    </div>
+
+    <!-- ============ SCHEDULED JOBS SECTION (COLLAPSIBLE) ============ -->
+    <div id="scheduled-jobs-container" style="display: none; transition: all 0.3s ease;">
+      <div class="scheduled-posts-section premium-card">
+        <div class="scheduled-posts-header">
+          <div class="scheduled-posts-title">
+            <span class="scheduled-icon">📅</span>
+            <h3>Scheduled Jobs</h3>
+            <span class="badge" id="scheduled-count-badge">Loading...</span>
+          </div>
+          <div class="scheduled-posts-actions">
+            <button id="refresh-scheduled-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+            <button id="close-scheduled-btn" class="btn btn-sm btn-danger">✕ Close</button>
+          </div>
+        </div>
+        
+        <!-- Status Summary -->
+        <div class="scheduled-summary" id="scheduled-summary">
+          <div class="summary-item">
+            <span class="summary-value" id="summary-total">0</span>
+            <span class="summary-label">Total</span>
+          </div>
+          <div class="summary-item pending">
+            <span class="summary-value" id="summary-pending">0</span>
+            <span class="summary-label">⏳ Pending</span>
+          </div>
+          <div class="summary-item posted">
+            <span class="summary-value" id="summary-posted">0</span>
+            <span class="summary-label">✅ Posted</span>
+          </div>
+          <div class="summary-item failed">
+            <span class="summary-value" id="summary-failed">0</span>
+            <span class="summary-label">❌ Failed</span>
+          </div>
+        </div>
+        
+        <!-- Filters -->
+        <div class="scheduled-filters">
+          <select id="scheduled-filter-status" class="input-field">
+            <option value="all">All Status</option>
+            <option value="pending">⏳ Pending</option>
+            <option value="posted">✅ Posted</option>
+            <option value="failed">❌ Failed</option>
+          </select>
+          <select id="scheduled-filter-pipeline" class="input-field">
+            <option value="">All Pipelines</option>
+          </select>
+        </div>
+        
+        <!-- Scheduled Posts List -->
+        <div id="scheduled-posts-list">
+          <div class="loading-state">
+            <div class="loading-spinner"></div>
+            <p style="color: var(--text-muted); margin-top: 12px;">Loading scheduled posts...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <footer class="foot">
