@@ -251,7 +251,7 @@ def init_db():
             );
         """)
         
-        # ========== NEW: APP SETTINGS TABLE ==========
+        # Insert default settings
         cur.execute("""
             INSERT INTO app_settings (setting_key, setting_value, description) VALUES
                 ('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption', 'Caption service endpoint'),
@@ -300,6 +300,217 @@ def init_db():
 
 # Initialize database on startup
 init_db()
+
+# ============== APP SETTINGS MANAGER ==============
+
+APP_SETTINGS_CACHE = {}
+SETTINGS_LAST_LOAD = None
+
+def load_app_settings():
+    """Load all app settings from database."""
+    global APP_SETTINGS_CACHE, SETTINGS_LAST_LOAD
+    
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT setting_key, setting_value, setting_type 
+            FROM app_settings
+            ORDER BY setting_key
+        """)
+        settings = cur.fetchall()
+        
+        for setting in settings:
+            key = setting['setting_key']
+            value = setting['setting_value']
+            setting_type = setting['setting_type']
+            
+            # Parse based on type
+            if setting_type == 'json':
+                try:
+                    APP_SETTINGS_CACHE[key] = json.loads(value) if value else None
+                except:
+                    APP_SETTINGS_CACHE[key] = value
+            elif setting_type == 'array':
+                try:
+                    APP_SETTINGS_CACHE[key] = json.loads(value) if value else []
+                except:
+                    APP_SETTINGS_CACHE[key] = value.split(',') if value else []
+            elif setting_type == 'boolean':
+                APP_SETTINGS_CACHE[key] = value.lower() in ('true', '1', 'yes') if value else False
+            else:
+                APP_SETTINGS_CACHE[key] = value
+        
+        SETTINGS_LAST_LOAD = datetime.utcnow()
+        cur.close()
+        conn.close()
+        app.logger.info(f"✅ Loaded {len(settings)} app settings")
+        
+    except Exception as e:
+        app.logger.error(f"Error loading settings: {e}")
+
+def get_setting(key, default=None):
+    """Get a setting value."""
+    # Reload if cache is old (5 minutes)
+    if SETTINGS_LAST_LOAD and (datetime.utcnow() - SETTINGS_LAST_LOAD).total_seconds() > 300:
+        load_app_settings()
+    
+    return APP_SETTINGS_CACHE.get(key, default)
+
+def update_setting(key, value):
+    """Update a setting value."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO app_settings (setting_key, setting_value, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (setting_key) DO UPDATE SET
+                setting_value = EXCLUDED.setting_value,
+                updated_at = NOW()
+        """, (key, str(value)))
+        conn.commit()
+        
+        # Update cache
+        APP_SETTINGS_CACHE[key] = value
+        
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        app.logger.error(f"Error updating setting {key}: {e}")
+        return False
+
+# Load settings on startup
+load_app_settings()
+
+# ============== ZERNIO KEY MANAGER ==============
+
+ZERNIO_KEYS = {}  # Cache for keys
+ZERNIO_KEY_USAGE = {}  # Track usage per key
+
+def load_zernio_keys():
+    """Load all active Zernio keys from database."""
+    global ZERNIO_KEYS, ZERNIO_KEY_USAGE
+    
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, name, api_key, facebook_account_id, facebook_page_name, 
+                   daily_limit, usage_count, is_active
+            FROM zernio_keys
+            WHERE is_active = TRUE
+        """)
+        keys = cur.fetchall()
+        
+        ZERNIO_KEYS = {}
+        ZERNIO_KEY_USAGE = {}
+        
+        for key in keys:
+            ZERNIO_KEYS[str(key['id'])] = dict(key)
+            ZERNIO_KEY_USAGE[str(key['id'])] = {
+                'today': 0,
+                'last_reset': datetime.utcnow().date()
+            }
+        
+        cur.close()
+        conn.close()
+        app.logger.info(f"✅ Loaded {len(keys)} Zernio keys")
+        return keys
+    except Exception as e:
+        app.logger.error(f"Error loading Zernio keys: {e}")
+        return []
+
+def get_best_zernio_key():
+    """
+    Get the best available Zernio key based on usage.
+    Returns the least used key that hasn't hit daily limit.
+    """
+    global ZERNIO_KEY_USAGE
+    
+    # Reset daily usage if new day
+    today = datetime.utcnow().date()
+    for key_id in ZERNIO_KEY_USAGE:
+        if ZERNIO_KEY_USAGE[key_id]['last_reset'] != today:
+            ZERNIO_KEY_USAGE[key_id]['today'] = 0
+            ZERNIO_KEY_USAGE[key_id]['last_reset'] = today
+    
+    # Find keys with capacity
+    available_keys = []
+    for key_id, key_data in ZERNIO_KEYS.items():
+        usage = ZERNIO_KEY_USAGE.get(key_id, {'today': 0, 'last_reset': today})
+        if usage['today'] < key_data.get('daily_limit', 50):
+            available_keys.append({
+                'key_id': key_id,
+                'usage': usage['today'],
+                'limit': key_data.get('daily_limit', 50),
+                'remaining': key_data.get('daily_limit', 50) - usage['today']
+            })
+    
+    if not available_keys:
+        return None
+    
+    # Return key with most remaining capacity
+    best_key = max(available_keys, key=lambda x: x['remaining'])
+    return ZERNIO_KEYS[best_key['key_id']]
+
+def get_zernio_key_by_id(key_id):
+    """Get a specific Zernio key by ID."""
+    return ZERNIO_KEYS.get(str(key_id))
+
+def increment_key_usage(key_id):
+    """Increment usage count for a key."""
+    if str(key_id) in ZERNIO_KEY_USAGE:
+        ZERNIO_KEY_USAGE[str(key_id)]['today'] += 1
+    
+    # Also update database
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE zernio_keys 
+                SET usage_count = usage_count + 1,
+                    last_used = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+            """, (key_id,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            app.logger.error(f"Error updating key usage: {e}")
+
+def get_key_usage_status(key_id):
+    """Get usage status for a key."""
+    if str(key_id) in ZERNIO_KEY_USAGE:
+        usage = ZERNIO_KEY_USAGE[str(key_id)]
+        key_data = ZERNIO_KEYS.get(str(key_id), {})
+        today = datetime.utcnow().date()
+        
+        if usage['last_reset'] != today:
+            usage['today'] = 0
+            usage['last_reset'] = today
+        
+        return {
+            'used_today': usage['today'],
+            'daily_limit': key_data.get('daily_limit', 50),
+            'remaining': key_data.get('daily_limit', 50) - usage['today']
+        }
+    return None
+
+# Load Zernio keys on startup
+load_zernio_keys()
 
 # ============== RANDOM TIME GENERATOR ==============
 
@@ -384,14 +595,25 @@ CAPTION_FETCH_STATUS = {}
 
 # ============== CAPTION SERVICE INTEGRATION ==============
 
-CAPTION_SERVICE_URL = os.environ.get('CAPTION_SERVICE_URL', 'https://copytxt-caption-automation.onrender.com/api/caption')
+def get_caption_service_url():
+    """Get caption service URL from settings."""
+    return get_setting('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption')
+
+def get_zernio_base_url():
+    """Get Zernio base URL from settings."""
+    return get_setting('zernio_base_url', 'https://zernio.com/api/v1')
+
+def get_scraper_base_url():
+    """Get scraper service URL from settings."""
+    return get_setting('scraper_base_url', 'https://ig-reels-scraper.onrender.com')
 
 def fetch_captions_batch(reel_urls):
     if not reel_urls:
         return {}
     try:
+        caption_service_url = get_caption_service_url()
         response = requests.post(
-            f"{CAPTION_SERVICE_URL}/batch",
+            f"{caption_service_url}/batch",
             json={"urls": reel_urls},
             timeout=60,
             headers={"Content-Type": "application/json"}
@@ -413,8 +635,9 @@ def fetch_caption_from_service(reel_url):
     """Fetch a single caption from the caption service - called during posting."""
     try:
         app.logger.info(f"📞 Fetching caption NOW for: {reel_url[:50]}...")
+        caption_service_url = get_caption_service_url()
         response = requests.post(
-            CAPTION_SERVICE_URL,
+            caption_service_url,
             json={"url": reel_url},
             timeout=30,
             headers={"Content-Type": "application/json"}
@@ -577,9 +800,10 @@ def sync_captions_background(username):
                 
                 for idx, (reel_url, (profile_idx, reel_idx)) in enumerate(zip(urls_to_fetch, reel_positions)):
                     try:
+                        caption_service_url = get_caption_service_url()
                         app.logger.info(f"[Job {job_id}] 📞 [{idx+1}/{len(urls_to_fetch)}] Calling caption service...")
                         response = requests.post(
-                            CAPTION_SERVICE_URL,
+                            caption_service_url,
                             json={"url": reel_url},
                             timeout=30,
                             headers={"Content-Type": "application/json"}
@@ -1141,23 +1365,72 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
 
 # ============== ZERNIO (FACEBOOK) INTEGRATION ==============
 
-ZERNIO_API_KEY = os.environ.get('ZERNIO_API_KEY', 'sk_48ad5dd4a9d9bd8e2561633862dc1708b3fb2013645023fde617921bd065a037')
-ZERNIO_BASE_URL = "https://zernio.com/api/v1"
-
-def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None):
-    headers = {"Authorization": f"Bearer {ZERNIO_API_KEY}", "Content-Type": "application/json"}
+def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None, key_id=None):
+    """
+    Publish to Facebook using a specific Zernio key or the best available.
+    
+    Args:
+        video_url: URL of the video to publish
+        text: Caption text
+        account_id: Zernio Facebook account ID
+        publish_now: If True, publish immediately
+        scheduled_time: ISO format datetime string
+        key_id: Specific key to use (optional)
+    
+    Returns:
+        dict: Response from Zernio API
+    """
+    # Get the key to use
+    zernio_base_url = get_zernio_base_url()
+    
+    if key_id and str(key_id) in ZERNIO_KEYS:
+        key = ZERNIO_KEYS[str(key_id)]
+    else:
+        key = get_best_zernio_key()
+    
+    if not key:
+        return {"error": "No available Zernio keys with remaining capacity"}
+    
+    app.logger.info(f"📤 Using Zernio key: {key['name']}")
+    
+    headers = {
+        "Authorization": f"Bearer {key['api_key']}",
+        "Content-Type": "application/json"
+    }
+    
     payload = {
         "content": text,
-        "platforms": [{"platform": "facebook", "accountId": account_id}],
-        "mediaItems": [{"type": "video", "url": video_url}]
+        "platforms": [
+            {
+                "platform": "facebook",
+                "accountId": account_id or key['facebook_account_id']
+            }
+        ],
+        "mediaItems": [
+            {
+                "type": "video",
+                "url": video_url
+            }
+        ]
     }
+    
     if publish_now:
         payload["publishNow"] = True
     elif scheduled_time:
         payload["scheduledFor"] = scheduled_time
         payload["timezone"] = "UTC"
+    
     try:
-        response = requests.post(f"{ZERNIO_BASE_URL}/posts", headers=headers, json=payload, timeout=120)
+        response = requests.post(
+            f"{zernio_base_url}/posts",
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+        
+        # Increment usage
+        increment_key_usage(key['id'])
+        
         if response.status_code in [200, 201]:
             return response.json()
         else:
@@ -1168,8 +1441,18 @@ def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled
 def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_time=None):
     results = {}
     try:
-        headers = {"Authorization": f"Bearer {ZERNIO_API_KEY}", "Content-Type": "application/json"}
-        response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        zernio_base_url = get_zernio_base_url()
+        
+        # First, get the key to use
+        key = get_best_zernio_key()
+        if not key:
+            return {"error": "No available Zernio keys"}
+        
+        headers = {
+            "Authorization": f"Bearer {key['api_key']}",
+            "Content-Type": "application/json"
+        }
+        response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
         if response.status_code == 200:
             data = response.json()
             accounts = data.get('accounts', [])
@@ -1182,7 +1465,8 @@ def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_t
                         text=text,
                         account_id=account_id,
                         publish_now=publish_now,
-                        scheduled_time=scheduled_time
+                        scheduled_time=scheduled_time,
+                        key_id=key['id']
                     )
                     results[account_id] = {"account_name": account_name, "result": result}
     except Exception as e:
@@ -1216,9 +1500,10 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
     
     def send_request_1():
         try:
+            caption_service_url = get_caption_service_url()
             app.logger.info(f"📞 [Job {job_id}] Request 1 (WAKE-UP) sent...")
             response = requests.post(
-                CAPTION_SERVICE_URL,
+                caption_service_url,
                 json={
                     "url": reel_url,
                     "job_id": job_id,
@@ -1244,11 +1529,12 @@ def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_user
     
     def send_request_2():
         try:
+            caption_service_url = get_caption_service_url()
             app.logger.info(f"⏳ [Job {job_id}] Waiting 60 seconds before request 2...")
             time.sleep(60)
             app.logger.info(f"📞 [Job {job_id}] Request 2 (REAL FETCH) sent...")
             response = requests.post(
-                CAPTION_SERVICE_URL,
+                caption_service_url,
                 json={
                     "url": reel_url,
                     "job_id": job_id,
@@ -1327,9 +1613,10 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
     
     def send_wakeup():
         try:
+            caption_service_url = get_caption_service_url()
             app.logger.info(f"💤 [Job {job_id}] Sending wake-up request...")
             requests.post(
-                CAPTION_SERVICE_URL,
+                caption_service_url,
                 json={
                     "url": reel_url,
                     "job_id": job_id,
@@ -1358,6 +1645,7 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
             CAPTION_FETCH_STATUS[reel_url]['wake_up_sent'] = True
     
     def send_real_fetch_with_retry():
+        caption_service_url = get_caption_service_url()
         app.logger.info(f"⏳ [Job {job_id}] Waiting 60 seconds for Render to wake up...")
         time.sleep(60)
         max_attempts = max_retries
@@ -1369,7 +1657,7 @@ def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, pr
                 CAPTION_FETCH_STATUS[reel_url]['real_fetch_attempts'] = attempt + 1
                 CAPTION_FETCH_STATUS[reel_url]['message'] = f'Real fetch attempt {attempt + 1}'
                 response = requests.post(
-                    CAPTION_SERVICE_URL,
+                    caption_service_url,
                     json={
                         "url": reel_url,
                         "job_id": job_id,
@@ -1557,11 +1845,28 @@ def process_pending_post(post):
             app.logger.error(f"❌ No caption available for: {post['reel_url'][:50]}...")
             update_pending_post_status(post['id'], 'failed', 'No caption available')
             return False
+        
+        # Get the pipeline's zernio_key_id if set
+        conn = get_db_connection()
+        key_id = None
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT zernio_key_id FROM pipelines WHERE id = %s", (post['pipeline_id'],))
+                result = cur.fetchone()
+                if result and result[0]:
+                    key_id = result[0]
+                cur.close()
+                conn.close()
+            except:
+                pass
+        
         result = publish_to_facebook(
             video_url=post['direct_video_url'],
             text=caption,
             account_id=post['facebook_account_id'],
-            publish_now=True
+            publish_now=True,
+            key_id=key_id
         )
         if result and not result.get('error'):
             post_id = result.get('post', {}).get('_id') or result.get('post_id')
@@ -1900,8 +2205,6 @@ def get_direct_url_from_cache_only(reel_url):
 
 # ============== UPDATED RUN_PIPELINE - PURE SCHEDULING ==============
 
-# ============== PIPELINE FUNCTIONS ==============
-
 def run_pipeline(pipeline_id):
     """Pure scheduling - find unposted reels and schedule them at random times."""
     conn = get_db_connection()
@@ -1956,7 +2259,7 @@ def run_pipeline(pipeline_id):
                     
                     cur = conn.cursor()
                     
-                    # 🔥 FIX: Check if reel already exists before inserting
+                    # Check if reel already exists before inserting
                     cur.execute("SELECT id FROM scheduled_posts WHERE reel_url = %s", (reel_url,))
                     existing = cur.fetchone()
                     
@@ -2027,345 +2330,6 @@ def run_all_active_pipelines():
         return {"error": str(e)}
     finally:
         conn.close()
-
-
-
-
-
-
-
-
-
-# ============== SCHEDULED POSTS ROUTES ==============
-
-@app.route('/api/scheduled-posts', methods=['GET'])
-def get_all_scheduled_posts():
-    """Get all scheduled posts with filters."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        status_filter = request.args.get('status', 'all')
-        pipeline_id = request.args.get('pipeline_id')
-        limit = request.args.get('limit', 50, type=int)
-        
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        query = """
-            SELECT 
-                sp.id,
-                sp.reel_url,
-                sp.direct_video_url,
-                sp.caption,
-                sp.scheduled_time,
-                sp.status,
-                sp.created_at,
-                sp.posted_at,
-                sp.error_message,
-                p.name as pipeline_name,
-                p.profile_username
-            FROM scheduled_posts sp
-            LEFT JOIN pipelines p ON sp.pipeline_id = p.id
-            WHERE 1=1
-        """
-        params = []
-        
-        if status_filter != 'all':
-            query += " AND sp.status = %s"
-            params.append(status_filter)
-        
-        if pipeline_id:
-            query += " AND sp.pipeline_id = %s"
-            params.append(pipeline_id)
-        
-        query += " ORDER BY sp.scheduled_time ASC LIMIT %s"
-        params.append(limit)
-        
-        cur.execute(query, params)
-        scheduled_posts = cur.fetchall()
-        
-        # Get counts by status
-        cur.execute("""
-            SELECT 
-                status,
-                COUNT(*) as count
-            FROM scheduled_posts
-            GROUP BY status
-        """)
-        counts = cur.fetchall()
-        count_dict = {c['status']: c['count'] for c in counts}
-        
-        return jsonify({
-            "status": "success",
-            "scheduled_posts": scheduled_posts,
-            "counts": {
-                "total": sum(count_dict.values()),
-                "pending": count_dict.get('pending', 0),
-                "posted": count_dict.get('posted', 0),
-                "failed": count_dict.get('failed', 0)
-            },
-            "total": len(scheduled_posts)
-        })
-        
-    except Exception as e:
-        app.logger.error(f"Error fetching scheduled posts: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route('/api/scheduled-posts/<post_id>', methods=['DELETE'])
-def delete_scheduled_post(post_id):
-    """Delete a scheduled post."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM scheduled_posts WHERE id = %s RETURNING id", (post_id,))
-        deleted = cur.fetchone()
-        conn.commit()
-        
-        if deleted:
-            return jsonify({"status": "success", "message": "Post deleted"})
-        else:
-            return jsonify({"error": "Post not found"}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route('/api/scheduled-posts/<post_id>', methods=['PUT'])
-def update_scheduled_post(post_id):
-    """Update a scheduled post (reschedule or change status)."""
-    data = request.get_json(silent=True) or {}
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor()
-        updates = []
-        params = []
-        
-        if 'scheduled_time' in data:
-            updates.append("scheduled_time = %s")
-            params.append(data['scheduled_time'])
-        
-        if 'status' in data:
-            updates.append("status = %s")
-            params.append(data['status'])
-        
-        if not updates:
-            return jsonify({"error": "No fields to update"}), 400
-        
-        updates.append("updated_at = NOW()")
-        params.append(post_id)
-        
-        cur.execute(f"""
-            UPDATE scheduled_posts 
-            SET {', '.join(updates)}
-            WHERE id = %s
-            RETURNING id
-        """, params)
-        
-        updated = cur.fetchone()
-        conn.commit()
-        
-        if updated:
-            return jsonify({"status": "success", "message": "Post updated"})
-        else:
-            return jsonify({"error": "Post not found"}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ============== SCHEDULER ENDPOINTS ==============
-
-@app.route("/api/scheduler/process", methods=["POST"])
-def process_scheduled_posts():
-    """
-    Process scheduled posts that are due.
-    🔥 Fetches caption NOW during posting (original flow).
-    """
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Get posts that are due (scheduled_time <= now) and not yet posted
-        cur.execute("""
-            SELECT * FROM scheduled_posts 
-            WHERE status = 'pending' 
-            AND scheduled_time <= NOW()
-            ORDER BY scheduled_time ASC
-            LIMIT 5
-        """)
-        
-        due_posts = cur.fetchall()
-        
-        if not due_posts:
-            return jsonify({
-                "status": "success",
-                "message": "No posts due",
-                "posted": 0
-            })
-        
-        posted_count = 0
-        failed_count = 0
-        
-        for post in due_posts:
-            try:
-                # Add random delay for natural feel
-                delay_seconds = random.randint(30, 300)
-                app.logger.info(f"⏳ Waiting {delay_seconds}s before posting...")
-                time.sleep(delay_seconds)
-                
-                # Get pipeline for this post
-                cur.execute("SELECT * FROM pipelines WHERE id = %s", (post['pipeline_id'],))
-                pipeline = cur.fetchone()
-                
-                if not pipeline:
-                    continue
-                
-                # 🔥 FETCH CAPTION NOW (if not already available)
-                caption = post.get('caption', '')
-                
-                # Try to get caption from database first
-                if not caption or not caption.strip():
-                    caption = get_caption_for_reel(post['reel_url'], pipeline['profile_username'], post['pipeline_id'])
-                
-                # If still no caption, fetch it NOW from service
-                if not caption or not caption.strip():
-                    app.logger.info(f"📝 Fetching caption NOW for: {post['reel_url'][:50]}...")
-                    caption = fetch_caption_from_service(post['reel_url'])
-                    if caption:
-                        app.logger.info(f"✅ Caption fetched NOW: {caption[:50]}...")
-                        # Store caption in database for future
-                        store_caption_in_database(post['reel_url'], caption, pipeline['profile_username'])
-                    else:
-                        app.logger.warning(f"⚠️ Could not fetch caption for: {post['reel_url'][:50]}...")
-                
-                if caption and caption.strip():
-                    # ✅ Has caption - Post to Facebook
-                    app.logger.info(f"📤 Posting with caption: {caption[:50]}...")
-                    result = publish_to_facebook(
-                        video_url=post['direct_video_url'],
-                        text=caption,
-                        account_id=pipeline['facebook_account_id'],
-                        publish_now=True
-                    )
-                    
-                    if result and not result.get('error'):
-                        # Mark as posted
-                        mark_reel_as_posted(
-                            pipeline_id=post['pipeline_id'],
-                            reel_url=post['reel_url'],
-                            direct_video_url=post['direct_video_url'],
-                            caption=caption,
-                            facebook_post_id=result.get('post', {}).get('_id'),
-                            status='success'
-                        )
-                        
-                        # Update scheduled post status
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET status = 'posted', posted_at = NOW(), updated_at = NOW()
-                            WHERE id = %s
-                        """, (post['id'],))
-                        conn.commit()
-                        posted_count += 1
-                        
-                        time_str = datetime.utcnow().strftime('%Y-%m-%d %I:%M:%S %p UTC')
-                        app.logger.info(f"✅ Posted due post at {time_str}: {post['reel_url'][:50]}...")
-                    else:
-                        failed_count += 1
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET status = 'failed', error_message = %s, updated_at = NOW()
-                            WHERE id = %s
-                        """, (str(result.get('error', 'Unknown error')), post['id']))
-                        conn.commit()
-                else:
-                    # ❌ No caption available - skip for now, try again next time
-                    app.logger.warning(f"⚠️ No caption for: {post['reel_url'][:50]}... - will retry")
-                    # Keep as pending, will retry in next scheduler run
-                    
-            except Exception as e:
-                app.logger.error(f"Error processing scheduled post: {e}")
-                failed_count += 1
-        
-        return jsonify({
-            "status": "success",
-            "posted": posted_count,
-            "failed": failed_count
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route("/api/scheduler/daily", methods=["POST"])
-def daily_scheduler():
-    """
-    Daily scheduler - runs at midnight (12:00 AM).
-    🔥 Pure scheduling - no pending posts, just schedule all unposted reels.
-    Captions will be fetched during posting.
-    """
-    app.logger.info("🕐 Running daily scheduler at midnight...")
-    
-    # Run all active pipelines to schedule posts
-    result = run_all_active_pipelines()
-    
-    # Clean up old scheduled posts
-    try:
-        conn = get_db_connection()
-        if conn:
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE scheduled_posts 
-                SET status = 'failed', error_message = 'Expired - not posted within 48 hours'
-                WHERE status = 'pending' 
-                AND scheduled_time < NOW() - INTERVAL '48 hours'
-            """)
-            conn.commit()
-            cur.close()
-            conn.close()
-            app.logger.info(f"🧹 Cleaned up old scheduled posts")
-    except Exception as e:
-        app.logger.error(f"Cleanup error: {e}")
-    
-    return jsonify({
-        "status": "success",
-        "message": "Daily scheduler completed at midnight",
-        "result": result
-    })
 
 def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
     conn = get_db_connection()
@@ -2513,7 +2477,8 @@ def scrape_proxy():
         for username in usernames:
             existing_urls[username] = get_existing_reel_urls(username)
             app.logger.info(f"📊 @{username}: {len(existing_urls[username])} existing reels")
-        response = requests.post('https://ig-reels-scraper.onrender.com/api/scrape/start', json=data, headers={'Content-Type': 'application/json'}, timeout=60)
+        scraper_base_url = get_scraper_base_url()
+        response = requests.post(f'{scraper_base_url}/api/scrape/start', json=data, headers={'Content-Type': 'application/json'}, timeout=60)
         app.logger.info(f"Proxy: Render responded with status {response.status_code}")
         if response.status_code == 200:
             result_data = response.json()
@@ -2979,19 +2944,41 @@ def zernio_publish():
     account_id = data.get('account_id')
     publish_now = data.get('publish_now', True)
     scheduled_time = data.get('scheduled_time')
+    key_id = data.get('key_id')  # Optional: specific key to use
+    
     if not video_url:
         return jsonify({"error": "video_url is required"}), 400
+    
     if account_id:
-        result = publish_to_facebook(video_url=video_url, text=text, account_id=account_id, publish_now=publish_now, scheduled_time=scheduled_time)
+        result = publish_to_facebook(
+            video_url=video_url,
+            text=text,
+            account_id=account_id,
+            publish_now=publish_now,
+            scheduled_time=scheduled_time,
+            key_id=key_id
+        )
         return jsonify(result)
-    results = publish_video_to_all_accounts(video_url=video_url, text=text, publish_now=publish_now, scheduled_time=scheduled_time)
+    
+    results = publish_video_to_all_accounts(
+        video_url=video_url,
+        text=text,
+        publish_now=publish_now,
+        scheduled_time=scheduled_time
+    )
     return jsonify({"status": "success", "message": f"Published to {len(results)} accounts", "results": results})
 
 @app.route('/api/zernio/status', methods=['GET'])
 def zernio_status():
     try:
-        headers = {"Authorization": f"Bearer {ZERNIO_API_KEY}", "Content-Type": "application/json"}
-        response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        # Try to get accounts with the best available key
+        key = get_best_zernio_key()
+        if not key:
+            return jsonify({"status": "error", "message": "No Zernio keys available"}), 503
+        
+        zernio_base_url = get_zernio_base_url()
+        headers = {"Authorization": f"Bearer {key['api_key']}", "Content-Type": "application/json"}
+        response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
         return jsonify({"status": "connected" if response.status_code == 200 else "error", "status_code": response.status_code, "message": "Zernio API is accessible" if response.status_code == 200 else "Failed to connect"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -2999,8 +2986,14 @@ def zernio_status():
 @app.route('/api/zernio/accounts', methods=['GET'])
 def zernio_list_accounts():
     try:
-        headers = {"Authorization": f"Bearer {ZERNIO_API_KEY}", "Content-Type": "application/json"}
-        response = requests.get(f"{ZERNIO_BASE_URL}/accounts", headers=headers, timeout=30)
+        key = get_best_zernio_key()
+        if not key:
+            return jsonify({"status": "error", "message": "No Zernio keys available", "accounts": []}), 503
+        
+        zernio_base_url = get_zernio_base_url()
+        headers = {"Authorization": f"Bearer {key['api_key']}", "Content-Type": "application/json"}
+        response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
+        
         if response.status_code == 200:
             data = response.json()
             accounts = data.get('accounts', [])
@@ -3014,6 +3007,239 @@ def zernio_list_accounts():
     except Exception as e:
         app.logger.error(f"Error fetching Zernio accounts: {e}")
         return jsonify({"status": "error", "message": str(e), "accounts": []}), 500
+
+# ============== ZERNIO KEYS API ==============
+
+@app.route('/api/zernio/keys', methods=['GET'])
+def get_zernio_keys():
+    """Get all Zernio keys with usage stats."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                id,
+                name,
+                api_key,
+                facebook_account_id,
+                facebook_page_name,
+                daily_limit,
+                usage_count,
+                last_used,
+                is_active,
+                created_at
+            FROM zernio_keys
+            ORDER BY created_at DESC
+        """)
+        keys = cur.fetchall()
+        
+        # Add today's usage
+        today = datetime.utcnow().date()
+        for key in keys:
+            key_id = str(key['id'])
+            usage = ZERNIO_KEY_USAGE.get(key_id, {}).get('today', 0)
+            
+            # Reset if new day
+            if key_id in ZERNIO_KEY_USAGE and ZERNIO_KEY_USAGE[key_id]['last_reset'] != today:
+                ZERNIO_KEY_USAGE[key_id]['today'] = 0
+                ZERNIO_KEY_USAGE[key_id]['last_reset'] = today
+                usage = 0
+            
+            key['today_usage'] = usage
+            key['remaining'] = key['daily_limit'] - usage
+            # Mask API key for security
+            if key['api_key'] and len(key['api_key']) > 10:
+                key['api_key_masked'] = key['api_key'][:8] + '...' + key['api_key'][-4:]
+            else:
+                key['api_key_masked'] = '***'
+        
+        return jsonify({
+            "status": "success",
+            "keys": keys,
+            "total": len(keys)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/zernio/keys', methods=['POST'])
+def create_zernio_key():
+    """Add a new Zernio key."""
+    data = request.get_json(silent=True) or {}
+    
+    name = data.get('name')
+    api_key = data.get('api_key')
+    facebook_account_id = data.get('facebook_account_id')
+    facebook_page_name = data.get('facebook_page_name', '')
+    daily_limit = data.get('daily_limit', 50)
+    
+    if not name or not api_key or not facebook_account_id:
+        return jsonify({"error": "name, api_key, and facebook_account_id are required"}), 400
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO zernio_keys (
+                name, api_key, facebook_account_id, facebook_page_name, daily_limit
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+        """, (name, api_key, facebook_account_id, facebook_page_name, daily_limit))
+        
+        key_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Reload keys
+        load_zernio_keys()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Zernio key '{name}' added",
+            "key_id": key_id
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/zernio/keys/<key_id>', methods=['PUT'])
+def update_zernio_key(key_id):
+    """Update a Zernio key."""
+    data = request.get_json(silent=True) or {}
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        updates = []
+        params = []
+        
+        if 'name' in data:
+            updates.append("name = %s"); params.append(data['name'])
+        if 'api_key' in data:
+            updates.append("api_key = %s"); params.append(data['api_key'])
+        if 'facebook_account_id' in data:
+            updates.append("facebook_account_id = %s"); params.append(data['facebook_account_id'])
+        if 'facebook_page_name' in data:
+            updates.append("facebook_page_name = %s"); params.append(data['facebook_page_name'])
+        if 'daily_limit' in data:
+            updates.append("daily_limit = %s"); params.append(data['daily_limit'])
+        if 'is_active' in data:
+            updates.append("is_active = %s"); params.append(data['is_active'])
+        
+        if not updates:
+            return jsonify({"error": "No fields to update"}), 400
+        
+        updates.append("updated_at = NOW()")
+        params.append(key_id)
+        
+        cur = conn.cursor()
+        cur.execute(f"UPDATE zernio_keys SET {', '.join(updates)} WHERE id = %s", params)
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Reload keys
+        load_zernio_keys()
+        
+        return jsonify({"status": "success", "message": "Key updated"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/zernio/keys/<key_id>', methods=['DELETE'])
+def delete_zernio_key(key_id):
+    """Delete a Zernio key."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM zernio_keys WHERE id = %s RETURNING id", (key_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        if deleted:
+            # Reload keys
+            load_zernio_keys()
+            return jsonify({"status": "success", "message": "Key deleted"})
+        else:
+            return jsonify({"error": "Key not found"}), 404
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/zernio/keys/<key_id>/stats', methods=['GET'])
+def get_key_stats(key_id):
+    """Get detailed stats for a Zernio key."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                id,
+                name,
+                daily_limit,
+                usage_count,
+                last_used,
+                is_active,
+                created_at
+            FROM zernio_keys
+            WHERE id = %s
+        """, (key_id,))
+        key = cur.fetchone()
+        
+        if not key:
+            return jsonify({"error": "Key not found"}), 404
+        
+        # Get today's usage
+        today = datetime.utcnow().date()
+        key_id_str = str(key_id)
+        if key_id_str in ZERNIO_KEY_USAGE and ZERNIO_KEY_USAGE[key_id_str]['last_reset'] == today:
+            key['today_usage'] = ZERNIO_KEY_USAGE[key_id_str]['today']
+        else:
+            key['today_usage'] = 0
+        
+        key['remaining'] = key['daily_limit'] - key['today_usage']
+        
+        # Get pipeline usage
+        cur.execute("""
+            SELECT 
+                p.name as pipeline_name,
+                p.profile_username,
+                COUNT(pr.id) as posts_count
+            FROM pipelines p
+            LEFT JOIN posted_reels pr ON p.id = pr.pipeline_id
+            WHERE p.zernio_key_id = %s
+            AND pr.posted_at > NOW() - INTERVAL '30 days'
+            GROUP BY p.id
+        """, (key_id,))
+        key['pipeline_usage'] = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({"status": "success", "key": key})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ============== SYNC STATUS ROUTE ==============
 
@@ -3228,17 +3454,21 @@ def create_pipeline():
     profile_username = data.get('profile_username')
     facebook_account_id = data.get('facebook_account_id')
     daily_limit = data.get('daily_limit', 2)
+    zernio_key_id = data.get('zernio_key_id')  # Optional: assign a specific key
+    
     if not name or not profile_username or not facebook_account_id:
         return jsonify({"error": "name, profile_username, and facebook_account_id are required"}), 400
+    
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO pipelines (id, name, profile_username, facebook_account_id, daily_limit, is_active)
-            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE) RETURNING id
-        """, (name, profile_username, facebook_account_id, daily_limit))
+            INSERT INTO pipelines (id, name, profile_username, facebook_account_id, daily_limit, is_active, zernio_key_id)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE, %s) RETURNING id
+        """, (name, profile_username, facebook_account_id, daily_limit, zernio_key_id))
         pipeline_id = cur.fetchone()[0]
         conn.commit()
         return jsonify({"status": "success", "message": "Pipeline created", "pipeline_id": pipeline_id})
@@ -3267,6 +3497,8 @@ def update_pipeline(pipeline_id):
             updates.append("daily_limit = %s"); params.append(data['daily_limit'])
         if 'is_active' in data:
             updates.append("is_active = %s"); params.append(data['is_active'])
+        if 'zernio_key_id' in data:
+            updates.append("zernio_key_id = %s"); params.append(data['zernio_key_id'])
         if not updates:
             return jsonify({"error": "No fields to update"}), 400
         updates.append("updated_at = NOW()")
@@ -3417,245 +3649,6 @@ def delete_pipeline(pipeline_id):
         cur.close()
         conn.close()
 
-
-
-
-
-
-
-
-
-# ============== ZERNIO KEYS API ==============
-
-@app.route('/api/zernio/keys', methods=['GET'])
-def get_zernio_keys():
-    """Get all Zernio keys with usage stats."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT 
-                id,
-                name,
-                api_key,
-                facebook_account_id,
-                facebook_page_name,
-                daily_limit,
-                usage_count,
-                last_used,
-                is_active,
-                created_at
-            FROM zernio_keys
-            ORDER BY created_at DESC
-        """)
-        keys = cur.fetchall()
-        
-        # Add today's usage
-        today = datetime.utcnow().date()
-        for key in keys:
-            key['today_usage'] = ZERNIO_KEY_USAGE.get(str(key['id']), {}).get('today', 0)
-            key['remaining'] = key['daily_limit'] - key['today_usage']
-            # Mask API key for security
-            if key['api_key'] and len(key['api_key']) > 10:
-                key['api_key_masked'] = key['api_key'][:8] + '...' + key['api_key'][-4:]
-            else:
-                key['api_key_masked'] = '***'
-        
-        return jsonify({
-            "status": "success",
-            "keys": keys,
-            "total": len(keys)
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route('/api/zernio/keys', methods=['POST'])
-def create_zernio_key():
-    """Add a new Zernio key."""
-    data = request.get_json(silent=True) or {}
-    
-    name = data.get('name')
-    api_key = data.get('api_key')
-    facebook_account_id = data.get('facebook_account_id')
-    facebook_page_name = data.get('facebook_page_name', '')
-    daily_limit = data.get('daily_limit', 50)
-    
-    if not name or not api_key or not facebook_account_id:
-        return jsonify({"error": "name, api_key, and facebook_account_id are required"}), 400
-    
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO zernio_keys (
-                name, api_key, facebook_account_id, facebook_page_name, daily_limit
-            )
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING id
-        """, (name, api_key, facebook_account_id, facebook_page_name, daily_limit))
-        
-        key_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        # Reload keys
-        load_zernio_keys()
-        
-        return jsonify({
-            "status": "success",
-            "message": f"Zernio key '{name}' added",
-            "key_id": key_id
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/zernio/keys/<key_id>', methods=['PUT'])
-def update_zernio_key(key_id):
-    """Update a Zernio key."""
-    data = request.get_json(silent=True) or {}
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        updates = []
-        params = []
-        
-        if 'name' in data:
-            updates.append("name = %s"); params.append(data['name'])
-        if 'api_key' in data:
-            updates.append("api_key = %s"); params.append(data['api_key'])
-        if 'facebook_account_id' in data:
-            updates.append("facebook_account_id = %s"); params.append(data['facebook_account_id'])
-        if 'facebook_page_name' in data:
-            updates.append("facebook_page_name = %s"); params.append(data['facebook_page_name'])
-        if 'daily_limit' in data:
-            updates.append("daily_limit = %s"); params.append(data['daily_limit'])
-        if 'is_active' in data:
-            updates.append("is_active = %s"); params.append(data['is_active'])
-        
-        if not updates:
-            return jsonify({"error": "No fields to update"}), 400
-        
-        updates.append("updated_at = NOW()")
-        params.append(key_id)
-        
-        cur = conn.cursor()
-        cur.execute(f"UPDATE zernio_keys SET {', '.join(updates)} WHERE id = %s", params)
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        # Reload keys
-        load_zernio_keys()
-        
-        return jsonify({"status": "success", "message": "Key updated"})
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/zernio/keys/<key_id>', methods=['DELETE'])
-def delete_zernio_key(key_id):
-    """Delete a Zernio key."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM zernio_keys WHERE id = %s RETURNING id", (key_id,))
-        deleted = cur.fetchone()
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        if deleted:
-            # Reload keys
-            load_zernio_keys()
-            return jsonify({"status": "success", "message": "Key deleted"})
-        else:
-            return jsonify({"error": "Key not found"}), 404
-            
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/zernio/keys/<key_id>/stats', methods=['GET'])
-def get_key_stats(key_id):
-    """Get detailed stats for a Zernio key."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT 
-                id,
-                name,
-                daily_limit,
-                usage_count,
-                last_used,
-                is_active,
-                created_at
-            FROM zernio_keys
-            WHERE id = %s
-        """, (key_id,))
-        key = cur.fetchone()
-        
-        if not key:
-            return jsonify({"error": "Key not found"}), 404
-        
-        # Get today's usage
-        today = datetime.utcnow().date()
-        key['today_usage'] = ZERNIO_KEY_USAGE.get(key_id, {}).get('today', 0)
-        key['remaining'] = key['daily_limit'] - key['today_usage']
-        
-        # Get pipeline usage
-        cur.execute("""
-            SELECT 
-                p.name as pipeline_name,
-                p.profile_username,
-                COUNT(pr.id) as posts_count
-            FROM pipelines p
-            LEFT JOIN posted_reels pr ON p.id = pr.pipeline_id
-            WHERE p.zernio_key_id = %s
-            AND pr.posted_at > NOW() - INTERVAL '30 days'
-            GROUP BY p.id
-        """, (key_id,))
-        key['pipeline_usage'] = cur.fetchall()
-        
-        cur.close()
-        conn.close()
-        
-        return jsonify({"status": "success", "key": key})
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ============== PROCESS REELS ==============
 
 @app.route("/api/process-reels", methods=["POST"])
@@ -3699,6 +3692,323 @@ def process_reels():
         app.logger.error(traceback.format_exc())
         return jsonify({"status": "error", "error": str(e), "job_id": job_id}), 500
 
+# ============== SCHEDULED POSTS ROUTES ==============
+
+@app.route('/api/scheduled-posts', methods=['GET'])
+def get_all_scheduled_posts():
+    """Get all scheduled posts with filters."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        status_filter = request.args.get('status', 'all')
+        pipeline_id = request.args.get('pipeline_id')
+        limit = request.args.get('limit', 50, type=int)
+        
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        query = """
+            SELECT 
+                sp.id,
+                sp.reel_url,
+                sp.direct_video_url,
+                sp.caption,
+                sp.scheduled_time,
+                sp.status,
+                sp.created_at,
+                sp.posted_at,
+                sp.error_message,
+                p.name as pipeline_name,
+                p.profile_username
+            FROM scheduled_posts sp
+            LEFT JOIN pipelines p ON sp.pipeline_id = p.id
+            WHERE 1=1
+        """
+        params = []
+        
+        if status_filter != 'all':
+            query += " AND sp.status = %s"
+            params.append(status_filter)
+        
+        if pipeline_id:
+            query += " AND sp.pipeline_id = %s"
+            params.append(pipeline_id)
+        
+        query += " ORDER BY sp.scheduled_time ASC LIMIT %s"
+        params.append(limit)
+        
+        cur.execute(query, params)
+        scheduled_posts = cur.fetchall()
+        
+        # Get counts by status
+        cur.execute("""
+            SELECT 
+                status,
+                COUNT(*) as count
+            FROM scheduled_posts
+            GROUP BY status
+        """)
+        counts = cur.fetchall()
+        count_dict = {c['status']: c['count'] for c in counts}
+        
+        return jsonify({
+            "status": "success",
+            "scheduled_posts": scheduled_posts,
+            "counts": {
+                "total": sum(count_dict.values()),
+                "pending": count_dict.get('pending', 0),
+                "posted": count_dict.get('posted', 0),
+                "failed": count_dict.get('failed', 0)
+            },
+            "total": len(scheduled_posts)
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error fetching scheduled posts: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/scheduled-posts/<post_id>', methods=['DELETE'])
+def delete_scheduled_post(post_id):
+    """Delete a scheduled post."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM scheduled_posts WHERE id = %s RETURNING id", (post_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+        
+        if deleted:
+            return jsonify({"status": "success", "message": "Post deleted"})
+        else:
+            return jsonify({"error": "Post not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/scheduled-posts/<post_id>', methods=['PUT'])
+def update_scheduled_post(post_id):
+    """Update a scheduled post (reschedule or change status)."""
+    data = request.get_json(silent=True) or {}
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        updates = []
+        params = []
+        
+        if 'scheduled_time' in data:
+            updates.append("scheduled_time = %s")
+            params.append(data['scheduled_time'])
+        
+        if 'status' in data:
+            updates.append("status = %s")
+            params.append(data['status'])
+        
+        if not updates:
+            return jsonify({"error": "No fields to update"}), 400
+        
+        updates.append("updated_at = NOW()")
+        params.append(post_id)
+        
+        cur.execute(f"""
+            UPDATE scheduled_posts 
+            SET {', '.join(updates)}
+            WHERE id = %s
+            RETURNING id
+        """, params)
+        
+        updated = cur.fetchone()
+        conn.commit()
+        
+        if updated:
+            return jsonify({"status": "success", "message": "Post updated"})
+        else:
+            return jsonify({"error": "Post not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+# ============== SCHEDULER ENDPOINTS ==============
+
+@app.route("/api/scheduler/process", methods=["POST"])
+def process_scheduled_posts():
+    """
+    Process scheduled posts that are due.
+    🔥 Fetches caption NOW during posting (original flow).
+    """
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get posts that are due (scheduled_time <= now) and not yet posted
+        cur.execute("""
+            SELECT * FROM scheduled_posts 
+            WHERE status = 'pending' 
+            AND scheduled_time <= NOW()
+            ORDER BY scheduled_time ASC
+            LIMIT 5
+        """)
+        
+        due_posts = cur.fetchall()
+        
+        if not due_posts:
+            return jsonify({
+                "status": "success",
+                "message": "No posts due",
+                "posted": 0
+            })
+        
+        posted_count = 0
+        failed_count = 0
+        
+        for post in due_posts:
+            try:
+                # Add random delay for natural feel
+                delay_seconds = random.randint(30, 300)
+                app.logger.info(f"⏳ Waiting {delay_seconds}s before posting...")
+                time.sleep(delay_seconds)
+                
+                # Get pipeline for this post
+                cur.execute("SELECT * FROM pipelines WHERE id = %s", (post['pipeline_id'],))
+                pipeline = cur.fetchone()
+                
+                if not pipeline:
+                    continue
+                
+                # 🔥 FETCH CAPTION NOW (if not already available)
+                caption = post.get('caption', '')
+                
+                # Try to get caption from database first
+                if not caption or not caption.strip():
+                    caption = get_caption_for_reel(post['reel_url'], pipeline['profile_username'], post['pipeline_id'])
+                
+                # If still no caption, fetch it NOW from service
+                if not caption or not caption.strip():
+                    app.logger.info(f"📝 Fetching caption NOW for: {post['reel_url'][:50]}...")
+                    caption = fetch_caption_from_service(post['reel_url'])
+                    if caption:
+                        app.logger.info(f"✅ Caption fetched NOW: {caption[:50]}...")
+                        store_caption_in_database(post['reel_url'], caption, pipeline['profile_username'])
+                    else:
+                        app.logger.warning(f"⚠️ Could not fetch caption for: {post['reel_url'][:50]}...")
+                
+                if caption and caption.strip():
+                    # ✅ Has caption - Post to Facebook
+                    app.logger.info(f"📤 Posting with caption: {caption[:50]}...")
+                    
+                    # Get pipeline's zernio_key_id if set
+                    key_id = pipeline.get('zernio_key_id')
+                    
+                    result = publish_to_facebook(
+                        video_url=post['direct_video_url'],
+                        text=caption,
+                        account_id=pipeline['facebook_account_id'],
+                        publish_now=True,
+                        key_id=key_id
+                    )
+                    
+                    if result and not result.get('error'):
+                        # Mark as posted
+                        mark_reel_as_posted(
+                            pipeline_id=post['pipeline_id'],
+                            reel_url=post['reel_url'],
+                            direct_video_url=post['direct_video_url'],
+                            caption=caption,
+                            facebook_post_id=result.get('post', {}).get('_id'),
+                            status='success'
+                        )
+                        
+                        # Update scheduled post status
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET status = 'posted', posted_at = NOW(), updated_at = NOW()
+                            WHERE id = %s
+                        """, (post['id'],))
+                        conn.commit()
+                        posted_count += 1
+                        
+                        time_str = datetime.utcnow().strftime('%Y-%m-%d %I:%M:%S %p UTC')
+                        app.logger.info(f"✅ Posted due post at {time_str}: {post['reel_url'][:50]}...")
+                    else:
+                        failed_count += 1
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET status = 'failed', error_message = %s, updated_at = NOW()
+                            WHERE id = %s
+                        """, (str(result.get('error', 'Unknown error')), post['id']))
+                        conn.commit()
+                else:
+                    # ❌ No caption available - skip for now, try again next time
+                    app.logger.warning(f"⚠️ No caption for: {post['reel_url'][:50]}... - will retry")
+                    
+            except Exception as e:
+                app.logger.error(f"Error processing scheduled post: {e}")
+                failed_count += 1
+        
+        return jsonify({
+            "status": "success",
+            "posted": posted_count,
+            "failed": failed_count
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route("/api/scheduler/daily", methods=["POST"])
+def daily_scheduler():
+    """
+    Daily scheduler - runs at midnight (12:00 AM).
+    🔥 Pure scheduling - no pending posts, just schedule all unposted reels.
+    Captions will be fetched during posting.
+    """
+    app.logger.info("🕐 Running daily scheduler at midnight...")
+    
+    # Run all active pipelines to schedule posts
+    result = run_all_active_pipelines()
+    
+    # Clean up old scheduled posts
+    try:
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE scheduled_posts 
+                SET status = 'failed', error_message = 'Expired - not posted within 48 hours'
+                WHERE status = 'pending' 
+                AND scheduled_time < NOW() - INTERVAL '48 hours'
+            """)
+            conn.commit()
+            cur.close()
+            conn.close()
+            app.logger.info(f"🧹 Cleaned up old scheduled posts")
+    except Exception as e:
+        app.logger.error(f"Cleanup error: {e}")
+    
+    return jsonify({
+        "status": "success",
+        "message": "Daily scheduler completed at midnight",
+        "result": result
+    })
+
 # ============== DEBUG ROUTES ==============
 
 @app.route("/api/debug/cookies", methods=["GET"])
@@ -3736,7 +4046,7 @@ def clear_large_session():
 @app.route("/api/commands/status", methods=["GET"])
 def api_status():
     cookie_status = "configured" if get_cookie_file() else "not configured"
-    return jsonify({"status": "running", "version": "1.4.0", "cookies": cookie_status, "zernio_connected": bool(ZERNIO_API_KEY), "download_history_count": 0, "recent_downloads": []})
+    return jsonify({"status": "running", "version": "1.5.0", "cookies": cookie_status, "zernio_connected": bool(get_best_zernio_key()), "zernio_keys": len(ZERNIO_KEYS), "download_history_count": 0, "recent_downloads": []})
 
 @app.route("/api/pending-posts", methods=["GET"])
 def get_all_pending_posts():
@@ -3783,6 +4093,93 @@ def sync_pipeline_stats(pipeline_id):
     finally:
         cur.close()
         conn.close()
+
+# ============== APP SETTINGS ROUTES ==============
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    """Get all app settings."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT setting_key, setting_value, setting_type, description, updated_at
+            FROM app_settings
+            ORDER BY setting_key
+        """)
+        settings = cur.fetchall()
+        
+        return jsonify({
+            "status": "success",
+            "settings": settings
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/settings/<key>', methods=['GET'])
+def get_setting_endpoint(key):
+    """Get a single setting."""
+    value = get_setting(key)
+    if value is None:
+        return jsonify({"error": "Setting not found"}), 404
+    
+    return jsonify({
+        "status": "success",
+        "key": key,
+        "value": value
+    })
+
+@app.route('/api/settings', methods=['POST', 'PUT'])
+def update_setting_endpoint():
+    """Update a setting."""
+    data = request.get_json(silent=True) or {}
+    key = data.get('key')
+    value = data.get('value')
+    setting_type = data.get('setting_type', 'string')
+    description = data.get('description', '')
+    
+    if not key:
+        return jsonify({"error": "key is required"}), 400
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO app_settings (setting_key, setting_value, setting_type, description, updated_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (setting_key) DO UPDATE SET
+                setting_value = EXCLUDED.setting_value,
+                setting_type = EXCLUDED.setting_type,
+                description = EXCLUDED.description,
+                updated_at = NOW()
+        """, (key, str(value), setting_type, description))
+        conn.commit()
+        
+        # Update cache
+        APP_SETTINGS_CACHE[key] = value
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Setting '{key}' updated",
+            "key": key,
+            "value": value
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ============== AFTER REQUEST ==============
 
