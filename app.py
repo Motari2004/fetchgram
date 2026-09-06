@@ -217,6 +217,52 @@ def init_db():
         cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;")
         cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;")
         
+        # ========== NEW: ZERNIO KEYS TABLE ==========
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS zernio_keys (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name TEXT NOT NULL,
+                api_key TEXT NOT NULL UNIQUE,
+                facebook_account_id TEXT NOT NULL,
+                facebook_page_name TEXT,
+                daily_limit INTEGER DEFAULT 50,
+                usage_count INTEGER DEFAULT 0,
+                last_used TIMESTAMP WITH TIME ZONE,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # Add zernio_key_id to pipelines
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
+        
+        # ========== NEW: APP SETTINGS TABLE ==========
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                setting_key TEXT NOT NULL UNIQUE,
+                setting_value TEXT,
+                setting_type TEXT DEFAULT 'string',
+                description TEXT,
+                is_encrypted BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # ========== NEW: APP SETTINGS TABLE ==========
+        cur.execute("""
+            INSERT INTO app_settings (setting_key, setting_value, description) VALUES
+                ('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption', 'Caption service endpoint'),
+                ('zernio_base_url', 'https://zernio.com/api/v1', 'Zernio API base URL'),
+                ('scraper_base_url', 'https://ig-reels-scraper.onrender.com', 'Instagram scraper service URL'),
+                ('max_reels_per_scrape', '50', 'Maximum reels to scrape per profile'),
+                ('max_scrolls_per_scrape', '200', 'Maximum scrolls per profile'),
+                ('enable_auto_sync', 'true', 'Auto-sync captions after scrape')
+            ON CONFLICT (setting_key) DO NOTHING;
+        """)
+        
         # Create indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id ON scraped_reels(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at ON scraped_reels(created_at DESC);")
@@ -236,8 +282,14 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_status ON pending_posts(status);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at ON pending_posts(created_at DESC);")
         
+        # ========== NEW INDEXES ==========
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_api_key ON zernio_keys(api_key);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);")
+        
         conn.commit()
-        app.logger.info("✅ Database tables ready with all columns")
+        app.logger.info("✅ Database tables ready with all columns (including Zernio keys and app settings)")
     except Exception as e:
         app.logger.error(f"❌ Database init error: {e}")
         import traceback
@@ -3364,6 +3416,245 @@ def delete_pipeline(pipeline_id):
     finally:
         cur.close()
         conn.close()
+
+
+
+
+
+
+
+
+
+# ============== ZERNIO KEYS API ==============
+
+@app.route('/api/zernio/keys', methods=['GET'])
+def get_zernio_keys():
+    """Get all Zernio keys with usage stats."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                id,
+                name,
+                api_key,
+                facebook_account_id,
+                facebook_page_name,
+                daily_limit,
+                usage_count,
+                last_used,
+                is_active,
+                created_at
+            FROM zernio_keys
+            ORDER BY created_at DESC
+        """)
+        keys = cur.fetchall()
+        
+        # Add today's usage
+        today = datetime.utcnow().date()
+        for key in keys:
+            key['today_usage'] = ZERNIO_KEY_USAGE.get(str(key['id']), {}).get('today', 0)
+            key['remaining'] = key['daily_limit'] - key['today_usage']
+            # Mask API key for security
+            if key['api_key'] and len(key['api_key']) > 10:
+                key['api_key_masked'] = key['api_key'][:8] + '...' + key['api_key'][-4:]
+            else:
+                key['api_key_masked'] = '***'
+        
+        return jsonify({
+            "status": "success",
+            "keys": keys,
+            "total": len(keys)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/zernio/keys', methods=['POST'])
+def create_zernio_key():
+    """Add a new Zernio key."""
+    data = request.get_json(silent=True) or {}
+    
+    name = data.get('name')
+    api_key = data.get('api_key')
+    facebook_account_id = data.get('facebook_account_id')
+    facebook_page_name = data.get('facebook_page_name', '')
+    daily_limit = data.get('daily_limit', 50)
+    
+    if not name or not api_key or not facebook_account_id:
+        return jsonify({"error": "name, api_key, and facebook_account_id are required"}), 400
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO zernio_keys (
+                name, api_key, facebook_account_id, facebook_page_name, daily_limit
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+        """, (name, api_key, facebook_account_id, facebook_page_name, daily_limit))
+        
+        key_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Reload keys
+        load_zernio_keys()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Zernio key '{name}' added",
+            "key_id": key_id
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/zernio/keys/<key_id>', methods=['PUT'])
+def update_zernio_key(key_id):
+    """Update a Zernio key."""
+    data = request.get_json(silent=True) or {}
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        updates = []
+        params = []
+        
+        if 'name' in data:
+            updates.append("name = %s"); params.append(data['name'])
+        if 'api_key' in data:
+            updates.append("api_key = %s"); params.append(data['api_key'])
+        if 'facebook_account_id' in data:
+            updates.append("facebook_account_id = %s"); params.append(data['facebook_account_id'])
+        if 'facebook_page_name' in data:
+            updates.append("facebook_page_name = %s"); params.append(data['facebook_page_name'])
+        if 'daily_limit' in data:
+            updates.append("daily_limit = %s"); params.append(data['daily_limit'])
+        if 'is_active' in data:
+            updates.append("is_active = %s"); params.append(data['is_active'])
+        
+        if not updates:
+            return jsonify({"error": "No fields to update"}), 400
+        
+        updates.append("updated_at = NOW()")
+        params.append(key_id)
+        
+        cur = conn.cursor()
+        cur.execute(f"UPDATE zernio_keys SET {', '.join(updates)} WHERE id = %s", params)
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Reload keys
+        load_zernio_keys()
+        
+        return jsonify({"status": "success", "message": "Key updated"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/zernio/keys/<key_id>', methods=['DELETE'])
+def delete_zernio_key(key_id):
+    """Delete a Zernio key."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM zernio_keys WHERE id = %s RETURNING id", (key_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        if deleted:
+            # Reload keys
+            load_zernio_keys()
+            return jsonify({"status": "success", "message": "Key deleted"})
+        else:
+            return jsonify({"error": "Key not found"}), 404
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/zernio/keys/<key_id>/stats', methods=['GET'])
+def get_key_stats(key_id):
+    """Get detailed stats for a Zernio key."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT 
+                id,
+                name,
+                daily_limit,
+                usage_count,
+                last_used,
+                is_active,
+                created_at
+            FROM zernio_keys
+            WHERE id = %s
+        """, (key_id,))
+        key = cur.fetchone()
+        
+        if not key:
+            return jsonify({"error": "Key not found"}), 404
+        
+        # Get today's usage
+        today = datetime.utcnow().date()
+        key['today_usage'] = ZERNIO_KEY_USAGE.get(key_id, {}).get('today', 0)
+        key['remaining'] = key['daily_limit'] - key['today_usage']
+        
+        # Get pipeline usage
+        cur.execute("""
+            SELECT 
+                p.name as pipeline_name,
+                p.profile_username,
+                COUNT(pr.id) as posts_count
+            FROM pipelines p
+            LEFT JOIN posted_reels pr ON p.id = pr.pipeline_id
+            WHERE p.zernio_key_id = %s
+            AND pr.posted_at > NOW() - INTERVAL '30 days'
+            GROUP BY p.id
+        """, (key_id,))
+        key['pipeline_usage'] = cur.fetchall()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({"status": "success", "key": key})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ============== PROCESS REELS ==============
 
