@@ -797,99 +797,295 @@ function showZernioSuccess(message, details) {
   }, 300);
 }
 
+
+
+
+
+
+
+
+
+
+
 // ==================== LOAD ZERNIO ACCOUNTS ====================
 
+let zernioAccountsLoadAttempts = 0;
+const MAX_LOAD_ATTEMPTS = 3;
+
 async function loadZernioAccounts() {
-  try {
-    const response = await fetch('/api/zernio/accounts', {
-      credentials: 'same-origin'
-    });
-    const data = await response.json();
-    
-    if (data.status === 'success' && data.accounts) {
-      zernioAccounts = data.accounts;
-      populateZernioAccountSelect(zernioAccounts);
-      populatePipelineFacebookAccounts(zernioAccounts);
-      zernioAccountsLoaded = true;
-      console.log('✅ Loaded Zernio accounts:', zernioAccounts);
-      
-      if (zernioStatusBadge) {
-        if (zernioAccounts.length > 0) {
-          zernioStatusBadge.textContent = `✅ ${zernioAccounts.length} accounts`;
-          zernioStatusBadge.style.background = 'var(--success-bg)';
-          zernioStatusBadge.style.color = 'var(--success)';
+    zernioAccountsLoadAttempts = 0;
+    return _loadZernioAccountsWithRetry();
+}
+
+async function _loadZernioAccountsWithRetry() {
+    try {
+        console.log(`📊 Loading Zernio accounts (attempt ${zernioAccountsLoadAttempts + 1})...`);
+        
+        const response = await fetch('/api/zernio/accounts', {
+            credentials: 'same-origin',
+            headers: { 'Cache-Control': 'no-cache' }
+        });
+        
+        const data = await response.json();
+        console.log('📊 Zernio accounts response:', data);
+        
+        if (data.status === 'success' && data.accounts && data.accounts.length > 0) {
+            zernioAccounts = data.accounts;
+            
+            // ✅ Populate ALL dropdowns
+            populateZernioAccountSelect(zernioAccounts);
+            populatePipelineFacebookAccounts(zernioAccounts);
+            populateEditFacebookAccounts();
+            
+            zernioAccountsLoaded = true;
+            console.log('✅ Loaded Zernio accounts:', zernioAccounts.length);
+            
+            if (zernioStatusBadge) {
+                if (zernioAccounts.length > 0) {
+                    zernioStatusBadge.textContent = `✅ ${zernioAccounts.length} accounts`;
+                    zernioStatusBadge.style.background = 'var(--success-bg)';
+                    zernioStatusBadge.style.color = 'var(--success)';
+                } else {
+                    zernioStatusBadge.textContent = '⚠️ No accounts';
+                    zernioStatusBadge.style.background = 'var(--warning-bg)';
+                    zernioStatusBadge.style.color = 'var(--warning)';
+                }
+            }
+            
+            return true;
         } else {
-          zernioStatusBadge.textContent = '⚠️ No accounts';
-          zernioStatusBadge.style.background = 'var(--warning-bg)';
-          zernioStatusBadge.style.color = 'var(--warning)';
+            console.warn('⚠️ No accounts found:', data.message || data);
+            
+            // If no accounts and we have keys, maybe the API key is invalid
+            if (zernioKeys && zernioKeys.length > 0) {
+                console.warn('⚠️ Keys exist but no accounts found. Checking keys...');
+                await loadZernioKeys();
+            }
+            
+            // ✅ Always populate with empty array
+            zernioAccounts = [];
+            populateZernioAccountSelect([]);
+            populatePipelineFacebookAccounts([]);
+            populateEditFacebookAccounts();
+            zernioAccountsLoaded = true;
+            
+            if (zernioStatusBadge) {
+                zernioStatusBadge.textContent = '⚠️ No accounts';
+                zernioStatusBadge.style.background = 'var(--warning-bg)';
+                zernioStatusBadge.style.color = 'var(--warning)';
+            }
+            
+            return false;
         }
-      }
-    } else {
-      console.warn('⚠️ Failed to load Zernio accounts:', data.message);
+    } catch (error) {
+        console.error('❌ Failed to load Zernio accounts:', error);
+        
+        // Retry if under max attempts
+        if (zernioAccountsLoadAttempts < MAX_LOAD_ATTEMPTS) {
+            zernioAccountsLoadAttempts++;
+            console.log(`⏳ Retrying in 1 second... (${zernioAccountsLoadAttempts}/${MAX_LOAD_ATTEMPTS})`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return _loadZernioAccountsWithRetry();
+        }
+        
+        // Final fallback
+        zernioAccounts = [];
+        populateZernioAccountSelect([]);
+        populatePipelineFacebookAccounts([]);
+        populateEditFacebookAccounts();
+        zernioAccountsLoaded = true;
+        
+        if (zernioStatusBadge) {
+            zernioStatusBadge.textContent = '❌ Connection error';
+            zernioStatusBadge.style.background = 'var(--error-bg)';
+            zernioStatusBadge.style.color = 'var(--error)';
+        }
+        
+        return false;
     }
-  } catch (error) {
-    console.error('❌ Failed to load Zernio accounts:', error);
-  }
 }
 
 function populateZernioAccountSelect(accounts) {
-  if (!zernioAccountSelect) return;
-  
-  zernioAccountSelect.innerHTML = '';
-  
-  if (accounts.length > 1) {
-    const allOption = document.createElement('option');
-    allOption.value = 'all';
-    allOption.textContent = `All Accounts (${accounts.length})`;
-    zernioAccountSelect.appendChild(allOption);
-  }
-  
-  if (accounts.length === 0) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = 'No Facebook accounts found';
-    option.disabled = true;
-    zernioAccountSelect.appendChild(option);
-    return;
-  }
-  
-  accounts.sort((a, b) => a.name.localeCompare(b.name));
-  
-  accounts.forEach(account => {
-    const option = document.createElement('option');
-    option.value = account.id;
-    option.textContent = account.name;
-    option.dataset.pageId = account.page_id;
-    option.dataset.status = account.status;
-    zernioAccountSelect.appendChild(option);
-  });
-  
-  if (accounts.length === 1) {
-    zernioAccountSelect.value = accounts[0].id;
-  }
+    if (!zernioAccountSelect) return;
+    
+    zernioAccountSelect.innerHTML = '';
+    
+    // Add default option
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Select Facebook account...';
+    defaultOption.disabled = true;
+    defaultOption.selected = true;
+    zernioAccountSelect.appendChild(defaultOption);
+    
+    if (accounts.length > 1) {
+        const allOption = document.createElement('option');
+        allOption.value = 'all';
+        allOption.textContent = `All Accounts (${accounts.length})`;
+        zernioAccountSelect.appendChild(allOption);
+    }
+    
+    if (accounts.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No Facebook accounts found';
+        option.disabled = true;
+        zernioAccountSelect.appendChild(option);
+        return;
+    }
+    
+    accounts.sort((a, b) => a.name.localeCompare(b.name));
+    
+    accounts.forEach(account => {
+        const option = document.createElement('option');
+        option.value = account.id;
+        option.textContent = account.name;
+        option.dataset.pageId = account.page_id;
+        option.dataset.status = account.status;
+        zernioAccountSelect.appendChild(option);
+    });
+    
+    if (accounts.length === 1) {
+        zernioAccountSelect.value = accounts[0].id;
+    }
 }
 
 function populatePipelineFacebookAccounts(accounts) {
-  if (!pipelineFacebookAccount) return;
-  
-  pipelineFacebookAccount.innerHTML = '';
-  
-  if (accounts.length === 0) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = 'No Facebook accounts found';
-    option.disabled = true;
-    pipelineFacebookAccount.appendChild(option);
-    return;
-  }
-  
-  accounts.forEach(account => {
-    const option = document.createElement('option');
-    option.value = account.id;
-    option.textContent = account.name;
-    pipelineFacebookAccount.appendChild(option);
-  });
+    // Try multiple ways to get the element
+    let select = pipelineFacebookAccount;
+    if (!select) {
+        select = document.getElementById('pipeline-facebook-account');
+    }
+    
+    if (!select) {
+        console.warn('⚠️ pipeline-facebook-account element not found! Retrying in 500ms...');
+        setTimeout(() => {
+            populatePipelineFacebookAccounts(accounts);
+        }, 500);
+        return;
+    }
+    
+    // Clear existing options
+    select.innerHTML = '';
+    
+    // Add default option
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Select Facebook account...';
+    defaultOption.disabled = true;
+    defaultOption.selected = true;
+    select.appendChild(defaultOption);
+    
+    if (!accounts || accounts.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '❌ No accounts - Add a Zernio key';
+        option.disabled = true;
+        select.appendChild(option);
+        console.log('ℹ️ No accounts to populate pipeline dropdown');
+        return;
+    }
+    
+    accounts.forEach(account => {
+        const option = document.createElement('option');
+        option.value = account.id;
+        option.textContent = account.name || account.id;
+        select.appendChild(option);
+    });
+    
+    console.log(`✅ Populated pipeline dropdown with ${accounts.length} accounts`);
 }
+
+function populateEditFacebookAccounts(selectedId) {
+    const select = document.getElementById('edit-pipeline-facebook-account');
+    if (!select) return;
+    
+    select.innerHTML = '';
+    
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Select Facebook account...';
+    defaultOption.disabled = true;
+    defaultOption.selected = true;
+    select.appendChild(defaultOption);
+    
+    if (!zernioAccounts || zernioAccounts.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '❌ No accounts - Add a Zernio key';
+        option.disabled = true;
+        select.appendChild(option);
+        return;
+    }
+    
+    zernioAccounts.forEach(account => {
+        const option = document.createElement('option');
+        option.value = account.id;
+        option.textContent = account.name || account.id;
+        if (account.id === selectedId) {
+            option.selected = true;
+        }
+        select.appendChild(option);
+    });
+}
+
+// ==================== FORCE REFRESH ACCOUNTS ====================
+
+async function forceRefreshAccounts() {
+    console.log('🔄 Force refreshing accounts...');
+    
+    if (zernioStatusBadge) {
+        zernioStatusBadge.textContent = '⏳ Loading...';
+        zernioStatusBadge.style.background = 'rgba(108, 99, 255, 0.15)';
+        zernioStatusBadge.style.color = 'var(--accent)';
+    }
+    
+    await loadZernioKeys();
+    const success = await loadZernioAccounts();
+    await loadPipelines();
+    
+    // Force populate one more time
+    setTimeout(() => {
+        populatePipelineFacebookAccounts(zernioAccounts);
+        populateEditFacebookAccounts();
+    }, 500);
+    
+    if (success) {
+        showToast('✅ Accounts refreshed successfully', 'success');
+    } else {
+        showToast('⚠️ No accounts found. Check your Zernio key.', 'warning');
+    }
+    
+    return success;
+}
+
+// ==================== DEBUG ACCOUNTS ====================
+
+function debugAccounts() {
+    console.log('🔍 Debugging accounts...');
+    console.log('zernioAccounts:', zernioAccounts);
+    console.log('zernioAccountsLoaded:', zernioAccountsLoaded);
+    console.log('zernioKeys:', zernioKeys);
+    
+    const select = document.getElementById('pipeline-facebook-account');
+    console.log('📋 Pipeline dropdown element:', select);
+    if (select) {
+        console.log('📋 Current options:', select.innerHTML);
+    } else {
+        console.log('❌ Pipeline dropdown NOT found in DOM');
+    }
+}
+
+// Add to window for debugging
+window.forceRefreshAccounts = forceRefreshAccounts;
+window.debugAccounts = debugAccounts;
+
+
+
+
+
+
+
 
 // ==================== PUBLISH FUNCTIONS ====================
 
