@@ -2232,7 +2232,7 @@ def run_pipeline(pipeline_id):
             log_pipeline_run(pipeline['id'], 0, 0, 'completed', 'No unposted reels found')
             return {"message": "No unposted reels to schedule", "scheduled": 0}
         
-        # Generate random post times for the ENTIRE day
+        # Generate random post times
         num_posts = len(unposted)
         post_times = generate_random_post_times(num_posts, start_hour=0, end_hour=23)
         
@@ -2246,51 +2246,46 @@ def run_pipeline(pipeline_id):
                 
                 app.logger.info(f"📝 Scheduling: {reel_url[:50]}...")
                 
-                direct_video_url = get_direct_video_url(reel_url)
-                if not direct_video_url:
-                    direct_video_url = get_direct_url_from_cache_only(reel_url)
+                # ✅ DON'T fetch video URL here - leave empty
+                # The video URL will be fetched during posting
+                direct_video_url = ''
                 
-                if direct_video_url:
-                    scheduled_time = post_times[idx] if idx < len(post_times) else None
-                    if not scheduled_time:
-                        hours_from_now = random.randint(1, 24)
-                        scheduled_time = datetime.utcnow() + timedelta(hours=hours_from_now)
-                        scheduled_time = scheduled_time.replace(minute=random.randint(0, 59), second=random.randint(0, 59))
-                    
-                    cur = conn.cursor()
-                    
-                    # Check if reel already exists before inserting
-                    cur.execute("SELECT id FROM scheduled_posts WHERE reel_url = %s", (reel_url,))
-                    existing = cur.fetchone()
-                    
-                    if existing:
-                        # Update existing record
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET direct_video_url = %s,
-                                caption = %s,
-                                pipeline_id = %s,
-                                scheduled_time = %s,
-                                updated_at = NOW()
-                            WHERE reel_url = %s
-                        """, (direct_video_url, caption, pipeline['id'], scheduled_time, reel_url))
-                    else:
-                        # Insert new record
-                        cur.execute("""
-                            INSERT INTO scheduled_posts (
-                                reel_url, direct_video_url, caption, pipeline_id, scheduled_time
-                            )
-                            VALUES (%s, %s, %s, %s, %s)
-                        """, (reel_url, direct_video_url, caption, pipeline['id'], scheduled_time))
-                    
-                    conn.commit()
-                    cur.close()
-                    scheduled_count += 1
-                    time_str = scheduled_time.strftime('%Y-%m-%d %I:%M:%S %p UTC')
-                    app.logger.info(f"📅 Scheduled post at {time_str}: {reel_url[:50]}...")
+                scheduled_time = post_times[idx] if idx < len(post_times) else None
+                if not scheduled_time:
+                    hours_from_now = random.randint(1, 24)
+                    scheduled_time = datetime.utcnow() + timedelta(hours=hours_from_now)
+                    scheduled_time = scheduled_time.replace(minute=random.randint(0, 59), second=random.randint(0, 59))
+                
+                cur = conn.cursor()
+                
+                # Check if reel already exists
+                cur.execute("SELECT id FROM scheduled_posts WHERE reel_url = %s", (reel_url,))
+                existing = cur.fetchone()
+                
+                if existing:
+                    # Update existing record - KEEP existing direct_video_url if any
+                    cur.execute("""
+                        UPDATE scheduled_posts 
+                        SET caption = %s,
+                            pipeline_id = %s,
+                            scheduled_time = %s,
+                            updated_at = NOW()
+                        WHERE reel_url = %s
+                    """, (caption, pipeline['id'], scheduled_time, reel_url))
                 else:
-                    failed_count += 1
-                    app.logger.error(f"❌ Could not get video URL: {reel_url[:50]}...")
+                    # Insert new record with empty direct_video_url
+                    cur.execute("""
+                        INSERT INTO scheduled_posts (
+                            reel_url, direct_video_url, caption, pipeline_id, scheduled_time
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (reel_url, '', caption, pipeline['id'], scheduled_time))
+                
+                conn.commit()
+                cur.close()
+                scheduled_count += 1
+                time_str = scheduled_time.strftime('%Y-%m-%d %I:%M:%S %p UTC')
+                app.logger.info(f"📅 Scheduled post at {time_str}: {reel_url[:50]}...")
                     
             except Exception as e:
                 app.logger.error(f"Error scheduling reel: {e}")
@@ -4011,10 +4006,7 @@ def update_scheduled_post(post_id):
 
 @app.route("/api/scheduler/process", methods=["POST"])
 def process_scheduled_posts():
-    """
-    Process scheduled posts that are due.
-    🔥 Posts immediately - NO DELAY!
-    """
+    """Process scheduled posts - fetches video URL and caption DURING posting."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
@@ -4022,7 +4014,6 @@ def process_scheduled_posts():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Get posts that are due (scheduled_time <= now) and not yet posted
         cur.execute("""
             SELECT * FROM scheduled_posts 
             WHERE status = 'pending' 
@@ -4034,21 +4025,15 @@ def process_scheduled_posts():
         due_posts = cur.fetchall()
         
         if not due_posts:
-            return jsonify({
-                "status": "success",
-                "message": "No posts due",
-                "posted": 0
-            })
+            return jsonify({"status": "success", "message": "No posts due", "posted": 0})
         
         posted_count = 0
         failed_count = 0
         
         for post in due_posts:
             try:
-                # ✅ NO DELAY - Post immediately!
-                app.logger.info(f"📤 Posting due post: {post['reel_url'][:50]}...")
+                app.logger.info(f"📤 Processing due post: {post['reel_url'][:50]}...")
                 
-                # Get pipeline for this post
                 cur.execute("SELECT * FROM pipelines WHERE id = %s", (post['pipeline_id'],))
                 pipeline = cur.fetchone()
                 
@@ -4056,32 +4041,55 @@ def process_scheduled_posts():
                     app.logger.error(f"❌ Pipeline not found for post: {post['id']}")
                     continue
                 
-                # 🔥 Get caption (try database first, then fetch from service)
-                caption = post.get('caption', '')
+                # 🔥 Step 1: Get video URL NOW
+                direct_video_url = post.get('direct_video_url', '')
                 
-                # Try to get caption from database first
+                if not direct_video_url:
+                    app.logger.info(f"📥 Fetching video URL NOW for: {post['reel_url'][:50]}...")
+                    direct_video_url = get_direct_video_url(post['reel_url'])
+                    
+                    if direct_video_url:
+                        cache_direct_url(post['reel_url'], direct_video_url, '')
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET direct_video_url = %s, updated_at = NOW()
+                            WHERE id = %s
+                        """, (direct_video_url, post['id']))
+                        conn.commit()
+                        app.logger.info(f"✅ Video URL fetched: {direct_video_url[:50]}...")
+                    else:
+                        # Try cache as fallback
+                        direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
+                        if direct_video_url:
+                            app.logger.info(f"✅ Found video URL in cache: {direct_video_url[:50]}...")
+                            cur.execute("""
+                                UPDATE scheduled_posts 
+                                SET direct_video_url = %s, updated_at = NOW()
+                                WHERE id = %s
+                            """, (direct_video_url, post['id']))
+                            conn.commit()
+                
+                if not direct_video_url:
+                    app.logger.warning(f"⚠️ No video URL for: {post['reel_url'][:50]}... - will retry")
+                    continue
+                
+                # 🔥 Step 2: Get caption
+                caption = post.get('caption', '')
                 if not caption or not caption.strip():
                     caption = get_caption_for_reel(post['reel_url'], pipeline['profile_username'], post['pipeline_id'])
                 
-                # If still no caption, fetch it NOW from service
                 if not caption or not caption.strip():
                     app.logger.info(f"📝 Fetching caption NOW for: {post['reel_url'][:50]}...")
                     caption = fetch_caption_from_service(post['reel_url'])
                     if caption:
-                        app.logger.info(f"✅ Caption fetched NOW: {caption[:50]}...")
                         store_caption_in_database(post['reel_url'], caption, pipeline['profile_username'])
-                    else:
-                        app.logger.warning(f"⚠️ Could not fetch caption for: {post['reel_url'][:50]}...")
                 
-                if caption and caption.strip():
-                    # ✅ Has caption - Post to Facebook IMMEDIATELY
-                    app.logger.info(f"📤 Posting with caption: {caption[:50]}...")
-                    
-                    # Get pipeline's zernio_key_id if set
+                # 🔥 Step 3: Post to Facebook
+                if caption and caption.strip() and direct_video_url:
                     key_id = pipeline.get('zernio_key_id')
                     
                     result = publish_to_facebook(
-                        video_url=post['direct_video_url'],
+                        video_url=direct_video_url,
                         text=caption,
                         account_id=pipeline['facebook_account_id'],
                         publish_now=True,
@@ -4089,56 +4097,20 @@ def process_scheduled_posts():
                     )
                     
                     if result and not result.get('error'):
-                        # Mark as posted
-                        mark_reel_as_posted(
-                            pipeline_id=post['pipeline_id'],
-                            reel_url=post['reel_url'],
-                            direct_video_url=post['direct_video_url'],
-                            caption=caption,
-                            facebook_post_id=result.get('post', {}).get('_id'),
-                            status='success'
-                        )
-                        
-                        # Update scheduled post status
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET status = 'posted', posted_at = NOW(), updated_at = NOW()
-                            WHERE id = %s
-                        """, (post['id'],))
-                        conn.commit()
+                        mark_reel_as_posted(...)
                         posted_count += 1
-                        
-                        time_str = datetime.utcnow().strftime('%Y-%m-%d %I:%M:%S %p UTC')
-                        app.logger.info(f"✅ Posted due post at {time_str}: {post['reel_url'][:50]}...")
                     else:
                         failed_count += 1
-                        error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET status = 'failed', error_message = %s, updated_at = NOW()
-                            WHERE id = %s
-                        """, (str(error_msg), post['id']))
-                        conn.commit()
-                        app.logger.error(f"❌ Failed to post: {error_msg}")
                 else:
-                    # ❌ No caption available - try again next time
-                    app.logger.warning(f"⚠️ No caption for: {post['reel_url'][:50]}... - will retry next run")
-                    # Keep as pending, will retry in next scheduler run
+                    app.logger.warning(f"⚠️ Missing data for: {post['reel_url'][:50]}...")
                     
             except Exception as e:
                 app.logger.error(f"❌ Error processing scheduled post: {e}")
                 failed_count += 1
         
-        return jsonify({
-            "status": "success",
-            "posted": posted_count,
-            "failed": failed_count
-        })
+        return jsonify({"status": "success", "posted": posted_count, "failed": failed_count})
         
     except Exception as e:
-        app.logger.error(f"❌ Scheduler error: {e}")
-        import traceback
-        app.logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
