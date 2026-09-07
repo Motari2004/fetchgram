@@ -39,6 +39,16 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL'))
 CORS(app, supports_credentials=True)
 
+
+
+# ============== COOKIE EXTRACTOR CONFIGURATION ==============
+COOKIE_EXTRACTOR_URL = os.environ.get('COOKIE_EXTRACTOR_URL', 'https://profilecookieextractor.onrender.com')
+
+
+
+
+
+
 # ============== NEON POSTGRESQL SETUP ==============
 
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -1086,17 +1096,23 @@ def is_valid_instagram_url(url: str) -> bool:
 # ============== YT-DLP FUNCTIONS ==============
 
 def get_cookie_file():
+    """Get cookie file with automatic retry from Render service"""
+    # Try to get cookies from database first
     db_cookies = get_cookies_from_db()
     if db_cookies:
         cookie_data = db_cookies.get('cookie_data', [])
         if cookie_data:
-            username = db_cookies.get('username', 'default')
-            safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username))[:40]
-            cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
-            write_netscape_cookies(cookie_data, cookie_file)
-            app.logger.info(f"Using cookies from database → {cookie_file}")
-            return cookie_file
+            # Check if cookies have sessionid
+            has_session = any(c.get('name') == 'sessionid' for c in cookie_data)
+            if has_session:
+                username = db_cookies.get('username', 'default')
+                safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username))[:40]
+                cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
+                write_netscape_cookies(cookie_data, cookie_file)
+                app.logger.info(f"Using cookies from database → {cookie_file}")
+                return cookie_file
     
+    # Try environment variable cookies
     cookies_json_env = os.environ.get('COOKIES_JSON')
     if cookies_json_env:
         try:
@@ -1106,7 +1122,117 @@ def get_cookie_file():
             return cookie_file
         except Exception as e:
             app.logger.error(f"Failed to parse COOKIES_JSON: {e}")
+    
+    # Try local cookies.json file
+    if os.path.exists('cookies.json'):
+        try:
+            with open('cookies.json', 'r') as f:
+                cookies_data = json.load(f)
+            cookie_file = os.path.join('/tmp', 'cookies_netscape.txt')
+            write_netscape_cookies(cookies_data, cookie_file)
+            return cookie_file
+        except Exception as e:
+            app.logger.error(f"Failed to load cookies.json: {e}")
+    
+    # No cookies found, try to extract from Render service
+    app.logger.info("🔄 No cookies found, attempting to extract from Render service...")
+    if extract_cookies_from_render_service():
+        # Try again after extraction
+        db_cookies = get_cookies_from_db()
+        if db_cookies:
+            cookie_data = db_cookies.get('cookie_data', [])
+            if cookie_data:
+                username = db_cookies.get('username', 'default')
+                safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username))[:40]
+                cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
+                write_netscape_cookies(cookie_data, cookie_file)
+                app.logger.info(f"✅ Using cookies from database after extraction → {cookie_file}")
+                return cookie_file
+    
     return None
+
+
+
+
+
+
+
+
+
+# ============== COOKIE EXTRACTION FROM RENDER SERVICE ==============
+
+def extract_cookies_from_render_service():
+    """Call the Render cookie extractor service to get fresh cookies"""
+    try:
+        app.logger.info(f"🍪 Calling Render cookie extractor service at {COOKIE_EXTRACTOR_URL}...")
+        
+        response = requests.post(
+            f"{COOKIE_EXTRACTOR_URL}/api/extract",
+            timeout=30,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code != 200:
+            app.logger.error(f"❌ Render service returned {response.status_code}")
+            return False
+        
+        data = response.json()
+        
+        if not data.get('success'):
+            app.logger.error(f"❌ Render service failed: {data.get('error')}")
+            return False
+        
+        cookies = data.get('cookies', [])
+        if not cookies:
+            app.logger.error("❌ No cookies returned from service")
+            return False
+        
+        # Save to database
+        username = None
+        for cookie in cookies:
+            if cookie.get('name') == 'ds_user_id':
+                username = cookie.get('value')
+                break
+        
+        success = save_cookies_to_db(cookies, username or 'Instagram User')
+        if not success:
+            app.logger.error("❌ Failed to save cookies to database")
+            return False
+        
+        # Also save to local file
+        with open('cookies.json', 'w') as f:
+            json.dump(cookies, f, indent=2)
+        
+        app.logger.info(f"✅ Extracted {len(cookies)} cookies from Render service")
+        return True
+        
+    except requests.exceptions.Timeout:
+        app.logger.error("❌ Render service timeout")
+        return False
+    except requests.exceptions.ConnectionError:
+        app.logger.error("❌ Render service connection error")
+        return False
+    except Exception as e:
+        app.logger.error(f"❌ Error: {e}")
+        return False
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def base_ydl_opts(extra=None):
     opts = {
@@ -2844,6 +2970,25 @@ def api_download():
         return jsonify(response)
     except Exception as e:
         return jsonify({"error": clean_error(str(e))}), 500
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
 # ============== BLUESKY ROUTES ==============
 
@@ -3522,6 +3667,58 @@ def cookie_extractor_status():
             "error": str(e),
             "url": COOKIE_EXTRACTOR_URL
         })
+
+
+
+
+
+
+
+
+
+# ============== COOKIE EXTRACTION ROUTES ==============
+
+@app.route("/api/cookies/extract-from-render", methods=["POST"])
+def extract_cookies_from_render_endpoint():
+    """Call the Render cookie extractor service to get fresh cookies"""
+    success = extract_cookies_from_render_service()
+    if success:
+        db_cookies = get_cookies_from_db()
+        username = db_cookies.get('username', 'Instagram User') if db_cookies else 'Instagram User'
+        return jsonify({
+            "success": True,
+            "message": "Cookies extracted successfully from Render service",
+            "username": username
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Failed to extract cookies from Render service"
+        }), 500
+
+@app.route("/api/cookies/extract-from-render/status", methods=["GET"])
+def cookie_extractor_status():
+    """Check if the Render cookie service is available"""
+    try:
+        response = requests.get(
+            f"{COOKIE_EXTRACTOR_URL}/health",
+            timeout=5
+        )
+        return jsonify({
+            "available": response.status_code == 200,
+            "status_code": response.status_code,
+            "url": COOKIE_EXTRACTOR_URL
+        })
+    except Exception as e:
+        return jsonify({
+            "available": False,
+            "error": str(e),
+            "url": COOKIE_EXTRACTOR_URL
+        })
+
+
+
+
 
 
 
