@@ -4385,9 +4385,12 @@ function updateSelectedCount() {
 
 function parse12HourTime(hour, minute, ampm) {
     let hours = parseInt(hour);
+    let minutes = parseInt(minute);
+    
     if (ampm === 'PM' && hours !== 12) hours += 12;
     if (ampm === 'AM' && hours === 12) hours = 0;
-    return { hours, minutes: parseInt(minute) };
+    
+    return { hours, minutes };
 }
 
 function format12HourTime(hours, minutes) {
