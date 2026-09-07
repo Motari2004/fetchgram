@@ -2254,9 +2254,8 @@ function renderPipelines(pipelines) {
     const failed = p.failed_count || 0;
     const pending = p.pending_posts || 0;
     const processing = p.processing_posts || 0;
-    const totalScheduled = p.total_scheduled || 0;
     
-    // Only show pending if > 0
+    // Only show if > 0
     const showPending = pending > 0;
     const showProcessing = processing > 0;
     const showFailed = failed > 0;
@@ -2328,19 +2327,6 @@ function renderPipelines(pipelines) {
             <span class="status-badge-summary failed">
               ❌ <span class="count">${failed}</span> Failed
             </span>` : ''}
-            ${totalScheduled > 0 ? `
-            <span class="status-badge-summary scheduled">
-              📋 <span class="count">${totalScheduled}</span> Total
-            </span>` : ''}
-          </div>
-          
-          <!-- STATS ROW -->
-          <div class="pipeline-stats">
-            <span class="stat-success">✅ ${posted}</span>
-            ${showProcessing ? `<span class="stat-processing">🟡 ${processing}</span>` : ''}
-            ${showPending ? `<span class="stat-pending">⏳ ${pending}</span>` : ''}
-            ${showFailed ? `<span class="stat-failed">❌ ${failed}</span>` : ''}
-            ${totalScheduled > 0 ? `<span class="stat-scheduled">📋 ${totalScheduled}</span>` : ''}
           </div>
         </div>
       </div>
