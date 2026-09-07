@@ -3903,3 +3903,130 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 console.log('✅ Browserless cookie extractor (Render service) loaded!');
+
+
+
+
+
+
+// ==================== FIX: CLEAR COOKIES BUTTON ====================
+
+// Show/hide Clear button based on cookie status
+async function updateClearButton() {
+    const clearBtn = document.getElementById('clear-cookie-btn');
+    const clearMainBtn = document.getElementById('clear-cookie-main-btn');
+    if (!clearBtn && !clearMainBtn) return;
+    
+    try {
+        const response = await fetch('/api/instagram/cookies_status', {
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        if (data.has_cookies) {
+            // Show both clear buttons
+            if (clearBtn) {
+                clearBtn.hidden = false;
+                clearBtn.disabled = false;
+                clearBtn.textContent = '🗑️ Clear';
+            }
+            if (clearMainBtn) {
+                clearMainBtn.hidden = false;
+                clearMainBtn.disabled = false;
+                clearMainBtn.textContent = '🗑️ Clear';
+            }
+        } else {
+            if (clearBtn) clearBtn.hidden = true;
+            if (clearMainBtn) clearMainBtn.hidden = true;
+        }
+    } catch (error) {
+        console.error('Failed to check cookie status:', error);
+        if (clearBtn) clearBtn.hidden = true;
+        if (clearMainBtn) clearMainBtn.hidden = true;
+    }
+}
+
+// Handle Clear button click from the status card
+async function clearCookies() {
+    const clearBtn = document.getElementById('clear-cookie-btn');
+    const clearMainBtn = document.getElementById('clear-cookie-main-btn');
+    
+    // Disable both buttons
+    if (clearBtn) {
+        clearBtn.disabled = true;
+        clearBtn.textContent = '⏳ Clearing...';
+    }
+    if (clearMainBtn) {
+        clearMainBtn.disabled = true;
+        clearMainBtn.textContent = '⏳ Clearing...';
+    }
+    
+    try {
+        const response = await fetch('/api/cookies/clear', {
+            method: 'POST',
+            credentials: 'same-origin'
+        });
+        
+        const data = await response.json();
+        console.log('Clear cookies response:', data);
+        
+        if (data.status === 'success') {
+            showCookieStatus('✅ Cookies cleared successfully!', 'success');
+            // Update UI
+            await updateClearButton();
+            await checkInstagramStatus();
+            // Reset file input label
+            const label = document.getElementById('cookie-file-label-text');
+            if (label) label.textContent = 'Choose cookies.json';
+            const uploadBtn = document.getElementById('upload-cookie-main-btn');
+            if (uploadBtn) uploadBtn.disabled = true;
+            // Clear file input
+            const fileInput = document.getElementById('cookie-file-input-main');
+            if (fileInput) fileInput.value = '';
+        } else {
+            showCookieStatus('❌ Failed to clear cookies: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('❌ Clear cookies error:', error);
+        showCookieStatus('❌ Failed to clear cookies: ' + error.message, 'error');
+    } finally {
+        // Reset buttons
+        if (clearBtn) {
+            clearBtn.disabled = false;
+            clearBtn.textContent = '🗑️ Clear';
+        }
+        if (clearMainBtn) {
+            clearMainBtn.disabled = false;
+            clearMainBtn.textContent = '🗑️ Clear';
+        }
+    }
+}
+
+// Initialize Clear buttons
+document.addEventListener('DOMContentLoaded', function() {
+    // ... existing code ...
+    
+    // Update clear button visibility
+    setTimeout(updateClearButton, 500);
+    
+    // Add click handler for Clear button in status card
+    const clearBtn = document.getElementById('clear-cookie-btn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearCookies);
+        clearBtn.hidden = true; // Will be shown by updateClearButton
+    }
+    
+    // Add click handler for Clear button in upload section
+    const clearMainBtn = document.getElementById('clear-cookie-main-btn');
+    if (clearMainBtn) {
+        clearMainBtn.addEventListener('click', clearCookies);
+        clearMainBtn.hidden = true; // Will be shown by updateClearButton
+    }
+});
+
+// Also update when cookie status changes
+const originalCheckInstagramStatus = window.checkInstagramStatus || function() {};
+window.checkInstagramStatus = async function() {
+    await originalCheckInstagramStatus();
+    await updateClearButton();
+};
