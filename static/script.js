@@ -1643,6 +1643,17 @@ async function copyToClipboard(text, btn) {
   }
 }
 
+
+
+
+
+
+
+
+
+
+
+
 // ==================== START SCRAPING ====================
 
 startScrapeBtn.addEventListener('click', async function() {
@@ -1660,18 +1671,7 @@ startScrapeBtn.addEventListener('click', async function() {
   const maxScrolls = parseInt(scrapeMaxScrolls.value) || 8;
   const headless = scrapeHeadless.checked;
   
-  try {
-    const cookieStatus = await fetch('/api/instagram/cookies_status', { credentials: 'same-origin' });
-    const cookieData = await cookieStatus.json();
-    
-    if (!cookieData.has_cookies) {
-      showScrapeStatus('❌ Please upload your Instagram cookies.json file first!', 'error');
-      return;
-    }
-  } catch (error) {
-    showScrapeStatus('❌ Failed to check cookie status', 'error');
-    return;
-  }
+  // ✅ FIX: Remove the frontend cookie check - let backend handle auto-extraction
   
   this.disabled = true;
   this.innerHTML = '<span class="btn-spinner"></span> Starting job...';
@@ -1721,7 +1721,44 @@ startScrapeBtn.addEventListener('click', async function() {
       
     } else {
       showScrapeProgress(0, '❌ Failed');
-      showScrapeStatus(`❌ ${data.error || 'Failed to start job'}`, 'error');
+      
+      // ✅ Handle cookie errors with extract button
+      if (data.requires_cookies) {
+        const statusEl = document.getElementById('scrape-job-status');
+        if (statusEl) {
+          statusEl.innerHTML = `
+            <div style="padding: 12px; background: #f8d7da; border-radius: 8px; border-left: 3px solid #dc3545; margin-top: 10px;">
+              <strong>⚠️ ${data.error || 'No Instagram cookies found.'}</strong>
+              <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
+                <button id="scrape-extract-btn" class="btn btn-primary btn-sm">
+                  🍪 Extract Cookies from Browserless
+                </button>
+                <button id="scrape-retry-btn" class="btn btn-success btn-sm">
+                  🔄 Retry Scrape
+                </button>
+              </div>
+            </div>
+          `;
+          statusEl.hidden = false;
+          
+          document.getElementById('scrape-extract-btn')?.addEventListener('click', async function() {
+            this.disabled = true;
+            this.textContent = '⏳ Extracting...';
+            const success = await extractCookiesFromBrowserless();
+            this.disabled = false;
+            this.textContent = '🍪 Extract Cookies from Browserless';
+            if (success) {
+              document.getElementById('scrape-retry-btn')?.click();
+            }
+          });
+          
+          document.getElementById('scrape-retry-btn')?.addEventListener('click', function() {
+            startScrapeBtn.click();
+          });
+        }
+      } else {
+        showScrapeStatus(`❌ ${data.error || 'Failed to start job'}`, 'error');
+      }
     }
   } catch (error) {
     console.error('Scrape error:', error);
@@ -1739,6 +1776,21 @@ startScrapeBtn.addEventListener('click', async function() {
     this.disabled = false;
   }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ==================== FETCH SCRAPED RESULTS ====================
 
