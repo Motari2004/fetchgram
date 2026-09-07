@@ -2048,12 +2048,21 @@ def process_pending_post(post):
             pass
         return False
 
-def get_caption_for_reel(reel_url, profile_username, pipeline_id):
+def get_caption_for_reel(reel_url, profile_username, pipeline_id, max_retries=3):
+    """
+    Get caption with simple retry logic.
+    Checks database first, then retries the caption service multiple times.
+    """
     conn = get_db_connection()
     if not conn:
         return None
+    
     try:
         cur = conn.cursor()
+        
+        # ========== FIRST: Check all database sources ==========
+        
+        # 1. Check scraped_reels
         cur.execute("""
             SELECT results FROM scraped_reels 
             WHERE EXISTS (
@@ -2073,22 +2082,148 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id):
                         if isinstance(reel, dict) and reel.get('url') == reel_url:
                             caption = reel.get('caption', '')
                             if caption and caption.strip():
+                                app.logger.info(f"✅ Found caption in scraped_reels")
                                 return caption
+        
+        # 2. Check posted_reels
         cur.execute("SELECT caption FROM posted_reels WHERE pipeline_id = %s AND reel_url = %s", (pipeline_id, reel_url))
         result = cur.fetchone()
         if result and result[0] and result[0].strip():
+            app.logger.info(f"✅ Found caption in posted_reels")
             return result[0]
+        
+        # 3. Check reel_cache
         cur.execute("SELECT caption FROM reel_cache WHERE reel_url = %s", (reel_url,))
         result = cur.fetchone()
         if result and result[0] and result[0].strip():
+            app.logger.info(f"✅ Found caption in reel_cache")
             return result[0]
+        
+        cur.close()
+        conn.close()
+        
+        # ========== SECOND: Try caption service with retries ==========
+        app.logger.info(f"🔥 Caption not in database, fetching from service with retries...")
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    wait_time = 2 ** attempt * 3  # 3, 6, 12 seconds
+                    app.logger.info(f"⏳ Retry {attempt+1}/{max_retries} in {wait_time}s...")
+                    time.sleep(wait_time)
+                
+                app.logger.info(f"📞 Attempt {attempt+1}/{max_retries} calling caption service...")
+                caption = fetch_caption_from_service(reel_url)
+                
+                if caption and caption.strip():
+                    # Store in database for future use
+                    store_caption_in_database(reel_url, caption, profile_username)
+                    app.logger.info(f"✅ Caption fetched on attempt {attempt+1}")
+                    return caption
+                else:
+                    app.logger.warning(f"⚠️ Attempt {attempt+1} returned no caption")
+                    
+            except requests.exceptions.Timeout:
+                app.logger.warning(f"⏰ Attempt {attempt+1} timed out")
+                if attempt == max_retries - 1:
+                    app.logger.error(f"❌ All {max_retries} attempts timed out")
+                continue
+                
+            except Exception as e:
+                app.logger.warning(f"⚠️ Attempt {attempt+1} error: {e}")
+                if attempt == max_retries - 1:
+                    app.logger.error(f"❌ All {max_retries} attempts failed")
+                continue
+        
+        # All retries failed
+        app.logger.warning(f"❌ No caption after {max_retries} retries for: {reel_url[:50]}...")
         return None
+        
     except Exception as e:
         app.logger.error(f"Error getting caption: {e}")
         return None
     finally:
+        if not conn.closed:
+            cur.close()
+            conn.close()
+
+
+def fetch_caption_from_service(reel_url, timeout=30):
+    """Fetch caption from the caption service."""
+    try:
+        caption_service_url = get_caption_service_url()
+        response = requests.post(
+            caption_service_url,
+            json={"url": reel_url},
+            timeout=timeout,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                return data.get('caption', '')
+        return None
+        
+    except requests.exceptions.Timeout:
+        raise  # Re-raise timeout to be handled by retry logic
+    except Exception as e:
+        app.logger.error(f"Service error: {e}")
+        return None
+
+
+def store_caption_in_database(reel_url, caption, profile_username):
+    """Store caption in database for future use."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cur = conn.cursor()
+        
+        # Store in reel_cache
+        cur.execute("""
+            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+            VALUES (%s, '', %s, NOW())
+            ON CONFLICT (reel_url) DO UPDATE SET 
+                caption = EXCLUDED.caption,
+                created_at = NOW()
+        """, (reel_url, caption))
+        conn.commit()
+        
+        # Update scraped_reels if possible
+        if profile_username:
+            cur.execute("""
+                SELECT id, results FROM scraped_reels 
+                WHERE EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(results) AS elem
+                    WHERE elem->>'username' = %s
+                )
+                ORDER BY created_at DESC LIMIT 1
+            """, (profile_username,))
+            result = cur.fetchone()
+            if result:
+                results = result[1]
+                if isinstance(results, str):
+                    results = json.loads(results)
+                for profile_idx, profile in enumerate(results):
+                    if profile.get('username') == profile_username:
+                        for reel_idx, reel in enumerate(profile.get('reels', [])):
+                            if isinstance(reel, dict) and reel.get('url') == reel_url:
+                                results[profile_idx]['reels'][reel_idx]['caption'] = caption
+                                break
+                        break
+                cur.execute("""
+                    UPDATE scraped_reels SET results = %s, updated_at = NOW()
+                    WHERE id = %s
+                """, (json.dumps(results), result[0]))
+                conn.commit()
+        
         cur.close()
         conn.close()
+        app.logger.info(f"💾 Caption stored for: {reel_url[:50]}...")
+    except Exception as e:
+        app.logger.error(f"Error storing caption: {e}")
 
 def store_caption_in_database(reel_url, caption, profile_username):
     """Store caption in database for future use."""
