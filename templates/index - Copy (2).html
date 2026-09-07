@@ -112,15 +112,17 @@
           <button id="clear-cookie-main-btn" class="btn btn-danger" hidden>🗑️ Clear</button>
         </div>
         
-        <!-- ✅ ADDED: Browserless Cookie Extraction -->
-        <div class="cookie-upload-actions" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px;">
-          <button id="extract-browserless-cookies-btn" class="btn btn-primary">
-            <span class="btn-content">🍪 Extract from Browserless</span>
-          </button>
-          <button id="refresh-status-btn" class="btn btn-sm btn-ghost">🔄 Refresh Status</button>
-        </div>
-        
         <div id="cookie-upload-status" class="cookie-status-msg" hidden></div>
+        
+        <!-- Refresh Status Button -->
+        <div style="display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; align-items: center;">
+          <button id="refresh-status-btn" class="btn btn-sm btn-ghost">
+            🔄 Refresh Status
+          </button>
+          <span style="font-size: 12px; color: var(--text-muted);">
+            Click to check connection status
+          </span>
+        </div>
         
         <div class="cookie-upload-help">
           <details>
@@ -409,56 +411,84 @@
       </div>
     </div>
 
-    <!-- ============ ZERNIO KEYS MANAGEMENT ============ -->
-    <div class="zernio-keys-section premium-card">
-        <div class="zernio-keys-header">
-            <div class="zernio-keys-title">
-                <span class="zernio-keys-icon">🔑</span>
-                <h3>Zernio API Keys</h3>
-                <span class="badge" id="zernio-keys-count">0 keys</span>
-            </div>
-            <div class="zernio-keys-actions">
-                <button id="add-zernio-key-btn" class="btn btn-sm btn-primary">➕ Add Key</button>
-                <button id="refresh-zernio-keys-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
-            </div>
-        </div>
-        
-        <div id="zernio-keys-list">
-            <div class="loading-state">
-                <div class="loading-spinner"></div>
-                <p style="color: var(--text-muted); margin-top: 12px;">Loading keys...</p>
-            </div>
-        </div>
-    </div>
 
-    <!-- ============ ADD ZERNIO KEY MODAL (SIMPLIFIED) ============ -->
-    <div id="add-zernio-key-modal" class="modal-overlay" hidden>
-        <div class="modal-content premium-card">
-            <div class="modal-header">
-                <h3>🔑 Add Zernio API Key</h3>
-                <button id="add-zernio-key-modal-close" class="modal-close">✕</button>
-            </div>
-            <div class="modal-body">
-                <p class="modal-desc">
-                    Enter your Zernio API key. Accounts linked to this key will be auto-discovered.
-                </p>
-                
-                <div class="form-group">
-                    <label for="zernio-key-api">API Key</label>
-                    <input type="text" id="zernio-key-api" class="input-field" placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
-                    <span style="font-size: 11px; color: var(--text-muted);">
-                        🔑 Found in your Zernio dashboard
-                    </span>
-                </div>
-                
-                <div class="form-group" style="margin-top: 16px;">
-                    <button id="save-zernio-key-btn" class="btn btn-primary btn-block">Save Key</button>
-                </div>
-                
-                <div id="add-zernio-key-status" class="status-message" hidden></div>
-            </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- ============ ZERNIO KEYS MANAGEMENT ============ -->
+<div class="zernio-keys-section premium-card">
+    <div class="zernio-keys-header">
+        <div class="zernio-keys-title">
+            <span class="zernio-keys-icon">🔑</span>
+            <h3>Zernio API Keys</h3>
+            <span class="badge" id="zernio-keys-count">0 keys</span>
+        </div>
+        <div class="zernio-keys-actions">
+            <button id="add-zernio-key-btn" class="btn btn-sm btn-primary">➕ Add Key</button>
+            <button id="refresh-zernio-keys-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
         </div>
     </div>
+    
+    <div id="zernio-keys-list">
+        <div class="loading-state">
+            <div class="loading-spinner"></div>
+            <p style="color: var(--text-muted); margin-top: 12px;">Loading keys...</p>
+        </div>
+    </div>
+</div>
+
+<!-- ============ ADD ZERNIO KEY MODAL (SIMPLIFIED) ============ -->
+<div id="add-zernio-key-modal" class="modal-overlay" hidden>
+    <div class="modal-content premium-card">
+        <div class="modal-header">
+            <h3>🔑 Add Zernio API Key</h3>
+            <button id="add-zernio-key-modal-close" class="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <p class="modal-desc">
+                Enter your Zernio API key. Accounts linked to this key will be auto-discovered.
+            </p>
+            
+            <div class="form-group">
+                <label for="zernio-key-api">API Key</label>
+                <input type="text" id="zernio-key-api" class="input-field" placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                <span style="font-size: 11px; color: var(--text-muted);">
+                    🔑 Found in your Zernio dashboard
+                </span>
+            </div>
+            
+            <div class="form-group" style="margin-top: 16px;">
+                <button id="save-zernio-key-btn" class="btn btn-primary btn-block">Save Key</button>
+            </div>
+            
+            <div id="add-zernio-key-status" class="status-message" hidden></div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     <!-- ============ PIPELINES SECTION ============ -->
     <div class="pipelines-section premium-card" id="pipelines-section">
