@@ -1157,8 +1157,6 @@ def get_cookie_file():
 
 
 
-
-
 # ============== COOKIE EXTRACTION FROM RENDER SERVICE ==============
 
 def extract_cookies_from_render_service():
@@ -1199,9 +1197,14 @@ def extract_cookies_from_render_service():
             app.logger.error("❌ Failed to save cookies to database")
             return False
         
-        # Also save to local file
-        with open('cookies.json', 'w') as f:
-            json.dump(cookies, f, indent=2)
+        # ✅ FIX: Save to /tmp instead of root (Vercel read-only fix)
+        try:
+            cookie_file_path = os.path.join('/tmp', 'cookies.json')
+            with open(cookie_file_path, 'w') as f:
+                json.dump(cookies, f, indent=2)
+            app.logger.info(f"✅ Saved cookies to {cookie_file_path}")
+        except Exception as e:
+            app.logger.warning(f"⚠️ Could not save cookies to file: {e}")
         
         app.logger.info(f"✅ Extracted {len(cookies)} cookies from Render service")
         return True
@@ -1215,7 +1218,6 @@ def extract_cookies_from_render_service():
     except Exception as e:
         app.logger.error(f"❌ Error: {e}")
         return False
-
 
 
 
