@@ -4139,3 +4139,664 @@ window.checkInstagramStatus = async function() {
     await originalCheckInstagramStatus();
     await updateClearButton();
 };
+
+
+
+
+
+
+
+
+
+// ==================== MANUAL SCHEDULER ====================
+
+let unpostedReels = [];
+let selectedReels = new Set();
+let schedulerPipelines = [];
+
+// Initialize manual scheduler
+async function initManualScheduler() {
+    await loadSchedulerPipelines();
+    setupSchedulerEventListeners();
+}
+
+// Load pipelines for the scheduler dropdown
+async function loadSchedulerPipelines() {
+    const select = document.getElementById('scheduler-pipeline-select');
+    if (!select) return;
+    
+    try {
+        const response = await fetch('/api/pipelines', { credentials: 'same-origin' });
+        const data = await response.json();
+        
+        if (data.status === 'success' && data.pipelines) {
+            schedulerPipelines = data.pipelines;
+            select.innerHTML = '<option value="">Select a pipeline...</option>';
+            
+            data.pipelines.forEach(p => {
+                const option = document.createElement('option');
+                option.value = p.id;
+                option.textContent = `${p.name} (@${p.profile_username})`;
+                select.appendChild(option);
+            });
+        }
+    } catch (error) {
+        console.error('Failed to load pipelines:', error);
+    }
+}
+
+// Load unposted reels for a pipeline
+async function loadUnpostedReels(pipelineId) {
+    const container = document.getElementById('scheduler-reels-list');
+    const stats = document.getElementById('scheduler-stats');
+    const batchActions = document.getElementById('scheduler-batch-actions');
+    
+    if (!pipelineId) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">⚠️</div>
+                <strong>Please select a pipeline</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    Choose a pipeline from the dropdown above.
+                </p>
+            </div>
+        `;
+        stats.hidden = true;
+        batchActions.hidden = true;
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="loading-state">
+            <div class="loading-spinner"></div>
+            <p style="color: var(--text-muted); margin-top: 12px;">Loading reels...</p>
+        </div>
+    `;
+    
+    try {
+        const response = await fetch(`/api/scheduler/unposted-reels/${pipelineId}`, {
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            unpostedReels = data.reels || [];
+            selectedReels = new Set();
+            
+            // Update stats
+            document.getElementById('scheduler-total-reels').textContent = unpostedReels.length;
+            document.getElementById('scheduler-scheduled-count').textContent = data.scheduled_count || 0;
+            document.getElementById('scheduler-selected-count').textContent = '0';
+            stats.hidden = false;
+            batchActions.hidden = false;
+            
+            renderSchedulerReels(unpostedReels);
+            
+            // Set default batch time to now + 1 hour
+            const now = new Date();
+            now.setHours(now.getHours() + 1);
+            const defaultTime = now.toISOString().slice(0, 16);
+            document.getElementById('batch-start-time').value = defaultTime;
+        } else {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div style="font-size: 32px; margin-bottom: 12px;">❌</div>
+                    <strong>${data.error || 'Failed to load reels'}</strong>
+                </div>
+            `;
+            stats.hidden = true;
+            batchActions.hidden = true;
+        }
+    } catch (error) {
+        console.error('Failed to load reels:', error);
+        container.innerHTML = `
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">❌</div>
+                <strong>Error loading reels</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">${error.message}</p>
+            </div>
+        `;
+        stats.hidden = true;
+        batchActions.hidden = true;
+    }
+}
+
+// Render reels in the scheduler
+function renderSchedulerReels(reels) {
+    const container = document.getElementById('scheduler-reels-list');
+    
+    if (!reels || reels.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">🎉</div>
+                <strong>All reels are scheduled or posted!</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    No unposted reels found for this pipeline.
+                </p>
+            </div>
+        `;
+        return;
+    }
+    
+    let html = `
+        <div class="scheduler-reels-grid">
+            <div class="scheduler-grid-header">
+                <div class="scheduler-select-all">
+                    <input type="checkbox" id="select-all-reels" />
+                    <label for="select-all-reels">Select All</label>
+                </div>
+                <div class="scheduler-header-url">Reel URL</div>
+                <div class="scheduler-header-caption">Caption</div>
+                <div class="scheduler-header-status">Status</div>
+                <div class="scheduler-header-actions">Actions</div>
+            </div>
+    `;
+    
+    reels.forEach((reel, index) => {
+        const isScheduled = reel.is_scheduled;
+        const scheduledTime = reel.scheduled_time;
+        const caption = reel.caption || '';
+        const url = reel.url || '';
+        
+        html += `
+            <div class="scheduler-reel-item ${isScheduled ? 'scheduled' : ''}" data-index="${index}">
+                <div class="scheduler-reel-select">
+                    <input type="checkbox" class="reel-select-checkbox" data-url="${url}" ${isScheduled ? 'disabled' : ''} />
+                </div>
+                <div class="scheduler-reel-url">
+                    <a href="${url}" target="_blank" title="${url}">${url.substring(0, 40)}...</a>
+                </div>
+                <div class="scheduler-reel-caption">
+                    ${caption ? caption.substring(0, 40) + (caption.length > 40 ? '...' : '') : '<span style="color: var(--text-muted);">No caption</span>'}
+                </div>
+                <div class="scheduler-reel-status">
+                    ${isScheduled ? `<span class="status-badge pending">⏳ Scheduled ${scheduledTime ? new Date(scheduledTime).toLocaleString() : ''}</span>` : '<span class="status-badge available">📥 Available</span>'}
+                </div>
+                <div class="scheduler-reel-actions">
+                    ${!isScheduled ? `
+                        <button class="btn btn-sm btn-primary schedule-single-btn" data-url="${url}">📅 Schedule</button>
+                    ` : `
+                        <button class="btn btn-sm btn-danger unschedule-btn" data-url="${url}">✕ Remove</button>
+                    `}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += `</div>`;
+    container.innerHTML = html;
+    
+    // Event listeners
+    document.getElementById('select-all-reels')?.addEventListener('change', function() {
+        const checkboxes = container.querySelectorAll('.reel-select-checkbox:not(:disabled)');
+        checkboxes.forEach(cb => cb.checked = this.checked);
+        updateSelectedCount();
+    });
+    
+    container.querySelectorAll('.reel-select-checkbox').forEach(cb => {
+        cb.addEventListener('change', updateSelectedCount);
+    });
+    
+    container.querySelectorAll('.schedule-single-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const url = this.dataset.url;
+            openSingleScheduleModal(url);
+        });
+    });
+    
+    container.querySelectorAll('.unschedule-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const url = this.dataset.url;
+            unscheduleSingleReel(url);
+        });
+    });
+}
+
+// Update selected count
+function updateSelectedCount() {
+    const checkboxes = document.querySelectorAll('.reel-select-checkbox:checked:not(:disabled)');
+    document.getElementById('scheduler-selected-count').textContent = checkboxes.length;
+}
+
+// Open modal for scheduling a single reel
+function openSingleScheduleModal(url) {
+    const reel = unpostedReels.find(r => r.url === url);
+    if (!reel) return;
+    
+    // Create modal if it doesn't exist
+    let modal = document.getElementById('single-schedule-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'single-schedule-modal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal-content premium-card">
+                <div class="modal-header">
+                    <h3>📅 Schedule Post</h3>
+                    <button class="modal-close single-schedule-close">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Reel URL</label>
+                        <input type="text" id="single-schedule-url" class="input-field" readonly />
+                    </div>
+                    <div class="form-group">
+                        <label>Caption</label>
+                        <textarea id="single-schedule-caption" class="input-field" rows="2" placeholder="Enter caption..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Scheduled Time</label>
+                        <input type="datetime-local" id="single-schedule-time" class="input-field" />
+                    </div>
+                    <button id="single-schedule-confirm" class="btn btn-primary btn-block">📅 Schedule</button>
+                    <div id="single-schedule-status" class="status-message" hidden></div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        
+        modal.querySelector('.single-schedule-close').addEventListener('click', () => modal.hidden = true);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.hidden = true;
+        });
+    }
+    
+    // Populate modal
+    document.getElementById('single-schedule-url').value = url;
+    document.getElementById('single-schedule-caption').value = reel.caption || '';
+    
+    // Set default time to now + 1 hour
+    const now = new Date();
+    now.setHours(now.getHours() + 1);
+    document.getElementById('single-schedule-time').value = now.toISOString().slice(0, 16);
+    
+    document.getElementById('single-schedule-status').style.display = 'none';
+    modal.hidden = false;
+    
+    // Confirm button
+    document.getElementById('single-schedule-confirm').onclick = async function() {
+        const scheduledTime = document.getElementById('single-schedule-time').value;
+        const caption = document.getElementById('single-schedule-caption').value.trim();
+        const status = document.getElementById('single-schedule-status');
+        
+        if (!scheduledTime) {
+            status.textContent = '❌ Please select a time';
+            status.className = 'status-message error';
+            status.style.display = 'block';
+            return;
+        }
+        
+        const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+        
+        this.disabled = true;
+        this.textContent = '⏳ Scheduling...';
+        status.style.display = 'none';
+        
+        try {
+            const response = await fetch('/api/scheduler/manual', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    pipeline_id: pipelineId,
+                    schedules: [{
+                        reel_url: url,
+                        scheduled_time: scheduledTime,
+                        caption: caption
+                    }]
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok && data.status === 'success') {
+                status.textContent = '✅ Post scheduled successfully!';
+                status.className = 'status-message success';
+                status.style.display = 'block';
+                
+                setTimeout(() => {
+                    modal.hidden = true;
+                    loadUnpostedReels(pipelineId);
+                }, 1500);
+            } else {
+                status.textContent = `❌ ${data.error || 'Failed to schedule'}`;
+                status.className = 'status-message error';
+                status.style.display = 'block';
+            }
+        } catch (error) {
+            status.textContent = `❌ Error: ${error.message}`;
+            status.className = 'status-message error';
+            status.style.display = 'block';
+        } finally {
+            this.disabled = false;
+            this.textContent = '📅 Schedule';
+        }
+    };
+}
+
+// Unschedule a single reel
+async function unscheduleSingleReel(url) {
+    if (!confirm(`Remove this reel from the schedule?`)) return;
+    
+    const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+    
+    try {
+        // Find the scheduled post ID
+        const response = await fetch(`/api/scheduled-posts?pipeline_id=${pipelineId}&status=pending`, {
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        const post = data.scheduled_posts?.find(p => p.reel_url === url);
+        if (!post) {
+            showToast('❌ Post not found in schedule', 'error');
+            return;
+        }
+        
+        const deleteResponse = await fetch(`/api/scheduled-posts/${post.id}`, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        });
+        const deleteData = await deleteResponse.json();
+        
+        if (deleteData.status === 'success') {
+            showToast('✅ Removed from schedule', 'success');
+            loadUnpostedReels(pipelineId);
+        } else {
+            showToast('❌ Failed to remove: ' + deleteData.error, 'error');
+        }
+    } catch (error) {
+        console.error('Failed to unschedule:', error);
+        showToast('❌ Error: ' + error.message, 'error');
+    }
+}
+
+// Schedule selected reels sequentially
+document.getElementById('schedule-sequential-btn')?.addEventListener('click', async function() {
+    const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+    const startTime = document.getElementById('batch-start-time').value;
+    const intervalMinutes = parseInt(document.getElementById('batch-interval').value) || 60;
+    
+    if (!pipelineId) {
+        showToast('❌ Please select a pipeline', 'error');
+        return;
+    }
+    
+    if (!startTime) {
+        showToast('❌ Please select a start time', 'error');
+        return;
+    }
+    
+    // Get selected reels
+    const checkboxes = document.querySelectorAll('.reel-select-checkbox:checked:not(:disabled)');
+    if (checkboxes.length === 0) {
+        showToast('❌ Please select at least one reel', 'error');
+        return;
+    }
+    
+    if (!confirm(`Schedule ${checkboxes.length} reels sequentially starting at ${new Date(startTime).toLocaleString()}?`)) {
+        return;
+    }
+    
+    this.disabled = true;
+    this.textContent = '⏳ Scheduling...';
+    
+    const schedules = [];
+    let currentTime = new Date(startTime);
+    
+    checkboxes.forEach((cb, index) => {
+        const url = cb.dataset.url;
+        const reel = unpostedReels.find(r => r.url === url);
+        const scheduledTime = new Date(currentTime);
+        
+        schedules.push({
+            reel_url: url,
+            scheduled_time: scheduledTime.toISOString(),
+            caption: reel?.caption || ''
+        });
+        
+        // Add interval for next post
+        currentTime = new Date(currentTime.getTime() + intervalMinutes * 60 * 1000);
+    });
+    
+    try {
+        const response = await fetch('/api/scheduler/manual', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                pipeline_id: pipelineId,
+                schedules: schedules
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.status === 'success') {
+            showToast(`✅ Scheduled ${data.scheduled} posts`, 'success');
+            loadUnpostedReels(pipelineId);
+        } else {
+            showToast(`❌ ${data.error || 'Failed to schedule'}`, 'error');
+        }
+    } catch (error) {
+        showToast(`❌ Error: ${error.message}`, 'error');
+    } finally {
+        this.disabled = false;
+        this.textContent = '⏱️ Schedule Sequential';
+    }
+});
+
+// Schedule selected reels randomly
+document.getElementById('schedule-random-btn')?.addEventListener('click', async function() {
+    const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+    const startTime = document.getElementById('batch-start-time').value;
+    
+    if (!pipelineId) {
+        showToast('❌ Please select a pipeline', 'error');
+        return;
+    }
+    
+    if (!startTime) {
+        showToast('❌ Please select a start time', 'error');
+        return;
+    }
+    
+    // Get selected reels
+    const checkboxes = document.querySelectorAll('.reel-select-checkbox:checked:not(:disabled)');
+    if (checkboxes.length === 0) {
+        showToast('❌ Please select at least one reel', 'error');
+        return;
+    }
+    
+    if (!confirm(`Randomly schedule ${checkboxes.length} reels starting from ${new Date(startTime).toLocaleString()}?`)) {
+        return;
+    }
+    
+    this.disabled = true;
+    this.textContent = '⏳ Generating...';
+    
+    try {
+        // Generate random times
+        const timeResponse = await fetch('/api/scheduler/generate-random-times', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                num_posts: checkboxes.length,
+                start_hour: 8,
+                end_hour: 22
+            })
+        });
+        const timeData = await timeResponse.json();
+        
+        if (!timeData.status === 'success') {
+            showToast('❌ Failed to generate random times', 'error');
+            return;
+        }
+        
+        // Use the start date as base
+        const baseDate = new Date(startTime);
+        baseDate.setHours(0, 0, 0, 0);
+        
+        const schedules = [];
+        const urls = [];
+        checkboxes.forEach(cb => urls.push(cb.dataset.url));
+        
+        // Shuffle URLs
+        const shuffledUrls = [...urls].sort(() => Math.random() - 0.5);
+        
+        shuffledUrls.forEach((url, index) => {
+            const reel = unpostedReels.find(r => r.url === url);
+            const timeStr = timeData.times[index];
+            const scheduledTime = new Date(timeStr);
+            
+            // Use the base date
+            scheduledTime.setFullYear(baseDate.getFullYear());
+            scheduledTime.setMonth(baseDate.getMonth());
+            scheduledTime.setDate(baseDate.getDate());
+            
+            // If time is in the past, add a day
+            if (scheduledTime < new Date()) {
+                scheduledTime.setDate(scheduledTime.getDate() + 1);
+            }
+            
+            schedules.push({
+                reel_url: url,
+                scheduled_time: scheduledTime.toISOString(),
+                caption: reel?.caption || ''
+            });
+        });
+        
+        const response = await fetch('/api/scheduler/manual', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                pipeline_id: pipelineId,
+                schedules: schedules
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.status === 'success') {
+            showToast(`✅ Scheduled ${data.scheduled} posts at random times`, 'success');
+            loadUnpostedReels(pipelineId);
+        } else {
+            showToast(`❌ ${data.error || 'Failed to schedule'}`, 'error');
+        }
+    } catch (error) {
+        showToast(`❌ Error: ${error.message}`, 'error');
+    } finally {
+        this.disabled = false;
+        this.textContent = '🎲 Schedule Random';
+    }
+});
+
+// Auto-schedule all reels
+document.getElementById('auto-schedule-all-btn')?.addEventListener('click', async function() {
+    const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+    
+    if (!pipelineId) {
+        showToast('❌ Please select a pipeline', 'error');
+        return;
+    }
+    
+    const availableReels = unpostedReels.filter(r => !r.is_scheduled);
+    if (availableReels.length === 0) {
+        showToast('🎉 All reels are already scheduled!', 'success');
+        return;
+    }
+    
+    if (!confirm(`Auto-schedule ${availableReels.length} reels at random times throughout the day?`)) {
+        return;
+    }
+    
+    this.disabled = true;
+    this.textContent = '⏳ Scheduling...';
+    
+    try {
+        // Generate random times
+        const timeResponse = await fetch('/api/scheduler/generate-random-times', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                num_posts: availableReels.length,
+                start_hour: 8,
+                end_hour: 22
+            })
+        });
+        const timeData = await timeResponse.json();
+        
+        const schedules = [];
+        const baseDate = new Date();
+        baseDate.setHours(0, 0, 0, 0);
+        // Start from tomorrow
+        baseDate.setDate(baseDate.getDate() + 1);
+        
+        availableReels.forEach((reel, index) => {
+            const timeStr = timeData.times[index];
+            const scheduledTime = new Date(timeStr);
+            scheduledTime.setFullYear(baseDate.getFullYear());
+            scheduledTime.setMonth(baseDate.getMonth());
+            scheduledTime.setDate(baseDate.getDate());
+            
+            // Ensure time is in the future
+            if (scheduledTime < new Date()) {
+                scheduledTime.setDate(scheduledTime.getDate() + 1);
+            }
+            
+            schedules.push({
+                reel_url: reel.url,
+                scheduled_time: scheduledTime.toISOString(),
+                caption: reel.caption || ''
+            });
+        });
+        
+        const response = await fetch('/api/scheduler/manual', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                pipeline_id: pipelineId,
+                schedules: schedules
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.status === 'success') {
+            showToast(`✅ Auto-scheduled ${data.scheduled} posts`, 'success');
+            loadUnpostedReels(pipelineId);
+        } else {
+            showToast(`❌ ${data.error || 'Failed to schedule'}`, 'error');
+        }
+    } catch (error) {
+        showToast(`❌ Error: ${error.message}`, 'error');
+    } finally {
+        this.disabled = false;
+        this.textContent = '🎲 Auto-Schedule All';
+    }
+});
+
+// Load unposted button
+document.getElementById('load-unposted-btn')?.addEventListener('click', function() {
+    const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+    loadUnpostedReels(pipelineId);
+});
+
+// Refresh unposted button
+document.getElementById('refresh-unposted-btn')?.addEventListener('click', function() {
+    const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+    if (pipelineId) {
+        loadUnpostedReels(pipelineId);
+    } else {
+        loadSchedulerPipelines();
+    }
+});
+
+// Initialize manual scheduler
+document.addEventListener('DOMContentLoaded', function() {
+    initManualScheduler();
+});

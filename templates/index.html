@@ -646,6 +646,85 @@
       </div>
     </div>
 
+
+
+
+<!-- ============ MANUAL SCHEDULER SECTION ============ -->
+<div id="manual-scheduler-section" class="manual-scheduler premium-card">
+    <div class="manual-scheduler-header">
+        <div class="manual-scheduler-title">
+            <span class="manual-scheduler-icon">📅</span>
+            <h3>Manual Post Scheduler</h3>
+            <span class="badge">Drag & Schedule</span>
+        </div>
+        <div class="manual-scheduler-actions">
+            <button id="refresh-unposted-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+            <button id="schedule-selected-btn" class="btn btn-sm btn-primary">📅 Schedule Selected</button>
+            <button id="auto-schedule-all-btn" class="btn btn-sm btn-success">🎲 Auto-Schedule All</button>
+        </div>
+    </div>
+    
+    <div class="manual-scheduler-body">
+        <!-- Pipeline Selector -->
+        <div class="scheduler-pipeline-select">
+            <label for="scheduler-pipeline-select">Select Pipeline:</label>
+            <select id="scheduler-pipeline-select" class="input-field">
+                <option value="">Loading pipelines...</option>
+            </select>
+            <button id="load-unposted-btn" class="btn btn-sm btn-primary">📊 Load Reels</button>
+        </div>
+        
+        <!-- Stats -->
+        <div id="scheduler-stats" class="scheduler-stats" hidden>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-total-reels">0</span>
+                <span class="stat-label">Total Unposted</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-scheduled-count">0</span>
+                <span class="stat-label">Scheduled</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-selected-count">0</span>
+                <span class="stat-label">Selected</span>
+            </div>
+        </div>
+        
+        <!-- Reels List -->
+        <div id="scheduler-reels-list">
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">📭</div>
+                <strong>Select a pipeline and click "Load Reels"</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    Choose a pipeline above to see all unposted reels.
+                </p>
+            </div>
+        </div>
+        
+        <!-- Batch Actions -->
+        <div id="scheduler-batch-actions" class="scheduler-batch-actions" hidden>
+            <div class="batch-time-input">
+                <label for="batch-start-time">Start Time:</label>
+                <input type="datetime-local" id="batch-start-time" class="input-field" />
+            </div>
+            <div class="batch-time-input">
+                <label for="batch-interval">Interval (minutes):</label>
+                <input type="number" id="batch-interval" class="input-field" value="60" min="5" max="1440" />
+            </div>
+            <div class="batch-actions">
+                <button id="schedule-sequential-btn" class="btn btn-primary">⏱️ Schedule Sequential</button>
+                <button id="schedule-random-btn" class="btn btn-success">🎲 Schedule Random</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
     <!-- ============ SCHEDULED JOBS TOGGLE BUTTON ============ -->
     <div style="display: flex; justify-content: center; margin: 20px 0;">
       <button id="toggle-scheduled-jobs-btn" class="btn btn-primary" style="padding: 12px 32px; font-size: 16px;">

@@ -4761,6 +4761,227 @@ def validate_zernio_key():
 
 
 
+
+
+# ============== MANUAL SCHEDULER ROUTES ==============
+# Add these to your app.py
+
+@app.route('/api/scheduler/manual', methods=['POST'])
+def manual_schedule():
+    """
+    Manually schedule specific reels at specific times.
+    
+    Request body:
+    {
+        "pipeline_id": "uuid",
+        "schedules": [
+            {"reel_url": "https://...", "scheduled_time": "2026-09-08T14:30:00Z", "caption": "optional"}
+        ]
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    pipeline_id = data.get('pipeline_id')
+    schedules = data.get('schedules', [])
+    
+    if not pipeline_id:
+        return jsonify({"error": "pipeline_id is required"}), 400
+    
+    if not schedules or len(schedules) == 0:
+        return jsonify({"error": "schedules array is required"}), 400
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Verify pipeline exists
+        cur.execute("SELECT id, profile_username FROM pipelines WHERE id = %s", (pipeline_id,))
+        pipeline = cur.fetchone()
+        if not pipeline:
+            return jsonify({"error": "Pipeline not found"}), 404
+        
+        scheduled_count = 0
+        failed_count = 0
+        results = []
+        
+        for schedule in schedules:
+            reel_url = schedule.get('reel_url', '').strip()
+            scheduled_time_str = schedule.get('scheduled_time')
+            caption = schedule.get('caption', '')
+            
+            if not reel_url or not scheduled_time_str:
+                results.append({"reel_url": reel_url, "success": False, "error": "Missing reel_url or scheduled_time"})
+                failed_count += 1
+                continue
+            
+            try:
+                # Parse scheduled time
+                scheduled_time = datetime.fromisoformat(scheduled_time_str.replace('Z', '+00:00'))
+            except ValueError:
+                results.append({"reel_url": reel_url, "success": False, "error": "Invalid scheduled_time format"})
+                failed_count += 1
+                continue
+            
+            # Check if reel is already scheduled
+            cur.execute(
+                "SELECT id FROM scheduled_posts WHERE reel_url = %s AND status = 'pending'",
+                (reel_url,)
+            )
+            existing = cur.fetchone()
+            
+            if existing:
+                # Update existing
+                cur.execute("""
+                    UPDATE scheduled_posts 
+                    SET scheduled_time = %s, caption = %s, updated_at = NOW()
+                    WHERE id = %s
+                """, (scheduled_time, caption, existing['id']))
+                results.append({
+                    "reel_url": reel_url,
+                    "success": True,
+                    "scheduled_time": scheduled_time.isoformat(),
+                    "action": "updated"
+                })
+            else:
+                # Insert new
+                # Get direct video URL if available
+                direct_video_url = get_direct_url_from_cache_only(reel_url) or ''
+                
+                cur.execute("""
+                    INSERT INTO scheduled_posts (
+                        reel_url, direct_video_url, caption, pipeline_id, scheduled_time
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (reel_url, direct_video_url, caption, pipeline_id, scheduled_time))
+                
+                results.append({
+                    "reel_url": reel_url,
+                    "success": True,
+                    "scheduled_time": scheduled_time.isoformat(),
+                    "action": "created",
+                    "id": cur.fetchone()['id']
+                })
+            
+            scheduled_count += 1
+            conn.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Scheduled {scheduled_count} posts, {failed_count} failed",
+            "scheduled": scheduled_count,
+            "failed": failed_count,
+            "results": results
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Manual scheduling error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.route('/api/scheduler/unposted-reels/<pipeline_id>', methods=['GET'])
+def get_unposted_reels_for_scheduler(pipeline_id):
+    """Get all unposted reels for a pipeline (for manual scheduling)."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get pipeline
+        cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
+        pipeline = cur.fetchone()
+        if not pipeline:
+            return jsonify({"error": "Pipeline not found"}), 404
+        
+        # Get unposted reels
+        unposted = get_unposted_reels(
+            pipeline['profile_username'],
+            pipeline_id,
+            limit=200  # Get all
+        )
+        
+        # Get already scheduled pending posts
+        cur.execute("""
+            SELECT reel_url, scheduled_time, caption 
+            FROM scheduled_posts 
+            WHERE pipeline_id = %s AND status = 'pending'
+            ORDER BY scheduled_time ASC
+        """, (pipeline_id,))
+        scheduled = cur.fetchall()
+        scheduled_urls = {s['reel_url']: s for s in scheduled}
+        
+        # Enrich unposted with scheduled info
+        result_reels = []
+        for reel in unposted:
+            reel_url = reel.get('url') if isinstance(reel, dict) else reel
+            caption = reel.get('caption', '') if isinstance(reel, dict) else ''
+            
+            is_scheduled = reel_url in scheduled_urls
+            scheduled_info = scheduled_urls.get(reel_url) if is_scheduled else None
+            
+            result_reels.append({
+                "url": reel_url,
+                "caption": caption,
+                "is_scheduled": is_scheduled,
+                "scheduled_time": scheduled_info['scheduled_time'].isoformat() if scheduled_info else None,
+                "scheduled_caption": scheduled_info.get('caption', '') if scheduled_info else None
+            })
+        
+        return jsonify({
+            "status": "success",
+            "pipeline": {
+                "id": pipeline['id'],
+                "name": pipeline['name'],
+                "profile_username": pipeline['profile_username']
+            },
+            "reels": result_reels,
+            "total": len(result_reels),
+            "scheduled_count": len(scheduled)
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error getting unposted reels: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.route('/api/scheduler/generate-random-times', methods=['POST'])
+def generate_random_times():
+    """Generate random scheduled times for a given number of posts."""
+    data = request.get_json(silent=True) or {}
+    num_posts = data.get('num_posts', 1)
+    start_hour = data.get('start_hour', 0)
+    end_hour = data.get('end_hour', 23)
+    
+    if num_posts < 1 or num_posts > 100:
+        return jsonify({"error": "num_posts must be between 1 and 100"}), 400
+    
+    times = generate_random_post_times(num_posts, start_hour, end_hour)
+    
+    return jsonify({
+        "status": "success",
+        "times": [t.isoformat() for t in times],
+        "count": len(times)
+    })
+
+
+
+
+
+
+
+
+
+
 @app.route('/api/settings', methods=['POST', 'PUT'])
 def update_setting_endpoint():
     """Update a setting."""
