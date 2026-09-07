@@ -2249,12 +2249,25 @@ function renderPipelines(pipelines) {
     const statusClass = p.is_active ? 'active' : 'inactive';
     const statusText = p.is_active ? '🟢 Active' : '🔴 Inactive';
     
+    // Get counts with defaults
+    const posted = p.success_count || 0;
+    const failed = p.failed_count || 0;
+    const pending = p.pending_posts || 0;
+    const processing = p.processing_posts || 0;
+    const totalScheduled = p.total_scheduled || 0;
+    
+    // Only show pending if > 0
+    const showPending = pending > 0;
+    const showProcessing = processing > 0;
+    const showFailed = failed > 0;
+    
     html += `
       <div class="pipeline-card">
         <div class="pipeline-card-header">
           <div class="pipeline-card-title">
             <span class="pipeline-name">${escapeHtml(p.name)}</span>
             <span class="pipeline-status ${statusClass}">${statusText}</span>
+            ${showProcessing ? `<span class="badge-processing"><span class="dot"></span> ${processing} processing</span>` : ''}
           </div>
           <div class="pipeline-card-actions">
             <button class="btn btn-sm btn-ghost edit-pipeline-btn" data-id="${p.id}" title="Edit Pipeline">
@@ -2287,21 +2300,47 @@ function renderPipelines(pipelines) {
             <span class="pipeline-label">Total Posted:</span>
             <span class="pipeline-value">${p.total_posted || 0}</span>
           </div>
+          ${p.last_run ? `
           <div class="pipeline-detail">
             <span class="pipeline-label">Last Run:</span>
-            <span class="pipeline-value">${p.last_run ? new Date(p.last_run).toLocaleString() : 'Never'}</span>
-          </div>
+            <span class="pipeline-value">${new Date(p.last_run).toLocaleString()}</span>
+          </div>` : ''}
           ${p.last_post_time ? `
           <div class="pipeline-detail">
             <span class="pipeline-label">Last Post:</span>
             <span class="pipeline-value">${new Date(p.last_post_time).toLocaleString()}</span>
           </div>` : ''}
-          <div class="pipeline-stats">
-            <span class="stat-success">✅ ${p.success_count || 0}</span>
-            <span class="stat-failed">❌ ${p.failed_count || 0}</span>
+          
+          <!-- STATUS SUMMARY BADGES -->
+          <div class="pipeline-status-summary">
+            <span class="status-badge-summary posted">
+              ✅ <span class="count">${posted}</span> Posted
+            </span>
+            ${showProcessing ? `
+            <span class="status-badge-summary processing">
+              🟡 <span class="count">${processing}</span> Processing
+            </span>` : ''}
+            ${showPending ? `
+            <span class="status-badge-summary pending">
+              ⏳ <span class="count">${pending}</span> Pending
+            </span>` : ''}
+            ${showFailed ? `
+            <span class="status-badge-summary failed">
+              ❌ <span class="count">${failed}</span> Failed
+            </span>` : ''}
+            ${totalScheduled > 0 ? `
+            <span class="status-badge-summary scheduled">
+              📋 <span class="count">${totalScheduled}</span> Total
+            </span>` : ''}
           </div>
-          <div class="pipeline-pending" style="margin-top: 6px; font-size: 12px;">
-            <span class="stat-pending">⏳ Pending: ${p.pending_posts || 0}</span>
+          
+          <!-- STATS ROW -->
+          <div class="pipeline-stats">
+            <span class="stat-success">✅ ${posted}</span>
+            ${showProcessing ? `<span class="stat-processing">🟡 ${processing}</span>` : ''}
+            ${showPending ? `<span class="stat-pending">⏳ ${pending}</span>` : ''}
+            ${showFailed ? `<span class="stat-failed">❌ ${failed}</span>` : ''}
+            ${totalScheduled > 0 ? `<span class="stat-scheduled">📋 ${totalScheduled}</span>` : ''}
           </div>
         </div>
       </div>

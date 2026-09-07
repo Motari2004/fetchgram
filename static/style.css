@@ -3129,6 +3129,54 @@ html, body {
   white-space: nowrap;
 }
 
+/* ============ PIPELINE STATUS SUMMARY ============ */
+.pipeline-status-summary {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.status-badge-summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.status-badge-summary .count {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.status-badge-summary.posted .count {
+  color: var(--success);
+}
+
+.status-badge-summary.processing .count {
+  color: #6c63ff;
+  animation: pulse-processing 1.5s ease-in-out infinite;
+}
+
+.status-badge-summary.pending .count {
+  color: #f59e0b;
+}
+
+.status-badge-summary.failed .count {
+  color: var(--error);
+}
+
+.status-badge-summary.scheduled .count {
+  color: var(--accent);
+}
+
+/* ============ PIPELINE STATS ============ */
 .pipeline-stats {
   display: flex;
   gap: 12px;
@@ -3143,8 +3191,53 @@ html, body {
   color: var(--success);
 }
 
+.stat-processing {
+  color: #6c63ff;
+  animation: pulse-processing 1.5s ease-in-out infinite;
+}
+
+.stat-pending {
+  color: #f59e0b;
+}
+
 .stat-failed {
   color: var(--error);
+}
+
+.stat-scheduled {
+  color: var(--accent);
+}
+
+/* ============ PROCESSING PULSE ANIMATION ============ */
+@keyframes pulse-processing {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ============ STATUS DOT INDICATOR ============ */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+
+.status-dot.posted {
+  background: var(--success);
+}
+
+.status-dot.processing {
+  background: #6c63ff;
+  animation: pulse-processing 1s ease-in-out infinite;
+}
+
+.status-dot.pending {
+  background: #f59e0b;
+}
+
+.status-dot.failed {
+  background: var(--error);
 }
 
 /* Empty State */
@@ -3155,6 +3248,36 @@ html, body {
   font-size: 13px;
   border: 1px dashed var(--border-color);
   border-radius: var(--radius-sm);
+}
+
+/* ============ PIPELINE GRID ============ */
+.pipelines-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+/* ============ PROCESSING BADGE (PULSING) ============ */
+.badge-processing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(108, 99, 255, 0.12);
+  color: #6c63ff;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  animation: pulse-processing 1.5s ease-in-out infinite;
+}
+
+.badge-processing .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6c63ff;
+  display: inline-block;
 }
 
 /* Mobile Responsive */
@@ -3210,6 +3333,19 @@ html, body {
     max-width: 100%;
     text-align: left;
   }
+  
+  .pipeline-status-summary {
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  
+  .status-badge-summary {
+    font-size: 11px;
+  }
+  
+  .status-badge-summary .count {
+    font-size: 12px;
+  }
 }
 
 @media (max-width: 480px) {
@@ -3228,6 +3364,7 @@ html, body {
   
   .pipeline-stats {
     font-size: 12px;
+    gap: 8px;
   }
 }
 
@@ -3253,6 +3390,11 @@ html, body {
   }
   
   .pipeline-stats {
+    border-color: var(--border-color-dark, #2d2d2d);
+  }
+  
+  .pipeline-status-summary {
+    background: var(--bg-secondary-dark, #1a1a1a);
     border-color: var(--border-color-dark, #2d2d2d);
   }
 }
@@ -3284,9 +3426,6 @@ html, body {
 .pipeline-card:nth-child(4) {
   animation-delay: 0.15s;
 }
-
-
-
 
 /* Edit Pipeline Modal */
 #edit-pipeline-modal .modal-content {
@@ -3332,7 +3471,6 @@ html, body {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-primary);
 }
-
 
 
 

@@ -4259,7 +4259,8 @@ def get_pipelines():
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT p.*, COUNT(pr.id) as total_posted_count,
+            SELECT p.*, 
+                   COUNT(pr.id) as total_posted_count,
                    SUM(CASE WHEN pr.status = 'success' THEN 1 ELSE 0 END) as success_count,
                    SUM(CASE WHEN pr.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
                    MAX(pr.posted_at) as last_post_time
@@ -4268,12 +4269,49 @@ def get_pipelines():
             GROUP BY p.id ORDER BY p.created_at DESC
         """)
         pipelines = cur.fetchall()
+        
         for pipeline in pipelines:
-            cur.execute("SELECT COUNT(*) as pending_count FROM pending_posts WHERE pipeline_id = %s AND status IN ('pending', 'processing')", (pipeline['id'],))
-            pending = cur.fetchone()
-            pipeline['pending_posts'] = pending['pending_count'] if pending else 0
+            # Get counts from scheduled_posts (new flow)
+            cur.execute("""
+                SELECT 
+                    COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
+                    COUNT(*) FILTER (WHERE status = 'processing') as processing_count,
+                    COUNT(*) FILTER (WHERE status = 'posted') as posted_count,
+                    COUNT(*) FILTER (WHERE status = 'failed') as failed_count,
+                    COUNT(*) as total_scheduled
+                FROM scheduled_posts 
+                WHERE pipeline_id = %s
+            """, (pipeline['id'],))
+            scheduled_counts = cur.fetchone()
+            
+            # Get counts from pending_posts (backward compatibility)
+            cur.execute("""
+                SELECT 
+                    COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
+                    COUNT(*) FILTER (WHERE status = 'processing') as processing_count,
+                    COUNT(*) FILTER (WHERE status = 'failed') as failed_count
+                FROM pending_posts 
+                WHERE pipeline_id = %s
+            """, (pipeline['id'],))
+            pending_counts = cur.fetchone()
+            
+            # Combine counts from both tables
+            total_pending = (scheduled_counts['pending_count'] or 0) + (pending_counts['pending_count'] or 0)
+            total_processing = (scheduled_counts['processing_count'] or 0) + (pending_counts['processing_count'] or 0)
+            total_failed = (scheduled_counts['failed_count'] or 0) + (pending_counts['failed_count'] or 0)
+            total_posted = (scheduled_counts['posted_count'] or 0)
+            
+            pipeline['pending_posts'] = total_pending
+            pipeline['processing_posts'] = total_processing
+            pipeline['posted_posts'] = total_posted
+            pipeline['failed_posts'] = total_failed
+            pipeline['total_scheduled'] = scheduled_counts['total_scheduled'] or 0
+            
         return jsonify({"status": "success", "pipelines": pipelines})
     except Exception as e:
+        app.logger.error(f"Error fetching pipelines: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
