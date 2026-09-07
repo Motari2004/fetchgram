@@ -7,3 +7,4 @@ cryptography==42.0.5
 psycopg2-binary==2.9.9
 sqlalchemy==2.0.30
 python-dotenv==1.0.0
+playwright==1.40.0
