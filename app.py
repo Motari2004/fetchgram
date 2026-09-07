@@ -8,7 +8,6 @@ import time
 import base64
 import random
 from datetime import datetime, timedelta
-from playwright.sync_api import sync_playwright 
 from flask import Flask, request, jsonify, send_file, render_template, after_this_request, session
 from flask_cors import CORS
 import yt_dlp
@@ -3430,71 +3429,106 @@ def sync_captions():
 
 
 
-@app.route("/api/cookies/extract-from-browserless", methods=["POST"])
-def extract_cookies_from_browserless():
-    """Extract cookies from Browserless profile and save to database"""
+# ============== EXTRACT COOKIES FROM RENDER SERVICE ==============
+
+COOKIE_EXTRACTOR_URL = os.environ.get('COOKIE_EXTRACTOR_URL', 'https://profilecookieextractor.onrender.com')
+
+@app.route("/api/cookies/extract-from-render", methods=["POST"])
+def extract_cookies_from_render():
+    """Call the Render cookie extractor service to get fresh cookies"""
     try:
-        TOKEN = os.environ.get('BROWSERLESS_API_KEY', '')
-        if not TOKEN:
-            return jsonify({"error": "BROWSERLESS_API_KEY not set"}), 400
+        app.logger.info("🍪 Calling Render cookie extractor service...")
         
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(
-                f"wss://production-sfo.browserless.io?token={TOKEN}"
-            )
-            
-            context = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = context.new_page()
-            
-            # Go to Instagram
-            page.goto("https://www.instagram.com/", wait_until="networkidle")
-            time.sleep(2)
-            
-            # Check if logged in
-            if "login" in page.url:
-                browser.close()
-                return jsonify({
-                    "success": False,
-                    "error": "Browserless profile is not logged in. Please login first."
-                }), 400
-            
-            # Extract cookies
-            cookies = context.cookies()
-            
-            # Save to database
-            db_cookies = get_cookies_from_db()
-            if db_cookies:
-                # Update existing
-                username = None
-                for cookie in cookies:
-                    if cookie.get('name') == 'ds_user_id':
-                        username = cookie.get('value')
-                        break
-                success = save_cookies_to_db(cookies, username or 'Instagram User')
-            else:
-                # Insert new
-                username = None
-                for cookie in cookies:
-                    if cookie.get('name') == 'ds_user_id':
-                        username = cookie.get('value')
-                        break
-                success = save_cookies_to_db(cookies, username or 'Instagram User')
-            
-            # Also save to local file
-            with open('cookies.json', 'w') as f:
-                json.dump(cookies, f, indent=2)
-            
-            browser.close()
-            
+        # Call the Render service
+        response = requests.post(
+            f"{COOKIE_EXTRACTOR_URL}/api/extract",
+            timeout=30,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code != 200:
+            app.logger.error(f"❌ Render service returned {response.status_code}")
             return jsonify({
-                "success": True,
-                "message": f"Extracted {len(cookies)} cookies from Browserless profile",
-                "cookie_count": len(cookies)
-            })
-            
+                "success": False,
+                "error": f"Cookie service returned {response.status_code}"
+            }), 500
+        
+        data = response.json()
+        
+        if not data.get('success'):
+            app.logger.error(f"❌ Render service failed: {data.get('error')}")
+            return jsonify({
+                "success": False,
+                "error": data.get('error', 'Failed to extract cookies')
+            }), 500
+        
+        cookies = data.get('cookies', [])
+        if not cookies:
+            return jsonify({
+                "success": False,
+                "error": "No cookies returned from service"
+            }), 500
+        
+        # Save to database
+        username = None
+        for cookie in cookies:
+            if cookie.get('name') == 'ds_user_id':
+                username = cookie.get('value')
+                break
+        
+        success = save_cookies_to_db(cookies, username or 'Instagram User')
+        if not success:
+            return jsonify({"error": "Failed to save cookies to database"}), 500
+        
+        # Also save to local file
+        with open('cookies.json', 'w') as f:
+            json.dump(cookies, f, indent=2)
+        
+        app.logger.info(f"✅ Extracted {len(cookies)} cookies from Render service")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Extracted {len(cookies)} cookies from Render service",
+            "cookie_count": len(cookies),
+            "username": username or 'Instagram User'
+        })
+        
+    except requests.exceptions.Timeout:
+        app.logger.error("❌ Render service timeout")
+        return jsonify({"error": "Cookie service timed out"}), 504
+    except requests.exceptions.ConnectionError:
+        app.logger.error("❌ Render service connection error")
+        return jsonify({"error": "Could not connect to cookie service"}), 503
     except Exception as e:
-        app.logger.error(f"Cookie extraction error: {e}")
+        app.logger.error(f"❌ Error: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/cookies/extract-from-render/status", methods=["GET"])
+def cookie_extractor_status():
+    """Check if the Render cookie service is available"""
+    try:
+        response = requests.get(
+            f"{COOKIE_EXTRACTOR_URL}/health",
+            timeout=5
+        )
+        return jsonify({
+            "available": response.status_code == 200,
+            "status_code": response.status_code,
+            "url": COOKIE_EXTRACTOR_URL
+        })
+    except Exception as e:
+        return jsonify({
+            "available": False,
+            "error": str(e),
+            "url": COOKIE_EXTRACTOR_URL
+        })
+
+
+
+
+
+
+
 
 
 

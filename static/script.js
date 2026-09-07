@@ -3520,14 +3520,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 
-
-// ==================== AUTO-EXTRACT COOKIES FROM BROWSERLESS ====================
+// ==================== EXTRACT COOKIES FROM RENDER SERVICE ====================
 
 async function extractCookiesFromBrowserless() {
-    console.log('🍪 Extracting cookies from Browserless...');
+    console.log('🍪 Extracting cookies from Render cookie service...');
     
     try {
-        const response = await fetch('/api/cookies/extract-from-browserless', {
+        const response = await fetch('/api/cookies/extract-from-render', {
             method: 'POST',
             credentials: 'same-origin'
         });
@@ -3537,7 +3536,6 @@ async function extractCookiesFromBrowserless() {
         
         if (data.success) {
             showCookieStatus(`✅ ${data.message}`, 'success');
-            // Reload cookie status
             await checkInstagramStatus();
             return true;
         } else {
@@ -3551,7 +3549,28 @@ async function extractCookiesFromBrowserless() {
     }
 }
 
-// Add a button to manually trigger extraction
+// Check if Render cookie service is available
+async function checkCookieServiceStatus() {
+    try {
+        const response = await fetch('/api/cookies/extract-from-render/status', {
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        if (data.available) {
+            console.log('✅ Render cookie service is available');
+            return true;
+        } else {
+            console.warn('⚠️ Render cookie service is not available');
+            return false;
+        }
+    } catch (error) {
+        console.error('❌ Failed to check cookie service:', error);
+        return false;
+    }
+}
+
+// Add a button to the cookie upload area
 function addExtractCookieButton() {
     const container = document.querySelector('.cookie-upload-area');
     if (!container) return;
@@ -3579,43 +3598,44 @@ function addExtractCookieButton() {
     container.appendChild(extractBtn);
 }
 
-// Override the error handling for "private" error
+// Handle private/login required errors
 function handlePrivateError(errorMsg) {
-    if (errorMsg.includes('private') || errorMsg.includes('login required')) {
-        // Show error with extract option
-        const errorContainer = document.getElementById('error-msg');
-        if (errorContainer) {
-            errorContainer.innerHTML = `
-                <div style="padding: 12px; background: var(--error-bg); border-radius: 8px; border-left: 3px solid var(--error);">
-                    <strong>⚠️ ${errorMsg}</strong>
-                    <div style="margin-top: 10px;">
-                        <button id="extract-on-error-btn" class="btn btn-primary btn-sm">
-                            🍪 Extract Cookies from Browserless
-                        </button>
-                    </div>
-                </div>
-            `;
-            
-            document.getElementById('extract-on-error-btn')?.addEventListener('click', async function() {
-                this.disabled = true;
-                this.textContent = '⏳ Extracting...';
-                await extractCookiesFromBrowserless();
-                this.disabled = false;
-                this.textContent = '🍪 Extract Cookies from Browserless';
-                // Retry the download after extraction
-                if (currentVideoUrl) {
-                    retryDownload();
-                }
-            });
+    const errorContainer = document.getElementById('error-msg');
+    if (!errorContainer) return;
+    
+    errorContainer.innerHTML = `
+        <div style="padding: 12px; background: var(--error-bg); border-radius: 8px; border-left: 3px solid var(--error);">
+            <strong>⚠️ ${errorMsg}</strong>
+            <div style="margin-top: 10px;">
+                <button id="extract-on-error-btn" class="btn btn-primary btn-sm">
+                    🍪 Extract Cookies from Browserless
+                </button>
+                <button id="retry-after-extract-btn" class="btn btn-success btn-sm" style="margin-left: 8px;">
+                    🔄 Retry Download
+                </button>
+            </div>
+        </div>
+    `;
+    errorContainer.hidden = false;
+    
+    document.getElementById('extract-on-error-btn')?.addEventListener('click', async function() {
+        this.disabled = true;
+        this.textContent = '⏳ Extracting...';
+        const success = await extractCookiesFromBrowserless();
+        this.disabled = false;
+        this.textContent = '🍪 Extract Cookies from Browserless';
+        if (success && currentVideoUrl) {
+            retryDownload();
         }
-        errorContainer.hidden = false;
-    } else {
-        const errorContainer = document.getElementById('error-msg');
-        if (errorContainer) {
-            errorContainer.textContent = errorMsg;
-            errorContainer.hidden = false;
+    });
+    
+    document.getElementById('retry-after-extract-btn')?.addEventListener('click', function() {
+        if (currentVideoUrl) {
+            retryDownload();
+        } else {
+            showError('No video to retry. Please fetch a video first.');
         }
-    }
+    });
 }
 
 // Retry download after cookie extraction
@@ -3674,13 +3694,8 @@ window.showError = function(message) {
 document.addEventListener('DOMContentLoaded', function() {
     // Add extract cookie button
     setTimeout(addExtractCookieButton, 500);
-    
-    // Check if we should auto-extract on startup
-    checkInstagramStatus().then(hasCookies => {
-        if (!hasCookies) {
-            console.log('ℹ️ No cookies found. You can extract from Browserless using the button.');
-        }
-    });
+    // Check cookie service status
+    checkCookieServiceStatus();
 });
 
-console.log('✅ Browserless cookie extractor loaded!');
+console.log('✅ Browserless cookie extractor (Render service) loaded!');

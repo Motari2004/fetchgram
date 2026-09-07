@@ -112,7 +112,7 @@
           <button id="clear-cookie-main-btn" class="btn btn-danger" hidden>🗑️ Clear</button>
         </div>
         
-        <!-- ✅ ADDED: Browserless Cookie Extraction -->
+        <!-- ============ EXTRACT FROM BROWSERLESS BUTTON ============ -->
         <div class="cookie-upload-actions" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px;">
           <button id="extract-browserless-cookies-btn" class="btn btn-primary">
             <span class="btn-content">🍪 Extract from Browserless</span>
@@ -121,6 +121,11 @@
         </div>
         
         <div id="cookie-upload-status" class="cookie-status-msg" hidden></div>
+        
+        <!-- Cookie Service Status -->
+        <div class="cookie-service-status" style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+          <span id="cookie-service-status">🔍 Checking cookie service...</span>
+        </div>
         
         <div class="cookie-upload-help">
           <details>
