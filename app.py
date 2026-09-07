@@ -2577,37 +2577,103 @@ def scrape_proxy():
     usernames = data.get("usernames", [])
     max_reels = data.get("maxReels", 50)
     fetch_captions = data.get("fetch_captions", True)
+    
     app.logger.info(f"📝 Scraping usernames: {usernames}")
     app.logger.info(f"📝 Max reels: {max_reels}")
+    
     cookies = None
     db_cookies = get_cookies_from_db()
+    
     if db_cookies:
         cookies = db_cookies.get('cookie_data', [])
         app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from Neon DB")
+        # Check if cookies have sessionid
+        has_session = any(c.get('name') == 'sessionid' for c in cookies)
+        if has_session:
+            app.logger.info("✅ Cookies have valid sessionid")
+        else:
+            app.logger.warning("⚠️ Cookies found but no sessionid - may be invalid")
+            cookies = None  # Force re-extraction
+    
+    # ✅ If no valid cookies in DB, try to extract from Render service
+    if not cookies:
+        app.logger.info("🔄 No valid cookies found. Attempting to extract from Render service...")
+        
+        try:
+            extraction_success = extract_cookies_from_render_service()
+            
+            if extraction_success:
+                # Try again after extraction
+                db_cookies = get_cookies_from_db()
+                if db_cookies:
+                    cookies = db_cookies.get('cookie_data', [])
+                    app.logger.info(f"✅ Retrieved {len(cookies)} cookies after extraction")
+                    
+                    # Verify sessionid exists
+                    has_session = any(c.get('name') == 'sessionid' for c in cookies)
+                    if has_session:
+                        app.logger.info("✅ Extraction successful - valid cookies obtained")
+                    else:
+                        app.logger.warning("⚠️ Extraction returned cookies but no sessionid")
+                        cookies = None
+            else:
+                app.logger.warning("⚠️ Failed to extract cookies from Render service")
+        except Exception as e:
+            app.logger.error(f"❌ Extraction error: {e}")
+    
+    # Try environment variable as final fallback
     if not cookies:
         cookies_json_env = os.environ.get('COOKIES_JSON')
         if cookies_json_env:
             try:
                 cookies = json.loads(cookies_json_env)
                 app.logger.info(f"Proxy: Retrieved {len(cookies)} cookies from env")
+                has_session = any(c.get('name') == 'sessionid' for c in cookies)
+                if not has_session:
+                    app.logger.warning("⚠️ Environment cookies have no sessionid")
+                    cookies = None
             except:
                 pass
+    
     if not cookies:
-        return jsonify({"status": "error", "error": "No Instagram cookies found. Please upload your cookies.json file first."}), 400
+        return jsonify({
+            "status": "error", 
+            "error": "No Instagram cookies found. Please click 'Extract from Browserless' button first.",
+            "requires_cookies": True
+        }), 400
+    
+    # ✅ Verify cookies have sessionid before proceeding
+    has_session = any(c.get('name') == 'sessionid' for c in cookies)
+    if not has_session:
+        return jsonify({
+            "status": "error",
+            "error": "Invalid cookies - no sessionid found. Please re-extract.",
+            "requires_cookies": True
+        }), 400
+    
     data['cookies'] = cookies
+    
     try:
         existing_urls = {}
         for username in usernames:
             existing_urls[username] = get_existing_reel_urls(username)
             app.logger.info(f"📊 @{username}: {len(existing_urls[username])} existing reels")
+        
         scraper_base_url = get_scraper_base_url()
-        response = requests.post(f'{scraper_base_url}/api/scrape/start', json=data, headers={'Content-Type': 'application/json'}, timeout=60)
+        response = requests.post(
+            f'{scraper_base_url}/api/scrape/start', 
+            json=data, 
+            headers={'Content-Type': 'application/json'}, 
+            timeout=60
+        )
         app.logger.info(f"Proxy: Render responded with status {response.status_code}")
+        
         if response.status_code == 200:
             result_data = response.json()
             results = result_data.get('results', [])
             new_results = []
             total_new_reels = 0
+            
             for profile in results:
                 username = profile.get('username')
                 if not username:
@@ -2615,6 +2681,7 @@ def scrape_proxy():
                 existing = existing_urls.get(username, set())
                 reels = profile.get('reels', [])
                 new_reels = []
+                
                 for reel in reels:
                     if isinstance(reel, str):
                         if reel not in existing:
@@ -2625,6 +2692,7 @@ def scrape_proxy():
                         if url and url not in existing:
                             new_reels.append(reel)
                             existing.add(url)
+                
                 if new_reels:
                     profile['reels'] = new_reels
                     new_results.append(profile)
@@ -2632,10 +2700,12 @@ def scrape_proxy():
                     app.logger.info(f"✅ @{username}: {len(new_reels)} new reels found")
                 else:
                     app.logger.info(f"ℹ️ @{username}: No new reels found")
+            
             if new_results:
                 with app.test_request_context():
                     store_scraped_data()
                     app.logger.info(f"✅ Stored {total_new_reels} new reels for {len(new_results)} profiles")
+                
                 if fetch_captions:
                     app.logger.info(f"📝 Auto-fetching captions for {total_new_reels} new reels...")
                     all_reel_urls = []
@@ -2648,6 +2718,7 @@ def scrape_proxy():
                                 url = reel.get('url')
                                 if url:
                                     all_reel_urls.append(url)
+                    
                     if all_reel_urls:
                         captions_map = fetch_captions_batch(all_reel_urls)
                         for profile in new_results:
@@ -2669,11 +2740,28 @@ def scrape_proxy():
                                     processed_reels.append(reel)
                             profile['reels'] = processed_reels
                         app.logger.info(f"✅ Added captions to {len(all_reel_urls)} new reels")
+                
                 extracted_usernames = [p.get('username') for p in new_results if p.get('username')]
-                return jsonify({"status": "success", "job_id": result_data.get('job_id') or str(uuid.uuid4()), "usernames": extracted_usernames, "message": f"Found {total_new_reels} new reels across {len(new_results)} profiles", "results": new_results, "auto_sync": False, "new_reels": total_new_reels, "profiles_with_new": len(new_results)}), 200
+                return jsonify({
+                    "status": "success", 
+                    "job_id": result_data.get('job_id') or str(uuid.uuid4()), 
+                    "usernames": extracted_usernames, 
+                    "message": f"Found {total_new_reels} new reels across {len(new_results)} profiles", 
+                    "results": new_results, 
+                    "auto_sync": False, 
+                    "new_reels": total_new_reels, 
+                    "profiles_with_new": len(new_results)
+                }), 200
             else:
-                return jsonify({"status": "success", "message": "No new reels found for the requested profiles", "usernames": usernames, "results": []}), 200
+                return jsonify({
+                    "status": "success", 
+                    "message": "No new reels found for the requested profiles", 
+                    "usernames": usernames, 
+                    "results": []
+                }), 200
+        
         return jsonify(response.json()), response.status_code
+        
     except requests.exceptions.Timeout:
         return jsonify({"status": "error", "error": "Render service timed out. Please try again."}), 504
     except requests.exceptions.ConnectionError:
