@@ -805,8 +805,6 @@ function showZernioSuccess(message, details) {
 
 
 
-
-
 // ==================== LOAD ZERNIO ACCOUNTS ====================
 
 let zernioAccountsLoadAttempts = 0;
@@ -821,24 +819,43 @@ async function _loadZernioAccountsWithRetry() {
     try {
         console.log(`📊 Loading Zernio accounts (attempt ${zernioAccountsLoadAttempts + 1})...`);
         
-        const response = await fetch('/api/zernio/accounts', {
+        // ✅ FIX: Fetch from /api/zernio/keys to get ALL accounts from ALL keys
+        const response = await fetch('/api/zernio/keys', {
             credentials: 'same-origin',
             headers: { 'Cache-Control': 'no-cache' }
         });
         
         const data = await response.json();
-        console.log('📊 Zernio accounts response:', data);
+        console.log('📊 Zernio keys response:', data);
         
-        if (data.status === 'success' && data.accounts && data.accounts.length > 0) {
-            zernioAccounts = data.accounts;
+        if (data.status === 'success' && data.keys && data.keys.length > 0) {
+            // ✅ Combine accounts from ALL keys
+            const allAccounts = [];
             
-            // ✅ Populate ALL dropdowns
+            data.keys.forEach(key => {
+                if (key.accounts && key.accounts.length > 0) {
+                    key.accounts.forEach(account => {
+                        allAccounts.push({
+                            id: account.id,
+                            name: account.name,
+                            page_id: account.page_id,
+                            status: account.status,
+                            key_name: key.name // Track which key it belongs to
+                        });
+                    });
+                }
+            });
+            
+            zernioAccounts = allAccounts;
+            zernioAccountsLoaded = true;
+            
+            console.log(`✅ Loaded ${zernioAccounts.length} accounts from ${data.keys.length} keys`);
+            console.log('📋 Accounts:', zernioAccounts.map(a => a.name));
+            
+            // ✅ Populate ALL dropdowns with combined accounts
             populateZernioAccountSelect(zernioAccounts);
             populatePipelineFacebookAccounts(zernioAccounts);
             populateEditFacebookAccounts();
-            
-            zernioAccountsLoaded = true;
-            console.log('✅ Loaded Zernio accounts:', zernioAccounts.length);
             
             if (zernioStatusBadge) {
                 if (zernioAccounts.length > 0) {
@@ -854,15 +871,8 @@ async function _loadZernioAccountsWithRetry() {
             
             return true;
         } else {
-            console.warn('⚠️ No accounts found:', data.message || data);
+            console.warn('⚠️ No keys or accounts found:', data.message || data);
             
-            // If no accounts and we have keys, maybe the API key is invalid
-            if (zernioKeys && zernioKeys.length > 0) {
-                console.warn('⚠️ Keys exist but no accounts found. Checking keys...');
-                await loadZernioKeys();
-            }
-            
-            // ✅ Always populate with empty array
             zernioAccounts = [];
             populateZernioAccountSelect([]);
             populatePipelineFacebookAccounts([]);
@@ -1058,6 +1068,18 @@ async function forceRefreshAccounts() {
     
     return success;
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ==================== DEBUG ACCOUNTS ====================
 
