@@ -649,153 +649,229 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
 <!-- ============ MANUAL SCHEDULER SECTION (12-HOUR FORMAT) ============ -->
-<div id="manual-scheduler-container" style="display: none; transition: all 0.3s ease;">
-    <div id="manual-scheduler-section" class="manual-scheduler premium-card">
-        <div class="manual-scheduler-header">
-            <div class="manual-scheduler-title">
-                <span class="manual-scheduler-icon">📅</span>
-                <h3>Manual Post Scheduler</h3>
-                <span class="badge">12-Hour Format</span>
+<div id="manual-scheduler-section" class="manual-scheduler premium-card">
+    <div class="manual-scheduler-header">
+        <div class="manual-scheduler-title">
+            <span class="manual-scheduler-icon">📅</span>
+            <h3>Manual Post Scheduler</h3>
+            <span class="badge">12-Hour Format</span>
+        </div>
+        <div class="manual-scheduler-actions">
+            <button id="refresh-unposted-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+            <button id="schedule-selected-btn" class="btn btn-sm btn-primary">📅 Schedule Selected</button>
+            <button id="auto-schedule-all-btn" class="btn btn-sm btn-success">🎲 Auto-Schedule All</button>
+        </div>
+    </div>
+    
+    <div class="manual-scheduler-body">
+        <!-- Pipeline Selector -->
+        <div class="scheduler-pipeline-select">
+            <label for="scheduler-pipeline-select">Select Pipeline:</label>
+            <select id="scheduler-pipeline-select" class="input-field">
+                <option value="">Loading pipelines...</option>
+            </select>
+            <button id="load-unposted-btn" class="btn btn-sm btn-primary">📊 Load Reels</button>
+        </div>
+        
+        <!-- Stats -->
+        <div id="scheduler-stats" class="scheduler-stats" hidden>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-total-reels">0</span>
+                <span class="stat-label">Total Unposted</span>
             </div>
-            <div class="manual-scheduler-actions">
-                <button id="refresh-unposted-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
-                <button id="schedule-selected-btn" class="btn btn-sm btn-primary">📅 Schedule Selected</button>
-                <button id="auto-schedule-all-btn" class="btn btn-sm btn-success">🎲 Auto-Schedule All</button>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-scheduled-count">0</span>
+                <span class="stat-label">Scheduled</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-selected-count">0</span>
+                <span class="stat-label">Selected</span>
             </div>
         </div>
         
-        <div class="manual-scheduler-body">
-            <!-- Pipeline Selector -->
-            <div class="scheduler-pipeline-select">
-                <label for="scheduler-pipeline-select">Select Pipeline:</label>
-                <select id="scheduler-pipeline-select" class="input-field">
-                    <option value="">Loading pipelines...</option>
-                </select>
-                <button id="load-unposted-btn" class="btn btn-sm btn-primary">📊 Load Reels</button>
+        <!-- Reels List -->
+        <div id="scheduler-reels-list">
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">📭</div>
+                <strong>Select a pipeline and click "Load Reels"</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    Choose a pipeline above to see all unposted reels.
+                </p>
+            </div>
+        </div>
+        
+        <!-- Batch Actions with 12-Hour Time -->
+        <div id="scheduler-batch-actions" class="scheduler-batch-actions" hidden>
+            <div class="batch-time-input">
+                <label for="batch-start-date">Start Date:</label>
+                <input type="date" id="batch-start-date" class="input-field" />
             </div>
             
-            <!-- Stats -->
-            <div id="scheduler-stats" class="scheduler-stats" hidden>
-                <div class="stat-item">
-                    <span class="stat-value" id="scheduler-total-reels">0</span>
-                    <span class="stat-label">Total Unposted</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-value" id="scheduler-scheduled-count">0</span>
-                    <span class="stat-label">Scheduled</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-value" id="scheduler-selected-count">0</span>
-                    <span class="stat-label">Selected</span>
+            <div class="batch-time-input">
+                <label for="batch-start-time-12">Start Time (12-Hour):</label>
+                <div class="time-input-12">
+                    <select id="batch-start-hour" class="input-field time-select">
+                        <option value="12">12</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8" selected>8</option>
+                        <option value="9">9</option>
+                        <option value="10">10</option>
+                        <option value="11">11</option>
+                    </select>
+                    <span class="time-separator">:</span>
+                    <select id="batch-start-minute" class="input-field time-select">
+                        <option value="00">00</option>
+                        <option value="15">15</option>
+                        <option value="30" selected>30</option>
+                        <option value="45">45</option>
+                    </select>
+                    <select id="batch-start-ampm" class="input-field time-select">
+                        <option value="AM">AM</option>
+                        <option value="PM" selected>PM</option>
+                    </select>
                 </div>
             </div>
             
-            <!-- Reels List -->
-            <div id="scheduler-reels-list">
-                <div class="empty-state">
-                    <div style="font-size: 32px; margin-bottom: 12px;">📭</div>
-                    <strong>Select a pipeline and click "Load Reels"</strong>
-                    <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-                        Choose a pipeline above to see all unposted reels.
-                    </p>
+            <div class="batch-time-input">
+                <label for="batch-interval">Interval (minutes):</label>
+                <input type="number" id="batch-interval" class="input-field" value="60" min="5" max="1440" />
+            </div>
+            
+            <div class="batch-time-input">
+                <label for="batch-time-range">Time Range:</label>
+                <div class="time-range-inputs">
+                    <select id="batch-range-start" class="input-field time-select">
+                        <option value="6">6:00 AM</option>
+                        <option value="7">7:00 AM</option>
+                        <option value="8" selected>8:00 AM</option>
+                        <option value="9">9:00 AM</option>
+                        <option value="10">10:00 AM</option>
+                        <option value="11">11:00 AM</option>
+                        <option value="12">12:00 PM</option>
+                        <option value="13">1:00 PM</option>
+                        <option value="14">2:00 PM</option>
+                        <option value="15">3:00 PM</option>
+                        <option value="16">4:00 PM</option>
+                        <option value="17">5:00 PM</option>
+                        <option value="18">6:00 PM</option>
+                        <option value="19">7:00 PM</option>
+                        <option value="20">8:00 PM</option>
+                        <option value="21">9:00 PM</option>
+                        <option value="22">10:00 PM</option>
+                        <option value="23">11:00 PM</option>
+                    </select>
+                    <span class="time-range-to">to</span>
+                    <select id="batch-range-end" class="input-field time-select">
+                        <option value="6">6:00 AM</option>
+                        <option value="7">7:00 AM</option>
+                        <option value="8">8:00 AM</option>
+                        <option value="9">9:00 AM</option>
+                        <option value="10">10:00 AM</option>
+                        <option value="11">11:00 AM</option>
+                        <option value="12">12:00 PM</option>
+                        <option value="13">1:00 PM</option>
+                        <option value="14">2:00 PM</option>
+                        <option value="15">3:00 PM</option>
+                        <option value="16">4:00 PM</option>
+                        <option value="17">5:00 PM</option>
+                        <option value="18">6:00 PM</option>
+                        <option value="19">7:00 PM</option>
+                        <option value="20" selected>8:00 PM</option>
+                        <option value="21">9:00 PM</option>
+                        <option value="22">10:00 PM</option>
+                        <option value="23">11:00 PM</option>
+                    </select>
                 </div>
             </div>
             
-            <!-- Batch Actions with 12-Hour Time -->
-            <div id="scheduler-batch-actions" class="scheduler-batch-actions" hidden>
-                <div class="batch-time-input">
-                    <label for="batch-start-date">Start Date:</label>
-                    <input type="date" id="batch-start-date" class="input-field" />
-                </div>
-                <div class="batch-time-input">
-                    <label for="batch-start-time-12">Start Time (12-Hour):</label>
-                    <div class="time-input-12">
-                        <select id="batch-start-hour" class="input-field time-select">
-                            <option value="12">12</option>
-                            <option value="1">1</option>
-                            <option value="2">2</option>
-                            <option value="3">3</option>
-                            <option value="4">4</option>
-                            <option value="5">5</option>
-                            <option value="6">6</option>
-                            <option value="7">7</option>
-                            <option value="8" selected>8</option>
-                            <option value="9">9</option>
-                            <option value="10">10</option>
-                            <option value="11">11</option>
-                        </select>
-                        <span class="time-separator">:</span>
-                        <select id="batch-start-minute" class="input-field time-select">
-                            <option value="00">00</option>
-                            <option value="15">15</option>
-                            <option value="30" selected>30</option>
-                            <option value="45">45</option>
-                        </select>
-                        <select id="batch-start-ampm" class="input-field time-select">
-                            <option value="AM">AM</option>
-                            <option value="PM" selected>PM</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="batch-time-input">
-                    <label for="batch-interval">Interval (minutes):</label>
-                    <input type="number" id="batch-interval" class="input-field" value="60" min="5" max="1440" />
-                </div>
-                <div class="batch-time-input">
-                    <label for="batch-time-range">Time Range:</label>
-                    <div class="time-range-inputs">
-                        <select id="batch-range-start" class="input-field time-select">
-                            <option value="6">6:00 AM</option>
-                            <option value="7">7:00 AM</option>
-                            <option value="8" selected>8:00 AM</option>
-                            <option value="9">9:00 AM</option>
-                            <option value="10">10:00 AM</option>
-                            <option value="11">11:00 AM</option>
-                            <option value="12">12:00 PM</option>
-                            <option value="13">1:00 PM</option>
-                            <option value="14">2:00 PM</option>
-                            <option value="15">3:00 PM</option>
-                            <option value="16">4:00 PM</option>
-                            <option value="17">5:00 PM</option>
-                            <option value="18">6:00 PM</option>
-                            <option value="19">7:00 PM</option>
-                            <option value="20">8:00 PM</option>
-                            <option value="21">9:00 PM</option>
-                            <option value="22">10:00 PM</option>
-                            <option value="23">11:00 PM</option>
-                        </select>
-                        <span class="time-range-to">to</span>
-                        <select id="batch-range-end" class="input-field time-select">
-                            <option value="6">6:00 AM</option>
-                            <option value="7">7:00 AM</option>
-                            <option value="8">8:00 AM</option>
-                            <option value="9">9:00 AM</option>
-                            <option value="10">10:00 AM</option>
-                            <option value="11">11:00 AM</option>
-                            <option value="12">12:00 PM</option>
-                            <option value="13">1:00 PM</option>
-                            <option value="14">2:00 PM</option>
-                            <option value="15">3:00 PM</option>
-                            <option value="16">4:00 PM</option>
-                            <option value="17">5:00 PM</option>
-                            <option value="18">6:00 PM</option>
-                            <option value="19">7:00 PM</option>
-                            <option value="20" selected>8:00 PM</option>
-                            <option value="21">9:00 PM</option>
-                            <option value="22">10:00 PM</option>
-                            <option value="23">11:00 PM</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="batch-actions">
-                    <button id="schedule-sequential-btn" class="btn btn-primary">⏱️ Schedule Sequential</button>
-                    <button id="schedule-random-btn" class="btn btn-success">🎲 Schedule Random</button>
-                </div>
+            <div class="batch-actions">
+                <button id="schedule-sequential-btn" class="btn btn-primary">⏱️ Schedule Sequential</button>
+                <button id="schedule-random-btn" class="btn btn-success">🎲 Schedule Random</button>
             </div>
         </div>
     </div>
 </div>
+
+<!-- SINGLE SCHEDULE MODAL (12-HOUR) -->
+<div id="single-schedule-modal" class="modal-overlay" hidden>
+    <div class="modal-content premium-card">
+        <div class="modal-header">
+            <h3>📅 Schedule Post</h3>
+            <button class="modal-close single-schedule-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Reel URL</label>
+                <input type="text" id="single-schedule-url" class="input-field" readonly />
+            </div>
+            <div class="form-group">
+                <label>Caption</label>
+                <textarea id="single-schedule-caption" class="input-field" rows="2" placeholder="Enter caption..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Schedule Date</label>
+                <input type="date" id="single-schedule-date" class="input-field" />
+            </div>
+            <div class="form-group">
+                <label>Schedule Time (12-Hour)</label>
+                <div class="time-input-12">
+                    <select id="single-schedule-hour" class="input-field time-select">
+                        <option value="12">12</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8" selected>8</option>
+                        <option value="9">9</option>
+                        <option value="10">10</option>
+                        <option value="11">11</option>
+                    </select>
+                    <span class="time-separator">:</span>
+                    <select id="single-schedule-minute" class="input-field time-select">
+                        <option value="00">00</option>
+                        <option value="15">15</option>
+                        <option value="30" selected>30</option>
+                        <option value="45">45</option>
+                    </select>
+                    <select id="single-schedule-ampm" class="input-field time-select">
+                        <option value="AM">AM</option>
+                        <option value="PM" selected>PM</option>
+                    </select>
+                </div>
+            </div>
+            <button id="single-schedule-confirm" class="btn btn-primary btn-block">📅 Schedule</button>
+            <div id="single-schedule-status" class="status-message" hidden></div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
 
 
 
