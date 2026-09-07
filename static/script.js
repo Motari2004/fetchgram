@@ -804,7 +804,6 @@ function showZernioSuccess(message, details) {
 
 
 
-
 // ==================== LOAD ZERNIO ACCOUNTS ====================
 
 let zernioAccountsLoadAttempts = 0;
@@ -855,7 +854,6 @@ async function _loadZernioAccountsWithRetry() {
             // ✅ Populate ALL dropdowns with combined accounts
             populateZernioAccountSelect(zernioAccounts);
             populatePipelineFacebookAccounts(zernioAccounts);
-            populateEditFacebookAccounts();
             
             if (zernioStatusBadge) {
                 if (zernioAccounts.length > 0) {
@@ -876,7 +874,6 @@ async function _loadZernioAccountsWithRetry() {
             zernioAccounts = [];
             populateZernioAccountSelect([]);
             populatePipelineFacebookAccounts([]);
-            populateEditFacebookAccounts();
             zernioAccountsLoaded = true;
             
             if (zernioStatusBadge) {
@@ -902,7 +899,6 @@ async function _loadZernioAccountsWithRetry() {
         zernioAccounts = [];
         populateZernioAccountSelect([]);
         populatePipelineFacebookAccounts([]);
-        populateEditFacebookAccounts();
         zernioAccountsLoaded = true;
         
         if (zernioStatusBadge) {
@@ -1006,6 +1002,8 @@ function populatePipelineFacebookAccounts(accounts) {
     console.log(`✅ Populated pipeline dropdown with ${accounts.length} accounts`);
 }
 
+// ==================== EDIT PIPELINE - POPULATE ACCOUNTS ====================
+
 function populateEditFacebookAccounts(selectedId) {
     const select = document.getElementById('edit-pipeline-facebook-account');
     if (!select) return;
@@ -1019,6 +1017,7 @@ function populateEditFacebookAccounts(selectedId) {
     defaultOption.selected = true;
     select.appendChild(defaultOption);
     
+    // ✅ Use zernioAccounts (should have all 4 accounts now)
     if (!zernioAccounts || zernioAccounts.length === 0) {
         const option = document.createElement('option');
         option.value = '';
@@ -1028,15 +1027,33 @@ function populateEditFacebookAccounts(selectedId) {
         return;
     }
     
+    let foundSelected = false;
+    
     zernioAccounts.forEach(account => {
         const option = document.createElement('option');
         option.value = account.id;
         option.textContent = account.name || account.id;
+        
+        // ✅ Check if this account matches the pipeline's account
         if (account.id === selectedId) {
             option.selected = true;
+            foundSelected = true;
         }
         select.appendChild(option);
     });
+    
+    // ✅ If the selected account wasn't found, add it as a disabled option
+    if (selectedId && !foundSelected) {
+        const option = document.createElement('option');
+        option.value = selectedId;
+        option.textContent = `⚠️ ${selectedId} (not in current keys)`;
+        option.disabled = true;
+        option.selected = true;
+        select.appendChild(option);
+        console.warn(`⚠️ Account ${selectedId} not found in zernioAccounts`);
+    }
+    
+    console.log(`✅ Populated edit dropdown with ${zernioAccounts.length} accounts, selected: ${selectedId} (found: ${foundSelected})`);
 }
 
 // ==================== FORCE REFRESH ACCOUNTS ====================
@@ -1068,7 +1085,6 @@ async function forceRefreshAccounts() {
     
     return success;
 }
-
 
 
 
