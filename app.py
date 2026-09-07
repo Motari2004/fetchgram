@@ -8,6 +8,7 @@ import time
 import base64
 import random
 from datetime import datetime, timedelta
+from playwright.sync_api import sync_playwright 
 from flask import Flask, request, jsonify, send_file, render_template, after_this_request, session
 from flask_cors import CORS
 import yt_dlp
