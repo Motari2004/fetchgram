@@ -2930,26 +2930,41 @@ def api_download():
     url = data.get("url", "").strip()
     media_id = data.get("media_id", "").strip()
     action = data.get("action", "url_only")
+    
     if not url:
         return jsonify({"error": "Missing 'url' parameter"}), 400
     if not is_valid_instagram_url(url):
         return jsonify({"error": "Invalid Instagram URL"}), 400
+    
     try:
         response = {"status": "success", "url": url, "media_id": media_id, "action": action, "timestamp": datetime.utcnow().isoformat()}
+        
+        # ========== FIRST ATTEMPT: Try with existing cookies ==========
         with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
+        
         entries = info.get("entries") if "entries" in info else [info]
         entries = [e for e in entries if e]
         if not entries:
             return jsonify({"error": "No videos found"}), 422
+        
         target = entries[0]
         if media_id:
             target = next((e for e in entries if e.get("id") == media_id), None) or target
-        video_info = {"id": target.get("id"), "title": target.get("title", "Instagram video"), "duration": target.get("duration"), "uploader": target.get("uploader") or target.get("uploader_id"), "thumbnail": target.get("thumbnail"), "ext": target.get("ext", "mp4")}
+        
+        video_info = {
+            "id": target.get("id"),
+            "title": target.get("title", "Instagram video"),
+            "duration": target.get("duration"),
+            "uploader": target.get("uploader") or target.get("uploader_id"),
+            "thumbnail": target.get("thumbnail"),
+            "ext": target.get("ext", "mp4")
+        }
         response["video_info"] = video_info
         session['current_video_url'] = get_direct_video_url(url, media_id)
         session['current_video_title'] = video_info.get('title')
         session['current_video_thumbnail'] = video_info.get('thumbnail')
+        
         if action == "url_only":
             direct_url = get_direct_video_url(url, media_id)
             if direct_url:
@@ -2968,11 +2983,100 @@ def api_download():
         else:
             return jsonify({"error": f"Unknown action: {action}"}), 400
         return jsonify(response)
+        
+    except yt_dlp.utils.DownloadError as e:
+        error_msg = str(e)
+        app.logger.warning(f"⚠️ Download error: {error_msg[:200]}")
+        
+        # ========== CHECK IF IT'S A PRIVATE/LOGIN ERROR ==========
+        if "private" in error_msg.lower() or "login" in error_msg.lower() or "cookie" in error_msg.lower():
+            app.logger.info("🔄 Private/login error detected. Attempting to extract fresh cookies...")
+            
+            # ========== EXTRACT FRESH COOKIES ==========
+            extraction_success = extract_cookies_from_render_service()
+            
+            if extraction_success:
+                app.logger.info("✅ Fresh cookies extracted. Retrying download...")
+                
+                try:
+                    # ========== RETRY WITH FRESH COOKIES ==========
+                    with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                    
+                    entries = info.get("entries") if "entries" in info else [info]
+                    entries = [e for e in entries if e]
+                    if not entries:
+                        return jsonify({"error": "No videos found after retry"}), 422
+                    
+                    target = entries[0]
+                    if media_id:
+                        target = next((e for e in entries if e.get("id") == media_id), None) or target
+                    
+                    video_info = {
+                        "id": target.get("id"),
+                        "title": target.get("title", "Instagram video"),
+                        "duration": target.get("duration"),
+                        "uploader": target.get("uploader") or target.get("uploader_id"),
+                        "thumbnail": target.get("thumbnail"),
+                        "ext": target.get("ext", "mp4")
+                    }
+                    response["video_info"] = video_info
+                    session['current_video_url'] = get_direct_video_url(url, media_id)
+                    session['current_video_title'] = video_info.get('title')
+                    session['current_video_thumbnail'] = video_info.get('thumbnail')
+                    
+                    if action == "url_only":
+                        direct_url = get_direct_video_url(url, media_id)
+                        if direct_url:
+                            response["download_url"] = direct_url
+                            response["cookies_refreshed"] = True
+                            response["message"] = "Cookies were automatically refreshed"
+                        else:
+                            response["download_url"] = f"/api/download?url={url}&id={media_id}"
+                            response["warning"] = "Direct URL not available, using streaming fallback"
+                    elif action == "download":
+                        filepath, job_dir, target = download_video_file(url, media_id)
+                        download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
+                        @after_this_request
+                        def cleanup(response_obj):
+                            shutil.rmtree(job_dir, ignore_errors=True)
+                            return response_obj
+                        return send_file(filepath, as_attachment=True, download_name=download_name)
+                    else:
+                        return jsonify({"error": f"Unknown action: {action}"}), 400
+                    
+                    app.logger.info("✅ Retry successful with fresh cookies!")
+                    return jsonify(response)
+                    
+                except yt_dlp.utils.DownloadError as retry_error:
+                    retry_msg = str(retry_error)
+                    app.logger.error(f"❌ Retry still failed: {retry_msg[:200]}")
+                    # Return the error with a flag indicating cookies were attempted
+                    return jsonify({
+                        "error": clean_error(retry_msg),
+                        "cookies_refreshed": True,
+                        "cookies_attempted": True,
+                        "requires_cookies": True
+                    }), 403
+                except Exception as retry_err:
+                    app.logger.error(f"❌ Retry exception: {retry_err}")
+                    return jsonify({
+                        "error": clean_error(str(retry_err)),
+                        "cookies_refreshed": True,
+                        "cookies_attempted": True
+                    }), 500
+            else:
+                app.logger.warning("⚠️ Failed to extract fresh cookies from Render service")
+                return jsonify({
+                    "error": clean_error(error_msg),
+                    "requires_cookies": True,
+                    "cookies_refreshed": False
+                }), 403
+        else:
+            return jsonify({"error": clean_error(error_msg)}), 500
     except Exception as e:
+        app.logger.error(f"❌ Download error: {e}")
         return jsonify({"error": clean_error(str(e))}), 500
-    
-    
-    
     
     
     

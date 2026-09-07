@@ -2033,6 +2033,8 @@ directUrlDisplay.addEventListener('click', function() {
   this.select();
 });
 
+// ==================== FORM SUBMISSION WITH AUTO-COOKIE EXTRACTION ====================
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   clearError();
@@ -2048,6 +2050,7 @@ form.addEventListener("submit", async (e) => {
   if (!url) return;
 
   setLoading(true);
+  
   try {
     const res = await fetch("/api/commands/download", {
       method: "POST",
@@ -2057,23 +2060,77 @@ form.addEventListener("submit", async (e) => {
     });
     const data = await res.json();
 
+    // ========== CHECK IF IT'S A PRIVATE/LOGIN ERROR ==========
     if (!res.ok) {
-      showError(data.error || "Something went wrong. Try again.");
-      return;
+      // Check if cookies were refreshed automatically
+      if (data.cookies_refreshed) {
+        showError(`⚠️ ${data.error || 'Still can\'t download after refreshing cookies. Please try again or upload fresh cookies.'}`);
+        // Show extract button in error
+        const errorContainer = document.getElementById('error-msg');
+        if (errorContainer) {
+          errorContainer.innerHTML = `
+            <div style="padding: 12px; background: #f8d7da; border-radius: 8px; border-left: 3px solid #dc3545;">
+              <strong>⚠️ ${data.error || 'Still can\'t download after refreshing cookies.'}</strong>
+              <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
+                <button id="extract-manual-btn" class="btn btn-primary btn-sm">
+                  🍪 Extract Cookies Manually
+                </button>
+                <button id="retry-btn" class="btn btn-success btn-sm">
+                  🔄 Retry
+                </button>
+              </div>
+            </div>
+          `;
+          errorContainer.hidden = false;
+          
+          document.getElementById('extract-manual-btn')?.addEventListener('click', async function() {
+            this.disabled = true;
+            this.textContent = '⏳ Extracting...';
+            await extractCookiesFromBrowserless();
+            this.disabled = false;
+            this.textContent = '🍪 Extract Cookies Manually';
+            // Retry after extraction
+            document.getElementById('retry-btn')?.click();
+          });
+          
+          document.getElementById('retry-btn')?.addEventListener('click', function() {
+            form.dispatchEvent(new Event('submit'));
+          });
+        }
+        setLoading(false);
+        return;
+      } else if (data.requires_cookies) {
+        // Show private error with extract button
+        showError(data.error || "This post is private or requires login.");
+        handlePrivateError(data.error || "This post is private or requires login.");
+        setLoading(false);
+        return;
+      } else {
+        showError(data.error || "Something went wrong. Try again.");
+        setLoading(false);
+        return;
+      }
     }
 
+    // ========== SUCCESS ==========
     if (data.download_url) {
       const item = data.video_info || { title: "Instagram video" };
       renderResults([item], data.url);
       setTimeout(() => {
         showDirectUrl(data.download_url, item);
       }, 100);
+      
+      // Show message if cookies were refreshed
+      if (data.cookies_refreshed && data.message) {
+        showCookieStatus(`✅ ${data.message}`, 'success');
+      }
     } else if (data.items) {
       renderResults(data.items, data.source_url);
     } else {
       showError("No video found at that link.");
     }
   } catch (err) {
+    // Fallback to /api/fetch
     try {
       const res = await fetch("/api/fetch", {
         method: "POST",
