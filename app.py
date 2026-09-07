@@ -4761,13 +4761,7 @@ def validate_zernio_key():
 
 
 
-
-
 # ============== MANUAL SCHEDULER ROUTES ==============
-# Add these to your app.py
-
-# ============== MANUAL SCHEDULER ROUTES ==============
-# Add these to your app.py
 
 @app.route('/api/scheduler/manual', methods=['POST'])
 def manual_schedule():
@@ -4928,11 +4922,24 @@ def get_unposted_reels_for_scheduler(pipeline_id):
             is_scheduled = reel_url in scheduled_urls
             scheduled_info = scheduled_urls.get(reel_url) if is_scheduled else None
             
+            # Format scheduled time in 12-hour format for display
+            scheduled_display = None
+            if scheduled_info and scheduled_info['scheduled_time']:
+                dt = scheduled_info['scheduled_time']
+                if isinstance(dt, str):
+                    dt = datetime.fromisoformat(dt.replace('Z', '+00:00'))
+                hour12 = dt.hour % 12
+                if hour12 == 0:
+                    hour12 = 12
+                ampm = "AM" if dt.hour < 12 else "PM"
+                scheduled_display = f"{hour12}:{dt.minute:02d} {ampm}"
+            
             result_reels.append({
                 "url": reel_url,
                 "caption": caption,
                 "is_scheduled": is_scheduled,
                 "scheduled_time": scheduled_info['scheduled_time'].isoformat() if scheduled_info else None,
+                "scheduled_time_display": scheduled_display,
                 "scheduled_caption": scheduled_info.get('caption', '') if scheduled_info else None
             })
         
@@ -4987,101 +4994,10 @@ def generate_random_times():
     
     return jsonify({
         "status": "success",
-        "times": [t.iso() for t in formatted_times],
+        "times": [t["iso"] for t in formatted_times],
         "display_times": [t["display"] for t in formatted_times],
         "count": len(times)
     })
-
-
-@app.route('/api/scheduler/unposted-reels/<pipeline_id>', methods=['GET'])
-def get_unposted_reels_for_scheduler(pipeline_id):
-    """Get all unposted reels for a pipeline (for manual scheduling)."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Get pipeline
-        cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
-        pipeline = cur.fetchone()
-        if not pipeline:
-            return jsonify({"error": "Pipeline not found"}), 404
-        
-        # Get unposted reels
-        unposted = get_unposted_reels(
-            pipeline['profile_username'],
-            pipeline_id,
-            limit=200  # Get all
-        )
-        
-        # Get already scheduled pending posts
-        cur.execute("""
-            SELECT reel_url, scheduled_time, caption 
-            FROM scheduled_posts 
-            WHERE pipeline_id = %s AND status = 'pending'
-            ORDER BY scheduled_time ASC
-        """, (pipeline_id,))
-        scheduled = cur.fetchall()
-        scheduled_urls = {s['reel_url']: s for s in scheduled}
-        
-        # Enrich unposted with scheduled info
-        result_reels = []
-        for reel in unposted:
-            reel_url = reel.get('url') if isinstance(reel, dict) else reel
-            caption = reel.get('caption', '') if isinstance(reel, dict) else ''
-            
-            is_scheduled = reel_url in scheduled_urls
-            scheduled_info = scheduled_urls.get(reel_url) if is_scheduled else None
-            
-            result_reels.append({
-                "url": reel_url,
-                "caption": caption,
-                "is_scheduled": is_scheduled,
-                "scheduled_time": scheduled_info['scheduled_time'].isoformat() if scheduled_info else None,
-                "scheduled_caption": scheduled_info.get('caption', '') if scheduled_info else None
-            })
-        
-        return jsonify({
-            "status": "success",
-            "pipeline": {
-                "id": pipeline['id'],
-                "name": pipeline['name'],
-                "profile_username": pipeline['profile_username']
-            },
-            "reels": result_reels,
-            "total": len(result_reels),
-            "scheduled_count": len(scheduled)
-        })
-        
-    except Exception as e:
-        app.logger.error(f"Error getting unposted reels: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.route('/api/scheduler/generate-random-times', methods=['POST'])
-def generate_random_times():
-    """Generate random scheduled times for a given number of posts."""
-    data = request.get_json(silent=True) or {}
-    num_posts = data.get('num_posts', 1)
-    start_hour = data.get('start_hour', 0)
-    end_hour = data.get('end_hour', 23)
-    
-    if num_posts < 1 or num_posts > 100:
-        return jsonify({"error": "num_posts must be between 1 and 100"}), 400
-    
-    times = generate_random_post_times(num_posts, start_hour, end_hour)
-    
-    return jsonify({
-        "status": "success",
-        "times": [t.isoformat() for t in times],
-        "count": len(times)
-    })
-
 
 
 
