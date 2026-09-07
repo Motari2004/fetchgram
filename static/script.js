@@ -4147,8 +4147,7 @@ window.checkInstagramStatus = async function() {
 
 
 
-
-// ==================== MANUAL SCHEDULER ====================
+// ==================== MANUAL SCHEDULER (12-HOUR FORMAT) ====================
 
 let unpostedReels = [];
 let selectedReels = new Set();
@@ -4158,6 +4157,17 @@ let schedulerPipelines = [];
 async function initManualScheduler() {
     await loadSchedulerPipelines();
     setupSchedulerEventListeners();
+    setDefaultDates();
+}
+
+// Set default dates for the scheduler
+function setDefaultDates() {
+    const now = new Date();
+    
+    // Set default date to tomorrow
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    document.getElementById('batch-start-date').value = tomorrow.toISOString().split('T')[0];
 }
 
 // Load pipelines for the scheduler dropdown
@@ -4232,11 +4242,13 @@ async function loadUnpostedReels(pipelineId) {
             
             renderSchedulerReels(unpostedReels);
             
-            // Set default batch time to now + 1 hour
-            const now = new Date();
-            now.setHours(now.getHours() + 1);
-            const defaultTime = now.toISOString().slice(0, 16);
-            document.getElementById('batch-start-time').value = defaultTime;
+            // Set default date if not set
+            if (!document.getElementById('batch-start-date').value) {
+                const now = new Date();
+                const tomorrow = new Date(now);
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                document.getElementById('batch-start-date').value = tomorrow.toISOString().split('T')[0];
+            }
         } else {
             container.innerHTML = `
                 <div class="empty-state">
@@ -4298,6 +4310,17 @@ function renderSchedulerReels(reels) {
         const caption = reel.caption || '';
         const url = reel.url || '';
         
+        // Format scheduled time in 12-hour format
+        let scheduledDisplay = '';
+        if (scheduledTime) {
+            const date = new Date(scheduledTime);
+            let hours = date.getHours();
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12 || 12;
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            scheduledDisplay = `${hours}:${minutes} ${ampm}`;
+        }
+        
         html += `
             <div class="scheduler-reel-item ${isScheduled ? 'scheduled' : ''}" data-index="${index}">
                 <div class="scheduler-reel-select">
@@ -4310,7 +4333,7 @@ function renderSchedulerReels(reels) {
                     ${caption ? caption.substring(0, 40) + (caption.length > 40 ? '...' : '') : '<span style="color: var(--text-muted);">No caption</span>'}
                 </div>
                 <div class="scheduler-reel-status">
-                    ${isScheduled ? `<span class="status-badge pending">⏳ Scheduled ${scheduledTime ? new Date(scheduledTime).toLocaleString() : ''}</span>` : '<span class="status-badge available">📥 Available</span>'}
+                    ${isScheduled ? `<span class="status-badge pending">⏳ ${scheduledDisplay}</span>` : '<span class="status-badge available">📥 Available</span>'}
                 </div>
                 <div class="scheduler-reel-actions">
                     ${!isScheduled ? `
@@ -4358,7 +4381,32 @@ function updateSelectedCount() {
     document.getElementById('scheduler-selected-count').textContent = checkboxes.length;
 }
 
-// Open modal for scheduling a single reel
+// ==================== 12-HOUR TIME HELPERS ====================
+
+function parse12HourTime(hour, minute, ampm) {
+    let hours = parseInt(hour);
+    if (ampm === 'PM' && hours !== 12) hours += 12;
+    if (ampm === 'AM' && hours === 12) hours = 0;
+    return { hours, minutes: parseInt(minute) };
+}
+
+function format12HourTime(hours, minutes) {
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const h12 = hours % 12 || 12;
+    const m = String(minutes).padStart(2, '0');
+    return `${h12}:${m} ${ampm}`;
+}
+
+function get12HourOptions() {
+    return {
+        hours: [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        minutes: ['00', '15', '30', '45'],
+        ampm: ['AM', 'PM']
+    };
+}
+
+// ==================== SINGLE SCHEDULE MODAL (12-HOUR) ====================
+
 function openSingleScheduleModal(url) {
     const reel = unpostedReels.find(r => r.url === url);
     if (!reel) return;
@@ -4385,8 +4433,29 @@ function openSingleScheduleModal(url) {
                         <textarea id="single-schedule-caption" class="input-field" rows="2" placeholder="Enter caption..."></textarea>
                     </div>
                     <div class="form-group">
-                        <label>Scheduled Time</label>
-                        <input type="datetime-local" id="single-schedule-time" class="input-field" />
+                        <label>Schedule Date</label>
+                        <input type="date" id="single-schedule-date" class="input-field" />
+                    </div>
+                    <div class="form-group">
+                        <label>Schedule Time (12-Hour)</label>
+                        <div class="time-input-12">
+                            <select id="single-schedule-hour" class="input-field time-select">
+                                ${[12,1,2,3,4,5,6,7,8,9,10,11].map(h => 
+                                    `<option value="${h}" ${h === 8 ? 'selected' : ''}>${h}</option>`
+                                ).join('')}
+                            </select>
+                            <span class="time-separator">:</span>
+                            <select id="single-schedule-minute" class="input-field time-select">
+                                <option value="00">00</option>
+                                <option value="15">15</option>
+                                <option value="30" selected>30</option>
+                                <option value="45">45</option>
+                            </select>
+                            <select id="single-schedule-ampm" class="input-field time-select">
+                                <option value="AM">AM</option>
+                                <option value="PM" selected>PM</option>
+                            </select>
+                        </div>
                     </div>
                     <button id="single-schedule-confirm" class="btn btn-primary btn-block">📅 Schedule</button>
                     <div id="single-schedule-status" class="status-message" hidden></div>
@@ -4405,22 +4474,41 @@ function openSingleScheduleModal(url) {
     document.getElementById('single-schedule-url').value = url;
     document.getElementById('single-schedule-caption').value = reel.caption || '';
     
-    // Set default time to now + 1 hour
+    // Set default date to tomorrow
     const now = new Date();
-    now.setHours(now.getHours() + 1);
-    document.getElementById('single-schedule-time').value = now.toISOString().slice(0, 16);
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    document.getElementById('single-schedule-date').value = tomorrow.toISOString().split('T')[0];
     
     document.getElementById('single-schedule-status').style.display = 'none';
     modal.hidden = false;
     
     // Confirm button
     document.getElementById('single-schedule-confirm').onclick = async function() {
-        const scheduledTime = document.getElementById('single-schedule-time').value;
+        const date = document.getElementById('single-schedule-date').value;
+        const hour = document.getElementById('single-schedule-hour').value;
+        const minute = document.getElementById('single-schedule-minute').value;
+        const ampm = document.getElementById('single-schedule-ampm').value;
         const caption = document.getElementById('single-schedule-caption').value.trim();
         const status = document.getElementById('single-schedule-status');
         
-        if (!scheduledTime) {
-            status.textContent = '❌ Please select a time';
+        if (!date) {
+            status.textContent = '❌ Please select a date';
+            status.className = 'status-message error';
+            status.style.display = 'block';
+            return;
+        }
+        
+        // Parse 12-hour time
+        const { hours, minutes } = parse12HourTime(hour, minute, ampm);
+        
+        // Create datetime
+        const scheduledDate = new Date(date);
+        scheduledDate.setHours(hours, minutes, 0, 0);
+        
+        // Check if time is in the past
+        if (scheduledDate < new Date()) {
+            status.textContent = '⚠️ This time is in the past. Please select a future time.';
             status.className = 'status-message error';
             status.style.display = 'block';
             return;
@@ -4441,7 +4529,7 @@ function openSingleScheduleModal(url) {
                     pipeline_id: pipelineId,
                     schedules: [{
                         reel_url: url,
-                        scheduled_time: scheduledTime,
+                        scheduled_time: scheduledDate.toISOString(),
                         caption: caption
                     }]
                 })
@@ -4450,7 +4538,8 @@ function openSingleScheduleModal(url) {
             const data = await response.json();
             
             if (response.ok && data.status === 'success') {
-                status.textContent = '✅ Post scheduled successfully!';
+                const displayTime = format12HourTime(hours, minutes);
+                status.textContent = `✅ Post scheduled for ${date} at ${displayTime}!`;
                 status.className = 'status-message success';
                 status.style.display = 'block';
                 
@@ -4481,7 +4570,6 @@ async function unscheduleSingleReel(url) {
     const pipelineId = document.getElementById('scheduler-pipeline-select').value;
     
     try {
-        // Find the scheduled post ID
         const response = await fetch(`/api/scheduled-posts?pipeline_id=${pipelineId}&status=pending`, {
             credentials: 'same-origin'
         });
@@ -4511,10 +4599,15 @@ async function unscheduleSingleReel(url) {
     }
 }
 
+// ==================== BATCH SCHEDULING (12-HOUR) ====================
+
 // Schedule selected reels sequentially
 document.getElementById('schedule-sequential-btn')?.addEventListener('click', async function() {
     const pipelineId = document.getElementById('scheduler-pipeline-select').value;
-    const startTime = document.getElementById('batch-start-time').value;
+    const date = document.getElementById('batch-start-date').value;
+    const hour = document.getElementById('batch-start-hour').value;
+    const minute = document.getElementById('batch-start-minute').value;
+    const ampm = document.getElementById('batch-start-ampm').value;
     const intervalMinutes = parseInt(document.getElementById('batch-interval').value) || 60;
     
     if (!pipelineId) {
@@ -4522,10 +4615,13 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
         return;
     }
     
-    if (!startTime) {
-        showToast('❌ Please select a start time', 'error');
+    if (!date) {
+        showToast('❌ Please select a date', 'error');
         return;
     }
+    
+    // Parse 12-hour time
+    const { hours, minutes } = parse12HourTime(hour, minute, ampm);
     
     // Get selected reels
     const checkboxes = document.querySelectorAll('.reel-select-checkbox:checked:not(:disabled)');
@@ -4534,7 +4630,17 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
         return;
     }
     
-    if (!confirm(`Schedule ${checkboxes.length} reels sequentially starting at ${new Date(startTime).toLocaleString()}?`)) {
+    const startTime = new Date(date);
+    startTime.setHours(hours, minutes, 0, 0);
+    
+    // Check if time is in the past
+    if (startTime < new Date()) {
+        showToast('⚠️ Start time is in the past. Please select a future time.', 'error');
+        return;
+    }
+    
+    const displayTime = format12HourTime(hours, minutes);
+    if (!confirm(`Schedule ${checkboxes.length} reels sequentially starting at ${date} ${displayTime} (${intervalMinutes} min intervals)?`)) {
         return;
     }
     
@@ -4573,7 +4679,7 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
         const data = await response.json();
         
         if (response.ok && data.status === 'success') {
-            showToast(`✅ Scheduled ${data.scheduled} posts`, 'success');
+            showToast(`✅ Scheduled ${data.scheduled} posts sequentially`, 'success');
             loadUnpostedReels(pipelineId);
         } else {
             showToast(`❌ ${data.error || 'Failed to schedule'}`, 'error');
@@ -4586,18 +4692,20 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
     }
 });
 
-// Schedule selected reels randomly
+// Schedule selected reels randomly within a time range (12-hour)
 document.getElementById('schedule-random-btn')?.addEventListener('click', async function() {
     const pipelineId = document.getElementById('scheduler-pipeline-select').value;
-    const startTime = document.getElementById('batch-start-time').value;
+    const date = document.getElementById('batch-start-date').value;
+    const rangeStart = parseInt(document.getElementById('batch-range-start').value);
+    const rangeEnd = parseInt(document.getElementById('batch-range-end').value);
     
     if (!pipelineId) {
         showToast('❌ Please select a pipeline', 'error');
         return;
     }
     
-    if (!startTime) {
-        showToast('❌ Please select a start time', 'error');
+    if (!date) {
+        showToast('❌ Please select a date', 'error');
         return;
     }
     
@@ -4608,7 +4716,15 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
         return;
     }
     
-    if (!confirm(`Randomly schedule ${checkboxes.length} reels starting from ${new Date(startTime).toLocaleString()}?`)) {
+    if (rangeStart >= rangeEnd) {
+        showToast('❌ Start time must be before end time', 'error');
+        return;
+    }
+    
+    const startDisplay = format12HourTime(rangeStart, 0);
+    const endDisplay = format12HourTime(rangeEnd, 0);
+    
+    if (!confirm(`Randomly schedule ${checkboxes.length} reels between ${startDisplay} and ${endDisplay} on ${date}?`)) {
         return;
     }
     
@@ -4616,26 +4732,26 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
     this.textContent = '⏳ Generating...';
     
     try {
-        // Generate random times
+        // Generate random times using the backend
         const timeResponse = await fetch('/api/scheduler/generate-random-times', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
             body: JSON.stringify({
                 num_posts: checkboxes.length,
-                start_hour: 8,
-                end_hour: 22
+                start_hour: rangeStart,
+                end_hour: rangeEnd
             })
         });
         const timeData = await timeResponse.json();
         
-        if (!timeData.status === 'success') {
+        if (timeData.status !== 'success') {
             showToast('❌ Failed to generate random times', 'error');
             return;
         }
         
-        // Use the start date as base
-        const baseDate = new Date(startTime);
+        // Use the selected date as base
+        const baseDate = new Date(date);
         baseDate.setHours(0, 0, 0, 0);
         
         const schedules = [];
@@ -4693,12 +4809,21 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
     }
 });
 
-// Auto-schedule all reels
+// ==================== AUTO-SCHEDULE ALL (12-HOUR) ====================
+
 document.getElementById('auto-schedule-all-btn')?.addEventListener('click', async function() {
     const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+    const rangeStart = parseInt(document.getElementById('batch-range-start').value) || 8;
+    const rangeEnd = parseInt(document.getElementById('batch-range-end').value) || 22;
+    const date = document.getElementById('batch-start-date').value;
     
     if (!pipelineId) {
         showToast('❌ Please select a pipeline', 'error');
+        return;
+    }
+    
+    if (!date) {
+        showToast('❌ Please select a date', 'error');
         return;
     }
     
@@ -4708,7 +4833,10 @@ document.getElementById('auto-schedule-all-btn')?.addEventListener('click', asyn
         return;
     }
     
-    if (!confirm(`Auto-schedule ${availableReels.length} reels at random times throughout the day?`)) {
+    const startDisplay = format12HourTime(rangeStart, 0);
+    const endDisplay = format12HourTime(rangeEnd, 0);
+    
+    if (!confirm(`Auto-schedule ${availableReels.length} reels between ${startDisplay} and ${endDisplay} on ${date}?`)) {
         return;
     }
     
@@ -4723,17 +4851,15 @@ document.getElementById('auto-schedule-all-btn')?.addEventListener('click', asyn
             credentials: 'same-origin',
             body: JSON.stringify({
                 num_posts: availableReels.length,
-                start_hour: 8,
-                end_hour: 22
+                start_hour: rangeStart,
+                end_hour: rangeEnd
             })
         });
         const timeData = await timeResponse.json();
         
         const schedules = [];
-        const baseDate = new Date();
+        const baseDate = new Date(date);
         baseDate.setHours(0, 0, 0, 0);
-        // Start from tomorrow
-        baseDate.setDate(baseDate.getDate() + 1);
         
         availableReels.forEach((reel, index) => {
             const timeStr = timeData.times[index];
@@ -4793,6 +4919,25 @@ document.getElementById('refresh-unposted-btn')?.addEventListener('click', funct
         loadUnpostedReels(pipelineId);
     } else {
         loadSchedulerPipelines();
+    }
+});
+
+// Initialize manual scheduler
+document.addEventListener('DOMContentLoaded', function() {
+    initManualScheduler();
+});
+
+// Toggle manual scheduler visibility
+document.getElementById('toggle-manual-scheduler-btn')?.addEventListener('click', function() {
+    const container = document.getElementById('manual-scheduler-container');
+    if (container) {
+        const isHidden = container.style.display === 'none' || container.style.display === '';
+        container.style.display = isHidden ? 'block' : 'none';
+        this.textContent = isHidden ? '🎯 Hide Scheduler' : '🎯 Manual Scheduler';
+        
+        if (isHidden) {
+            loadSchedulerPipelines();
+        }
     }
 });
 
