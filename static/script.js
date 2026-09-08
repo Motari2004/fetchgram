@@ -3145,25 +3145,6 @@ function renderScheduledPosts(data) {
         const statusClass = post.status === 'pending' ? 'pending' : 
                            post.status === 'posted' ? 'posted' : 'failed';
         
-        // ✅ Get pipeline key info
-        let keyInfo = '';
-        let keyColor = 'var(--text-muted)';
-        if (post.pipeline_id) {
-            // Try to find pipeline in schedulerPipelines
-            const pipeline = schedulerPipelines?.find(p => p.id === post.pipeline_id);
-            if (pipeline) {
-                if (pipeline.zernio_key_id) {
-                    // Try to find key name from zernioKeys
-                    const key = zernioKeys?.find(k => k.id === pipeline.zernio_key_id);
-                    keyInfo = key ? `🔑 ${key.name}` : '🔑 Has key';
-                    keyColor = 'var(--success)';
-                } else {
-                    keyInfo = '⚠️ No key';
-                    keyColor = 'var(--error)';
-                }
-            }
-        }
-        
         html += `
             <div class="scheduled-post-item status-${statusClass}">
                 <div class="scheduled-post-info">
@@ -3175,8 +3156,6 @@ function renderScheduledPosts(data) {
                     </span>
                     ${post.caption ? `<span class="post-caption">📝 ${escapeHtml(post.caption.substring(0, 80))}${post.caption.length > 80 ? '...' : ''}</span>` : ''}
                     ${post.pipeline_name ? `<span class="post-caption" style="color: var(--accent);">🏗️ ${escapeHtml(post.pipeline_name)}</span>` : ''}
-                    ${keyInfo ? `<span class="post-caption" style="color: ${keyColor};">${keyInfo}</span>` : ''}
-                    ${post.error_message ? `<span class="post-caption" style="color: var(--error);">❌ ${escapeHtml(post.error_message)}</span>` : ''}
                 </div>
                 <div class="scheduled-post-status">
                     <span class="status-badge ${statusClass}">
@@ -3185,7 +3164,6 @@ function renderScheduledPosts(data) {
                     </span>
                     ${post.status === 'pending' ? `
                         <div class="scheduled-post-actions">
-                            <button class="btn btn-sm btn-info edit-scheduled-btn" data-id="${post.id}" title="Edit Time">✏️</button>
                             <button class="btn btn-sm btn-danger delete-scheduled-btn" data-id="${post.id}" title="Delete">🗑️</button>
                         </div>
                     ` : ''}
@@ -3207,183 +3185,6 @@ function renderScheduledPosts(data) {
             }
         });
     });
-    
-    // Add event listeners for edit buttons
-    document.querySelectorAll('.edit-scheduled-btn').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const postId = this.dataset.id;
-            openEditScheduledModal(postId);
-        });
-    });
-}
-
-// ==================== EDIT SCHEDULED POST MODAL ====================
-
-function openEditScheduledModal(postId) {
-    // Find the post in scheduledPosts
-    const post = scheduledPosts.find(p => p.id === postId);
-    if (!post) {
-        showToast('❌ Post not found', 'error');
-        return;
-    }
-    
-    // Create modal if it doesn't exist
-    let modal = document.getElementById('edit-scheduled-modal');
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'edit-scheduled-modal';
-        modal.className = 'modal-overlay';
-        modal.innerHTML = `
-            <div class="modal-content premium-card">
-                <div class="modal-header">
-                    <h3>✏️ Edit Scheduled Post</h3>
-                    <button class="modal-close edit-scheduled-close">✕</button>
-                </div>
-                <div class="modal-body">
-                    <div class="form-group">
-                        <label>Reel URL</label>
-                        <input type="text" id="edit-scheduled-url" class="input-field" readonly />
-                    </div>
-                    <div class="form-group">
-                        <label>Pipeline</label>
-                        <input type="text" id="edit-scheduled-pipeline" class="input-field" readonly />
-                    </div>
-                    <div class="form-group">
-                        <label>Current Status</label>
-                        <span id="edit-scheduled-status" class="status-badge"></span>
-                    </div>
-                    <div class="form-group">
-                        <label>New Scheduled Time</label>
-                        <input type="datetime-local" id="edit-scheduled-time" class="input-field" />
-                    </div>
-                    <button id="edit-scheduled-confirm" class="btn btn-primary btn-block">💾 Update Schedule</button>
-                    <div id="edit-scheduled-status-msg" class="status-message" hidden></div>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-        
-        modal.querySelector('.edit-scheduled-close').addEventListener('click', () => modal.hidden = true);
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) modal.hidden = true;
-        });
-    }
-    
-    // Populate modal
-    document.getElementById('edit-scheduled-url').value = post.reel_url || '';
-    document.getElementById('edit-scheduled-pipeline').value = post.pipeline_name || 'Unknown';
-    
-    const statusEl = document.getElementById('edit-scheduled-status');
-    statusEl.textContent = post.status || 'pending';
-    statusEl.className = `status-badge ${post.status || 'pending'}`;
-    
-    // Set current time + 1 hour as default
-    const now = new Date();
-    now.setHours(now.getHours() + 1);
-    document.getElementById('edit-scheduled-time').value = now.toISOString().slice(0, 16);
-    
-    const statusMsg = document.getElementById('edit-scheduled-status-msg');
-    statusMsg.style.display = 'none';
-    modal.hidden = false;
-    
-    // Confirm button
-    document.getElementById('edit-scheduled-confirm').onclick = async function() {
-        const newTime = document.getElementById('edit-scheduled-time').value;
-        
-        if (!newTime) {
-            statusMsg.textContent = '❌ Please select a new time';
-            statusMsg.className = 'status-message error';
-            statusMsg.style.display = 'block';
-            return;
-        }
-        
-        // Check if time is in the past
-        const selectedTime = new Date(newTime);
-        if (selectedTime < new Date()) {
-            statusMsg.textContent = '⚠️ Selected time is in the past. Please choose a future time.';
-            statusMsg.className = 'status-message error';
-            statusMsg.style.display = 'block';
-            return;
-        }
-        
-        this.disabled = true;
-        this.textContent = '⏳ Updating...';
-        statusMsg.style.display = 'none';
-        
-        try {
-            const response = await fetch(`/api/scheduled-posts/${postId}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({
-                    scheduled_time: selectedTime.toISOString()
-                })
-            });
-            
-            const data = await response.json();
-            
-            if (response.ok && data.status === 'success') {
-                statusMsg.textContent = `✅ Post rescheduled to ${selectedTime.toLocaleString()}`;
-                statusMsg.className = 'status-message success';
-                statusMsg.style.display = 'block';
-                
-                setTimeout(() => {
-                    modal.hidden = true;
-                    loadScheduledPosts();
-                    showToast('✅ Post rescheduled successfully', 'success');
-                }, 1500);
-            } else {
-                statusMsg.textContent = `❌ ${data.error || 'Failed to update'}`;
-                statusMsg.className = 'status-message error';
-                statusMsg.style.display = 'block';
-            }
-        } catch (error) {
-            statusMsg.textContent = `❌ Error: ${error.message}`;
-            statusMsg.className = 'status-message error';
-            statusMsg.style.display = 'block';
-        } finally {
-            this.disabled = false;
-            this.textContent = '💾 Update Schedule';
-        }
-    };
-}
-
-// ==================== LOAD SCHEDULER PIPELINES WITH KEY INFO ====================
-
-// Load pipelines for the scheduler dropdown with key info
-async function loadSchedulerPipelines() {
-    const select = document.getElementById('scheduler-pipeline-select');
-    if (!select) return;
-    
-    try {
-        const response = await fetch('/api/pipelines', { credentials: 'same-origin' });
-        const data = await response.json();
-        
-        if (data.status === 'success' && data.pipelines) {
-            // ✅ Store globally for other functions to use
-            schedulerPipelines = data.pipelines;
-            select.innerHTML = '<option value="">Select a pipeline...</option>';
-            
-            data.pipelines.forEach(p => {
-                const option = document.createElement('option');
-                option.value = p.id;
-                // Show key info if available
-                let keyInfo = '';
-                if (p.zernio_key_id) {
-                    const key = zernioKeys?.find(k => k.id === p.zernio_key_id);
-                    keyInfo = key ? `🔑 ${key.name}` : '🔑 Has key';
-                } else {
-                    keyInfo = '⚠️ No key';
-                }
-                option.textContent = `${p.name} (@${p.profile_username}) ${keyInfo}`;
-                option.title = keyInfo; // Tooltip
-                select.appendChild(option);
-            });
-        }
-    } catch (error) {
-        console.error('Failed to load pipelines:', error);
-    }
 }
 
 function updateScheduledSummary(counts) {
