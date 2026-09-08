@@ -2285,13 +2285,42 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id, max_retries=3)
             conn.close()
 
 
-def fetch_caption_from_service(reel_url, timeout=30):
-    """Fetch caption from the caption service."""
+def fetch_caption_from_service(reel_url, timeout=5, async_mode=True, webhook_url=None, 
+                                pipeline_id=None, profile_username=None, post_id=None):
+    """
+    Fetch caption from the caption service.
+    
+    Args:
+        reel_url: The Instagram reel URL
+        timeout: Timeout for the request (short for async mode)
+        async_mode: If True, uses webhook callback instead of waiting
+        webhook_url: URL to receive the caption via webhook
+        pipeline_id: Pipeline ID for the post
+        profile_username: Instagram username
+        post_id: Scheduled post ID
+    
+    Returns:
+        caption: The caption if fetched synchronously, or None if async
+    """
     try:
         caption_service_url = get_caption_service_url()
+        
+        # Build payload
+        payload = {"url": reel_url}
+        
+        # Add webhook info if async mode
+        if async_mode and webhook_url:
+            payload["webhook_url"] = webhook_url
+            payload["async"] = True
+            payload["pipeline_id"] = pipeline_id
+            payload["profile_username"] = profile_username
+            payload["post_id"] = post_id
+        
+        app.logger.info(f"📞 Fetching caption for: {reel_url[:50]}... (async={async_mode})")
+        
         response = requests.post(
             caption_service_url,
-            json={"url": reel_url},
+            json=payload,
             timeout=timeout,
             headers={"Content-Type": "application/json"}
         )
@@ -2299,15 +2328,32 @@ def fetch_caption_from_service(reel_url, timeout=30):
         if response.status_code == 200:
             data = response.json()
             if data.get('success'):
-                return data.get('caption', '')
+                # If async mode, we don't wait for the caption
+                if async_mode:
+                    app.logger.info(f"✅ Async caption fetch triggered for: {reel_url[:50]}...")
+                    return None
+                else:
+                    caption = data.get('caption', '')
+                    app.logger.info(f"✅ Caption fetched: {caption[:50] if caption else 'Empty'}...")
+                    return caption
+        elif response.status_code in [202, 204]:
+            # Accepted but no content (async mode)
+            app.logger.info(f"✅ Async request accepted for: {reel_url[:50]}...")
+            return None
+        
         return None
         
     except requests.exceptions.Timeout:
-        raise  # Re-raise timeout to be handled by retry logic
+        # In async mode, timeout is expected (we just want to send the request)
+        if async_mode:
+            app.logger.info(f"⏰ Async request sent (timeout expected) for: {reel_url[:50]}...")
+            return None
+        else:
+            app.logger.error(f"⏰ Timeout fetching caption for {reel_url[:50]}...")
+            raise  # Re-raise timeout to be handled by retry logic
     except Exception as e:
         app.logger.error(f"Service error: {e}")
         return None
-
 
 def store_caption_in_database(reel_url, caption, profile_username):
     """Store caption in database for future use."""
@@ -4309,12 +4355,16 @@ def cookie_extractor_status():
 
 
 
-
 # ============== CAPTION WEBHOOK ==============
 
 @app.route("/api/webhook/caption", methods=["POST"])
 def webhook_caption():
+    """
+    Webhook endpoint for caption service to send back captions.
+    When caption is received, process the pending scheduled post.
+    """
     data = request.get_json(silent=True) or {}
+    
     reel_url = data.get('reel_url')
     caption = data.get('caption')
     job_id = data.get('job_id')
@@ -4322,11 +4372,18 @@ def webhook_caption():
     error = data.get('error')
     profile_username = data.get('profile_username')
     pipeline_id = data.get('pipeline_id')
+    post_id = data.get('post_id')  # ✅ Get post_id for scheduled_posts
+    
     app.logger.info(f"📥 [Job {job_id}] Webhook received for: {reel_url[:50] if reel_url else 'unknown'}...")
     app.logger.info(f"   Caption: {caption[:50] if caption else 'None'}...")
     app.logger.info(f"   Status: {status}")
+    app.logger.info(f"   Post ID: {post_id}")
+    app.logger.info(f"   Pipeline ID: {pipeline_id}")
+    
     if not reel_url:
         return jsonify({"status": "error", "message": "reel_url required"}), 400
+    
+    # Update CAPTION_FETCH_STATUS if tracking
     if reel_url in CAPTION_FETCH_STATUS:
         CAPTION_FETCH_STATUS[reel_url]['status'] = status
         CAPTION_FETCH_STATUS[reel_url]['message'] = 'Webhook received'
@@ -4335,17 +4392,22 @@ def webhook_caption():
         if caption:
             CAPTION_FETCH_STATUS[reel_url]['caption'] = caption[:200]
             CAPTION_FETCH_STATUS[reel_url]['caption_length'] = len(caption)
+    
     if status == 'completed' and caption:
         try:
             conn = get_db_connection()
             if conn:
                 cur = conn.cursor()
+                
+                # ✅ Store in reel_cache
                 cur.execute("""
                     INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
                     VALUES (%s, '', %s, NOW())
                     ON CONFLICT (reel_url) DO UPDATE SET 
                         caption = EXCLUDED.caption, created_at = NOW()
                 """, (reel_url, caption))
+                
+                # ✅ Store in scraped_reels if possible
                 if profile_username:
                     cur.execute("""
                         SELECT id, results FROM scraped_reels 
@@ -4379,57 +4441,161 @@ def webhook_caption():
                             """, (json.dumps(results), row_id))
                             conn.commit()
                             app.logger.info(f"💾 [Job {job_id}] Caption stored in scraped_reels")
-                cur.execute("UPDATE posted_reels SET caption = %s WHERE reel_url = %s AND (caption IS NULL OR caption = '')", (caption, reel_url))
-                conn.commit()
-                app.logger.info(f"🔍 [Job {job_id}] Checking for pending post: {reel_url[:50]}...")
-                pending = get_pending_post(reel_url)
-                if pending:
-                    app.logger.info(f"🔥 [Job {job_id}] Found pending post! Processing...")
-                    success = process_pending_post(pending)
-                    if success:
-                        app.logger.info(f"✅ [Job {job_id}] Pending post processed successfully!")
-                    else:
-                        app.logger.error(f"❌ [Job {job_id}] Failed to process pending post")
-                        cur.execute("""
-                            UPDATE pending_posts SET status = 'failed', error_message = 'Processing failed', updated_at = NOW()
-                            WHERE reel_url = %s AND status IN ('pending', 'processing')
-                        """, (reel_url,))
-                        conn.commit()
-                else:
-                    app.logger.info(f"ℹ️ [Job {job_id}] No pending post found")
-                    cur.execute("SELECT COUNT(*) FROM posted_reels WHERE reel_url = %s AND status = 'success'", (reel_url,))
-                    already_posted = cur.fetchone()[0] > 0
-                    if already_posted:
-                        app.logger.info(f"✅ [Job {job_id}] Reel already posted, updating pending_posts to completed")
-                        cur.execute("""
-                            UPDATE pending_posts SET status = 'completed', caption = %s, webhook_received = TRUE, updated_at = NOW()
-                            WHERE reel_url = %s AND status IN ('pending', 'processing')
-                        """, (caption, reel_url))
-                        conn.commit()
-                    else:
-                        app.logger.info(f"ℹ️ [Job {job_id}] No pending post, caption stored for future use")
-                        cur.execute("""
-                            UPDATE pending_posts SET caption = %s, webhook_received = TRUE, updated_at = NOW()
-                            WHERE reel_url = %s
-                        """, (caption, reel_url))
-                        conn.commit()
+                
+                # ✅ Store in posted_reels if already posted
                 cur.execute("""
-                    UPDATE pending_posts SET webhook_received = TRUE, updated_at = NOW()
-                    WHERE reel_url = %s AND status IN ('pending', 'processing')
-                """, (reel_url,))
+                    UPDATE posted_reels 
+                    SET caption = %s 
+                    WHERE reel_url = %s AND (caption IS NULL OR caption = '')
+                """, (caption, reel_url))
                 conn.commit()
+                
+                # ✅ PROCESS SCHEDULED POST - NEW FLOW
+                if post_id:
+                    app.logger.info(f"🔥 [Job {job_id}] Processing scheduled post {post_id} with caption")
+                    
+                    # Update the scheduled post with caption
+                    cur.execute("""
+                        UPDATE scheduled_posts 
+                        SET caption = %s, updated_at = NOW()
+                        WHERE id = %s AND status = 'processing'
+                        RETURNING id
+                    """, (caption, post_id))
+                    
+                    updated = cur.fetchone()
+                    if updated:
+                        # Get the full post and process it
+                        cur.execute("""
+                            SELECT sp.*, p.* 
+                            FROM scheduled_posts sp
+                            JOIN pipelines p ON sp.pipeline_id = p.id
+                            WHERE sp.id = %s
+                        """, (post_id,))
+                        post = cur.fetchone()
+                        
+                        if post:
+                            # Process the post with the caption
+                            process_post_with_caption(post, caption)
+                        else:
+                            app.logger.warning(f"⚠️ [Job {job_id}] Post {post_id} not found")
+                    else:
+                        app.logger.warning(f"⚠️ [Job {job_id}] Post {post_id} not in 'processing' status")
+                
+                # ✅ Fallback: Find scheduled post by reel_url and pipeline_id
+                elif pipeline_id:
+                    app.logger.info(f"🔍 [Job {job_id}] Finding scheduled post by URL: {reel_url[:50]}...")
+                    cur.execute("""
+                        SELECT id FROM scheduled_posts 
+                        WHERE reel_url = %s AND pipeline_id = %s AND status = 'processing'
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (reel_url, pipeline_id))
+                    result = cur.fetchone()
+                    
+                    if result:
+                        post_id = result[0]
+                        app.logger.info(f"🔥 [Job {job_id}] Found scheduled post {post_id} for caption")
+                        
+                        # Update with caption
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET caption = %s, updated_at = NOW()
+                            WHERE id = %s
+                        """, (caption, post_id))
+                        conn.commit()
+                        
+                        # Get and process the post
+                        cur.execute("""
+                            SELECT sp.*, p.* 
+                            FROM scheduled_posts sp
+                            JOIN pipelines p ON sp.pipeline_id = p.id
+                            WHERE sp.id = %s
+                        """, (post_id,))
+                        post = cur.fetchone()
+                        
+                        if post:
+                            process_post_with_caption(post, caption)
+                
+                # ✅ Backward compatibility: Check pending_posts
+                else:
+                    app.logger.info(f"🔍 [Job {job_id}] Checking for pending post: {reel_url[:50]}...")
+                    pending = get_pending_post(reel_url)
+                    if pending:
+                        app.logger.info(f"🔥 [Job {job_id}] Found pending post! Processing...")
+                        success = process_pending_post(pending)
+                        if success:
+                            app.logger.info(f"✅ [Job {job_id}] Pending post processed successfully!")
+                        else:
+                            app.logger.error(f"❌ [Job {job_id}] Failed to process pending post")
+                            cur.execute("""
+                                UPDATE pending_posts SET status = 'failed', error_message = 'Processing failed', updated_at = NOW()
+                                WHERE reel_url = %s AND status IN ('pending', 'processing')
+                            """, (reel_url,))
+                            conn.commit()
+                    else:
+                        app.logger.info(f"ℹ️ [Job {job_id}] No pending post found")
+                        
+                        # Check if already posted
+                        cur.execute("SELECT COUNT(*) FROM posted_reels WHERE reel_url = %s AND status = 'success'", (reel_url,))
+                        already_posted = cur.fetchone()[0] > 0
+                        if already_posted:
+                            app.logger.info(f"✅ [Job {job_id}] Reel already posted")
+                            cur.execute("""
+                                UPDATE pending_posts SET status = 'completed', caption = %s, webhook_received = TRUE, updated_at = NOW()
+                                WHERE reel_url = %s AND status IN ('pending', 'processing')
+                            """, (caption, reel_url))
+                            conn.commit()
+                        else:
+                            app.logger.info(f"ℹ️ [Job {job_id}] No pending post, caption stored for future use")
+                            cur.execute("""
+                                UPDATE pending_posts SET caption = %s, webhook_received = TRUE, updated_at = NOW()
+                                WHERE reel_url = %s
+                            """, (caption, reel_url))
+                            conn.commit()
+                
                 cur.close()
                 conn.close()
-                return jsonify({"status": "success", "message": "Caption stored and pending post processed", "job_id": job_id, "pending_processed": bool(pending) if 'pending' in locals() else False})
+                
+                return jsonify({
+                    "status": "success", 
+                    "message": "Caption stored and post processed", 
+                    "job_id": job_id,
+                    "post_id": post_id
+                })
+                
         except Exception as e:
             app.logger.error(f"❌ [Job {job_id}] Failed to store caption: {e}")
             import traceback
             app.logger.error(traceback.format_exc())
-            return jsonify({"status": "error", "message": f"Failed to store caption: {str(e)}", "job_id": job_id}), 500
+            return jsonify({
+                "status": "error", 
+                "message": f"Failed to store caption: {str(e)}", 
+                "job_id": job_id
+            }), 500
+            
     elif status == 'failed':
         app.logger.warning(f"⚠️ [Job {job_id}] Caption fetch failed: {error}")
         if reel_url in CAPTION_FETCH_STATUS:
             CAPTION_FETCH_STATUS[reel_url]['error'] = error
+        
+        # ✅ Mark scheduled post as failed
+        if post_id:
+            try:
+                conn = get_db_connection()
+                if conn:
+                    cur = conn.cursor()
+                    cur.execute("""
+                        UPDATE scheduled_posts 
+                        SET status = 'failed', error_message = %s, updated_at = NOW()
+                        WHERE id = %s AND status = 'processing'
+                    """, (error or 'Caption fetch failed', post_id))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    app.logger.info(f"✅ [Job {job_id}] Marked scheduled post {post_id} as failed")
+            except Exception as e:
+                app.logger.error(f"❌ [Job {job_id}] Failed to mark scheduled post as failed: {e}")
+        
+        # ✅ Fallback: Mark pending_posts as failed
         try:
             conn = get_db_connection()
             if conn:
@@ -4444,7 +4610,123 @@ def webhook_caption():
                 app.logger.info(f"✅ [Job {job_id}] Marked pending post as failed")
         except Exception as e:
             app.logger.error(f"❌ [Job {job_id}] Failed to mark pending post as failed: {e}")
+    
     return jsonify({"status": "success", "message": "Webhook received", "job_id": job_id})
+
+
+# ============== PROCESS POST WITH CAPTION (NEW FLOW) ==============
+
+def process_post_with_caption(post, caption):
+    """
+    Process a scheduled post that now has a caption.
+    This publishes the post to Facebook.
+    """
+    try:
+        app.logger.info(f"📤 Processing post {post['id']} with caption via webhook")
+        
+        # Get video URL
+        direct_video_url = post.get('direct_video_url', '')
+        if not direct_video_url:
+            direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
+            if not direct_video_url:
+                app.logger.error(f"❌ No video URL for post {post['id']}")
+                # Mark as failed
+                conn = get_db_connection()
+                if conn:
+                    cur = conn.cursor()
+                    cur.execute("""
+                        UPDATE scheduled_posts 
+                        SET status = 'failed', 
+                            error_message = 'No video URL available', 
+                            updated_at = NOW()
+                        WHERE id = %s
+                    """, (post['id'],))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                return
+        
+        # Get key_id from pipeline
+        key_id = post.get('zernio_key_id')
+        
+        # Publish to Facebook
+        app.logger.info(f"📤 Publishing to Facebook with key: {key_id}")
+        
+        result = publish_to_facebook(
+            video_url=direct_video_url,
+            text=caption,
+            account_id=post['facebook_account_id'],
+            publish_now=True,
+            key_id=key_id
+        )
+        
+        conn = get_db_connection()
+        if not conn:
+            app.logger.error("❌ No database connection")
+            return
+        
+        cur = conn.cursor()
+        
+        if result and not result.get('error'):
+            post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
+            post_url = None
+            platforms = result.get('post', {}).get('platforms', [])
+            for platform in platforms:
+                if platform.get('platform') == 'facebook':
+                    post_url = platform.get('publishedUrl')
+                    break
+            
+            # Mark as posted in posted_reels
+            mark_reel_as_posted(
+                pipeline_id=post['pipeline_id'],
+                reel_url=post['reel_url'],
+                direct_video_url=direct_video_url,
+                caption=caption,
+                facebook_post_id=post_result_id,
+                facebook_post_url=post_url,
+                status='success'
+            )
+            
+            # Update scheduled post status
+            cur.execute("""
+                UPDATE scheduled_posts 
+                SET status = 'posted', posted_at = NOW(), updated_at = NOW()
+                WHERE id = %s
+            """, (post['id'],))
+            conn.commit()
+            
+            app.logger.info(f"✅ Post {post['id']} published successfully via webhook!")
+        else:
+            error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+            app.logger.error(f"❌ Facebook publish failed: {error_msg}")
+            
+            # Mark as failed in posted_reels
+            mark_reel_as_posted(
+                pipeline_id=post['pipeline_id'],
+                reel_url=post['reel_url'],
+                direct_video_url=direct_video_url,
+                caption=caption,
+                status='failed',
+                error_message=str(error_msg)
+            )
+            
+            # Update scheduled post status
+            cur.execute("""
+                UPDATE scheduled_posts 
+                SET status = 'failed', error_message = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (str(error_msg), post['id']))
+            conn.commit()
+        
+        # Update pipeline stats
+        update_pipeline_stats(post['pipeline_id'], 0, 0)
+        cur.close()
+        conn.close()
+        
+    except Exception as e:
+        app.logger.error(f"❌ Error processing post from webhook: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
 
 # ============== CAPTION STATUS ROUTES ==============
 
