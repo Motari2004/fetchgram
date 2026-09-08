@@ -4731,15 +4731,48 @@ def process_post_with_caption(post, caption):
     This publishes the post to Facebook.
     """
     try:
-        app.logger.info(f"📤 Processing post {post['id']} with caption via webhook")
+        # ✅ DEBUG: Log what we received
+        app.logger.info(f"📤 Processing post with caption")
+        app.logger.info(f"   Post type: {type(post)}")
+        app.logger.info(f"   Post keys: {post.keys() if isinstance(post, dict) else 'NOT A DICT!'}")
+        
+        # ✅ FIX: Get the scheduled post ID correctly
+        # Both scheduled_posts and pipelines have an 'id' column
+        # We need to use the scheduled post ID, not the pipeline ID!
+        scheduled_id = post.get('scheduled_id') or post.get('sp_id') or post.get('id')
+        
+        # ⚠️ If post is a tuple, convert to dict
+        if isinstance(post, tuple):
+            app.logger.error("❌ Post is a TUPLE! Converting...")
+            # Convert based on SELECT order
+            post = {
+                'scheduled_id': post[0],  # sp.id
+                'reel_url': post[1],
+                'direct_video_url': post[2],
+                'caption': post[3],
+                'pipeline_id': post[4],
+                'scheduled_time': post[5],
+                'status': post[6],
+                'error_message': post[7],
+                'posted_at': post[8],
+                'created_at': post[9],
+                'updated_at': post[10],
+                'pipeline_name': post[12] if len(post) > 12 else None,
+                'profile_username': post[13] if len(post) > 13 else None,
+                'facebook_account_id': post[14] if len(post) > 14 else None,
+                'zernio_key_id': post[15] if len(post) > 15 else None,
+            }
+            scheduled_id = post['scheduled_id']
+        
+        app.logger.info(f"✅ Scheduled Post ID: {scheduled_id}")
+        app.logger.info(f"   Pipeline ID: {post.get('pipeline_id')}")
         
         # Get video URL
         direct_video_url = post.get('direct_video_url', '')
         if not direct_video_url:
             direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
             if not direct_video_url:
-                app.logger.error(f"❌ No video URL for post {post['id']}")
-                # Mark as failed
+                app.logger.error(f"❌ No video URL for post {scheduled_id}")
                 conn = get_db_connection()
                 if conn:
                     cur = conn.cursor()
@@ -4749,7 +4782,7 @@ def process_post_with_caption(post, caption):
                             error_message = 'No video URL available', 
                             updated_at = NOW()
                         WHERE id = %s
-                    """, (post['id'],))
+                    """, (scheduled_id,))
                     conn.commit()
                     cur.close()
                     conn.close()
@@ -4796,20 +4829,19 @@ def process_post_with_caption(post, caption):
                 status='success'
             )
             
-            # Update scheduled post status
+            # ✅ FIX: Update scheduled_posts using the SCHEDULED ID
             cur.execute("""
                 UPDATE scheduled_posts 
                 SET status = 'posted', posted_at = NOW(), updated_at = NOW()
                 WHERE id = %s
-            """, (post['id'],))
+            """, (scheduled_id,))  # ← Use scheduled_id, NOT post['id']!
             conn.commit()
             
-            app.logger.info(f"✅ Post {post['id']} published successfully via webhook!")
+            app.logger.info(f"✅ Post {scheduled_id} published successfully via webhook!")
         else:
             error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
             app.logger.error(f"❌ Facebook publish failed: {error_msg}")
             
-            # Mark as failed in posted_reels
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
                 reel_url=post['reel_url'],
@@ -4819,15 +4851,14 @@ def process_post_with_caption(post, caption):
                 error_message=str(error_msg)
             )
             
-            # Update scheduled post status
+            # ✅ FIX: Update scheduled_posts using the SCHEDULED ID
             cur.execute("""
                 UPDATE scheduled_posts 
                 SET status = 'failed', error_message = %s, updated_at = NOW()
                 WHERE id = %s
-            """, (str(error_msg), post['id']))
+            """, (str(error_msg), scheduled_id))  # ← Use scheduled_id!
             conn.commit()
         
-        # Update pipeline stats
         update_pipeline_stats(post['pipeline_id'], 0, 0)
         cur.close()
         conn.close()
