@@ -1108,6 +1108,7 @@ def get_cookie_file():
                 username = db_cookies.get('username', 'default')
                 safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username))[:40]
                 cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
+                # ✅ Always write fresh file
                 write_netscape_cookies(cookie_data, cookie_file)
                 app.logger.info(f"Using cookies from database → {cookie_file}")
                 return cookie_file
@@ -1156,7 +1157,6 @@ def get_cookie_file():
 
 
 
-
 # ============== COOKIE EXTRACTION FROM RENDER SERVICE ==============
 
 def extract_cookies_from_render_service():
@@ -1197,12 +1197,25 @@ def extract_cookies_from_render_service():
             app.logger.error("❌ Failed to save cookies to database")
             return False
         
-        # ✅ FIX: Save to /tmp instead of root (Vercel read-only fix)
+        # ✅ FIX: Write BOTH formats - JSON and Netscape
         try:
+            # JSON format
             cookie_file_path = os.path.join('/tmp', 'cookies.json')
             with open(cookie_file_path, 'w') as f:
                 json.dump(cookies, f, indent=2)
             app.logger.info(f"✅ Saved cookies to {cookie_file_path}")
+            
+            # ✅ Netscape format for yt-dlp
+            netscape_file = os.path.join('/tmp', 'cookies_netscape.txt')
+            write_netscape_cookies(cookies, netscape_file)
+            app.logger.info(f"✅ Saved Netscape cookies to {netscape_file}")
+            
+            # ✅ Also update the Instagram-specific cookie file
+            safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username or 'default'))[:40]
+            instagram_cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
+            write_netscape_cookies(cookies, instagram_cookie_file)
+            app.logger.info(f"✅ Saved Instagram cookies to {instagram_cookie_file}")
+            
         except Exception as e:
             app.logger.warning(f"⚠️ Could not save cookies to file: {e}")
         
