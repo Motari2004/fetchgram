@@ -1046,6 +1046,7 @@ function populateEditFacebookAccounts(selectedId) {
     defaultOption.selected = true;
     select.appendChild(defaultOption);
     
+    // ✅ Use zernioAccounts (which has ALL accounts from ALL keys)
     if (!zernioAccounts || zernioAccounts.length === 0) {
         const option = document.createElement('option');
         option.value = '';
@@ -1055,15 +1056,51 @@ function populateEditFacebookAccounts(selectedId) {
         return;
     }
     
+    // ✅ Group by key
+    const grouped = {};
     zernioAccounts.forEach(account => {
-        const option = document.createElement('option');
-        option.value = account.id;
-        option.textContent = account.name || account.id;
-        if (account.id === selectedId) {
-            option.selected = true;
-        }
-        select.appendChild(option);
+        const keyName = account.key_name || 'Unknown Key';
+        if (!grouped[keyName]) grouped[keyName] = [];
+        grouped[keyName].push(account);
     });
+    
+    let foundSelected = false;
+    
+    // ✅ Add optgroups with key names
+    Object.keys(grouped).forEach(keyName => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `🔑 ${keyName}`;
+        
+        grouped[keyName].forEach(account => {
+            const option = document.createElement('option');
+            option.value = account.id;
+            option.textContent = account.name || account.id;
+            option.dataset.keyId = account.key_id || '';
+            option.dataset.keyName = account.key_name || '';
+            
+            // ✅ Check if this account matches the pipeline's account
+            if (account.id === selectedId) {
+                option.selected = true;
+                foundSelected = true;
+            }
+            optgroup.appendChild(option);
+        });
+        
+        select.appendChild(optgroup);
+    });
+    
+    // ✅ If the selected account wasn't found, add it as a disabled option
+    if (selectedId && !foundSelected) {
+        const option = document.createElement('option');
+        option.value = selectedId;
+        option.textContent = `⚠️ ${selectedId} (not in current keys)`;
+        option.disabled = true;
+        option.selected = true;
+        select.appendChild(option);
+        console.warn(`⚠️ Account ${selectedId} not found in zernioAccounts`);
+    }
+    
+    console.log(`✅ Populated edit dropdown with ${zernioAccounts.length} accounts, selected: ${selectedId} (found: ${foundSelected})`);
 }
 
 // ==================== FORCE REFRESH ACCOUNTS ====================
@@ -2463,6 +2500,20 @@ async function editPipeline(pipelineId) {
       document.getElementById('edit-pipeline-username').value = pipeline.profile_username || '';
       document.getElementById('edit-pipeline-daily-limit').value = pipeline.daily_limit || 2;
       document.getElementById('edit-pipeline-active').checked = pipeline.is_active;
+      
+      // ✅ Show current key info
+      const keyInfoEl = document.getElementById('edit-pipeline-key-info');
+      if (keyInfoEl) {
+        if (pipeline.zernio_key_id) {
+          const key = zernioKeys.find(k => k.id === pipeline.zernio_key_id);
+          keyInfoEl.textContent = `🔑 Current Key: ${key ? key.name : 'Unknown'}`;
+          keyInfoEl.style.color = 'var(--success)';
+        } else {
+          keyInfoEl.textContent = '⚠️ No key assigned!';
+          keyInfoEl.style.color = 'var(--error)';
+        }
+        keyInfoEl.hidden = false;
+      }
       
       await populateEditFacebookAccounts(pipeline.facebook_account_id);
     } else {
