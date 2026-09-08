@@ -829,7 +829,7 @@ async function _loadZernioAccountsWithRetry() {
         console.log('📊 Zernio keys response:', data);
         
         if (data.status === 'success' && data.keys && data.keys.length > 0) {
-            // ✅ Combine accounts from ALL keys
+            // ✅ Combine accounts from ALL keys with key_id
             const allAccounts = [];
             
             data.keys.forEach(key => {
@@ -840,7 +840,8 @@ async function _loadZernioAccountsWithRetry() {
                             name: account.name,
                             page_id: account.page_id,
                             status: account.status,
-                            key_name: key.name // Track which key it belongs to
+                            key_id: key.id,        // ✅ Store the key ID
+                            key_name: key.name     // ✅ Track which key it belongs to
                         });
                     });
                 }
@@ -850,7 +851,7 @@ async function _loadZernioAccountsWithRetry() {
             zernioAccountsLoaded = true;
             
             console.log(`✅ Loaded ${zernioAccounts.length} accounts from ${data.keys.length} keys`);
-            console.log('📋 Accounts:', zernioAccounts.map(a => a.name));
+            console.log('📋 Accounts:', zernioAccounts.map(a => `${a.name} (${a.key_name})`));
             
             // ✅ Populate ALL dropdowns with combined accounts
             populateZernioAccountSelect(zernioAccounts);
@@ -920,7 +921,6 @@ function populateZernioAccountSelect(accounts) {
     
     zernioAccountSelect.innerHTML = '';
     
-    // Add default option
     const defaultOption = document.createElement('option');
     defaultOption.value = '';
     defaultOption.textContent = 'Select Facebook account...';
@@ -944,15 +944,30 @@ function populateZernioAccountSelect(accounts) {
         return;
     }
     
-    accounts.sort((a, b) => a.name.localeCompare(b.name));
-    
+    // ✅ Group by key
+    const grouped = {};
     accounts.forEach(account => {
-        const option = document.createElement('option');
-        option.value = account.id;
-        option.textContent = account.name;
-        option.dataset.pageId = account.page_id;
-        option.dataset.status = account.status;
-        zernioAccountSelect.appendChild(option);
+        const keyName = account.key_name || 'Unknown Key';
+        if (!grouped[keyName]) grouped[keyName] = [];
+        grouped[keyName].push(account);
+    });
+    
+    Object.keys(grouped).forEach(keyName => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `🔑 ${keyName}`;
+        
+        grouped[keyName].forEach(account => {
+            const option = document.createElement('option');
+            option.value = account.id;
+            option.textContent = account.name;
+            option.dataset.pageId = account.page_id;
+            option.dataset.status = account.status;
+            option.dataset.keyId = account.key_id || '';
+            option.dataset.keyName = account.key_name || '';
+            optgroup.appendChild(option);
+        });
+        
+        zernioAccountSelect.appendChild(optgroup);
     });
     
     if (accounts.length === 1) {
@@ -961,24 +976,18 @@ function populateZernioAccountSelect(accounts) {
 }
 
 function populatePipelineFacebookAccounts(accounts) {
-    // Try multiple ways to get the element
     let select = pipelineFacebookAccount;
     if (!select) {
         select = document.getElementById('pipeline-facebook-account');
     }
     
     if (!select) {
-        console.warn('⚠️ pipeline-facebook-account element not found! Retrying in 500ms...');
-        setTimeout(() => {
-            populatePipelineFacebookAccounts(accounts);
-        }, 500);
+        console.warn('⚠️ pipeline-facebook-account element not found!');
         return;
     }
     
-    // Clear existing options
     select.innerHTML = '';
     
-    // Add default option
     const defaultOption = document.createElement('option');
     defaultOption.value = '';
     defaultOption.textContent = 'Select Facebook account...';
@@ -992,15 +1001,33 @@ function populatePipelineFacebookAccounts(accounts) {
         option.textContent = '❌ No accounts - Add a Zernio key';
         option.disabled = true;
         select.appendChild(option);
-        console.log('ℹ️ No accounts to populate pipeline dropdown');
         return;
     }
     
+    // ✅ Group accounts by key
+    const grouped = {};
     accounts.forEach(account => {
-        const option = document.createElement('option');
-        option.value = account.id;
-        option.textContent = account.name || account.id;
-        select.appendChild(option);
+        const keyName = account.key_name || 'Unknown Key';
+        if (!grouped[keyName]) grouped[keyName] = [];
+        grouped[keyName].push(account);
+    });
+    
+    // ✅ Add optgroups with key names
+    Object.keys(grouped).forEach(keyName => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `🔑 ${keyName}`;
+        
+        grouped[keyName].forEach(account => {
+            const option = document.createElement('option');
+            option.value = account.id;
+            option.textContent = account.name;
+            // ✅ Store the key ID as a data attribute
+            option.dataset.keyId = account.key_id || '';
+            option.dataset.keyName = account.key_name || '';
+            optgroup.appendChild(option);
+        });
+        
+        select.appendChild(optgroup);
     });
     
     console.log(`✅ Populated pipeline dropdown with ${accounts.length} accounts`);
@@ -2642,48 +2669,62 @@ async function togglePipeline(pipelineId, currentActive) {
 // ==================== CREATE PIPELINE ====================
 
 createPipelineBtn?.addEventListener('click', async function() {
-  const name = pipelineName?.value.trim();
-  const username = pipelineUsername?.value.trim();
-  const accountId = pipelineFacebookAccount?.value;
-  const dailyLimit = parseInt(pipelineDailyLimit?.value) || 2;
-  
-  if (!name || !username || !accountId) {
-    showPipelinesStatus('❌ Please fill in all fields', 'error');
-    return;
-  }
-  
-  this.disabled = true;
-  this.textContent = 'Creating...';
-  
-  try {
-    const response = await fetch('/api/pipelines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({
-        name,
-        profile_username: username,
-        facebook_account_id: accountId,
-        daily_limit: dailyLimit
-      })
-    });
-    const data = await response.json();
+    const name = pipelineName?.value.trim();
+    const username = pipelineUsername?.value.trim();
+    const accountSelect = pipelineFacebookAccount;
+    const accountId = accountSelect?.value;
+    const dailyLimit = parseInt(pipelineDailyLimit?.value) || 2;
     
-    if (response.ok) {
-      showPipelinesStatus(`✅ Pipeline "${name}" created!`, 'success');
-      if (pipelineName) pipelineName.value = '';
-      if (pipelineUsername) pipelineUsername.value = '';
-      if (pipelineDailyLimit) pipelineDailyLimit.value = '2';
-      loadPipelines();
-    } else {
-      showPipelinesStatus(`❌ ${data.error || 'Failed to create pipeline'}`, 'error');
+    // ✅ Get the key ID from the selected option
+    const selectedOption = accountSelect?.options[accountSelect.selectedIndex];
+    const zernioKeyId = selectedOption?.dataset?.keyId || null;
+    const keyName = selectedOption?.dataset?.keyName || 'Unknown';
+    
+    if (!name || !username || !accountId) {
+        showPipelinesStatus('❌ Please fill in all fields', 'error');
+        return;
     }
-  } catch (error) {
-    showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
-  } finally {
-    this.disabled = false;
-    this.textContent = 'Create Pipeline';
-  }
+    
+    if (!zernioKeyId) {
+        showPipelinesStatus('⚠️ Please select an account with a valid Zernio key', 'error');
+        return;
+    }
+    
+    console.log(`🔑 Creating pipeline with key: ${keyName} (${zernioKeyId})`);
+    
+    this.disabled = true;
+    this.textContent = 'Creating...';
+    
+    try {
+        const response = await fetch('/api/pipelines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                name,
+                profile_username: username,
+                facebook_account_id: accountId,
+                daily_limit: dailyLimit,
+                zernio_key_id: zernioKeyId  // ✅ Send the key ID!
+            })
+        });
+        const data = await response.json();
+        
+        if (response.ok) {
+            showPipelinesStatus(`✅ Pipeline "${name}" created with ${keyName}!`, 'success');
+            if (pipelineName) pipelineName.value = '';
+            if (pipelineUsername) pipelineUsername.value = '';
+            if (pipelineDailyLimit) pipelineDailyLimit.value = '2';
+            loadPipelines();
+        } else {
+            showPipelinesStatus(`❌ ${data.error || 'Failed to create pipeline'}`, 'error');
+        }
+    } catch (error) {
+        showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
+    } finally {
+        this.disabled = false;
+        this.textContent = 'Create Pipeline';
+    }
 });
 
 // ==================== AUTO-LOAD ON PAGE LOAD ====================
