@@ -3829,70 +3829,69 @@ def debug_zernio_memory():
 
 
 
-
-
 @app.route('/api/zernio/accounts', methods=['GET'])
 def zernio_list_accounts():
-    """List all connected Zernio Facebook accounts - uses the BEST available key."""
+    """List ALL connected Zernio Facebook accounts from ALL keys."""
     try:
-        # Get the best available key
-        key = get_best_zernio_key()
-        if not key:
+        # ✅ Get ALL keys, not just the best one
+        if not ZERNIO_KEYS:
             return jsonify({
                 "status": "error", 
                 "message": "No Zernio keys available. Please add a key first.", 
                 "accounts": []
             }), 503
         
-        # Use the key's actual API key
+        all_facebook_accounts = []
         zernio_base_url = get_zernio_base_url()
-        headers = {
-            "Authorization": f"Bearer {key['api_key']}", 
-            "Content-Type": "application/json"
-        }
         
-        app.logger.info(f"🔑 Fetching accounts with key: {key['name']}")
+        # ✅ Loop through ALL keys
+        for key_id, key_data in ZERNIO_KEYS.items():
+            try:
+                headers = {
+                    "Authorization": f"Bearer {key_data['api_key']}", 
+                    "Content-Type": "application/json"
+                }
+                
+                app.logger.info(f"🔑 Fetching accounts with key: {key_data['name']}")
+                
+                response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    accounts = data.get('accounts', [])
+                    
+                    for account in accounts:
+                        if account.get('platform') == 'facebook':
+                            all_facebook_accounts.append({
+                                "id": account.get('_id'),
+                                "name": account.get('displayName', 'Unknown'),
+                                "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                                "username": account.get('username', 'N/A'),
+                                "status": account.get('platformStatus', 'unknown'),
+                                "key_id": key_id,           # ✅ Add key ID
+                                "key_name": key_data['name'] # ✅ Add key name
+                            })
+                    
+                    app.logger.info(f"✅ Found {len(accounts)} total accounts for key: {key_data['name']}")
+                else:
+                    app.logger.warning(f"⚠️ Key {key_data['name']} returned {response.status_code}")
+                    
+            except requests.exceptions.Timeout:
+                app.logger.warning(f"⏰ Timeout for key: {key_data['name']}")
+            except requests.exceptions.ConnectionError as e:
+                app.logger.warning(f"🔌 Connection error for key {key_data['name']}: {e}")
+            except Exception as e:
+                app.logger.warning(f"❌ Error fetching accounts for key {key_data['name']}: {e}")
         
-        response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
+        app.logger.info(f"✅ Found {len(all_facebook_accounts)} total Facebook accounts across all keys")
         
-        if response.status_code == 200:
-            data = response.json()
-            accounts = data.get('accounts', [])
-            
-            facebook_accounts = []
-            for account in accounts:
-                if account.get('platform') == 'facebook':
-                    facebook_accounts.append({
-                        "id": account.get('_id'),
-                        "name": account.get('displayName', 'Unknown'),
-                        "page_id": account.get('profileData', {}).get('id', 'N/A'),
-                        "username": account.get('username', 'N/A'),
-                        "status": account.get('platformStatus', 'unknown')
-                    })
-            
-            app.logger.info(f"✅ Found {len(facebook_accounts)} Facebook accounts for key: {key['name']}")
-            
-            return jsonify({
-                "status": "success", 
-                "accounts": facebook_accounts, 
-                "total": len(facebook_accounts),
-                "key_name": key['name'],
-                "key_id": key['id']
-            })
-        else:
-            app.logger.error(f"❌ Zernio API error: {response.status_code} - {response.text[:200]}")
-            return jsonify({
-                "status": "error", 
-                "message": f"Zernio API returned {response.status_code}", 
-                "accounts": []
-            }), 500
-            
-    except requests.exceptions.Timeout:
-        app.logger.error("❌ Zernio API timeout")
-        return jsonify({"status": "error", "message": "Connection timeout", "accounts": []}), 500
-    except requests.exceptions.ConnectionError as e:
-        app.logger.error(f"❌ Zernio connection error: {e}")
-        return jsonify({"status": "error", "message": str(e), "accounts": []}), 500
+        return jsonify({
+            "status": "success", 
+            "accounts": all_facebook_accounts, 
+            "total": len(all_facebook_accounts),
+            "keys_processed": len(ZERNIO_KEYS)
+        })
+        
     except Exception as e:
         app.logger.error(f"❌ Error fetching Zernio accounts: {e}")
         import traceback
