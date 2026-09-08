@@ -1052,6 +1052,7 @@ function populateEditFacebookAccounts(selectedId) {
     console.log('🔍 zernioAccounts in edit:', zernioAccounts);
     console.log('🔍 selectedId:', selectedId);
     
+    // ✅ USE zernioAccounts DIRECTLY (has ALL 4 accounts)
     if (!zernioAccounts || zernioAccounts.length === 0) {
         const option = document.createElement('option');
         option.value = '';
@@ -1071,6 +1072,7 @@ function populateEditFacebookAccounts(selectedId) {
     
     let foundSelected = false;
     
+    // ✅ Add optgroups with key names
     Object.keys(grouped).forEach(keyName => {
         const optgroup = document.createElement('optgroup');
         optgroup.label = `🔑 ${keyName}`;
@@ -1093,9 +1095,8 @@ function populateEditFacebookAccounts(selectedId) {
         select.appendChild(optgroup);
     });
     
-    // If the selected account wasn't found, add it as a disabled option
+    // If the selected account wasn't found, try to find it
     if (selectedId && !foundSelected) {
-        // Try to find the account in zernioAccounts
         const account = zernioAccounts.find(a => a.id === selectedId);
         if (account) {
             const option = document.createElement('option');
