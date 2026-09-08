@@ -1035,7 +1035,10 @@ function populatePipelineFacebookAccounts(accounts) {
 
 function populateEditFacebookAccounts(selectedId) {
     const select = document.getElementById('edit-pipeline-facebook-account');
-    if (!select) return;
+    if (!select) {
+        console.warn('⚠️ edit-pipeline-facebook-account not found');
+        return;
+    }
     
     select.innerHTML = '';
     
@@ -1046,7 +1049,9 @@ function populateEditFacebookAccounts(selectedId) {
     defaultOption.selected = true;
     select.appendChild(defaultOption);
     
-    // ✅ Use zernioAccounts (which has ALL accounts from ALL keys)
+    console.log('🔍 zernioAccounts in edit:', zernioAccounts);
+    console.log('🔍 selectedId:', selectedId);
+    
     if (!zernioAccounts || zernioAccounts.length === 0) {
         const option = document.createElement('option');
         option.value = '';
@@ -1066,7 +1071,6 @@ function populateEditFacebookAccounts(selectedId) {
     
     let foundSelected = false;
     
-    // ✅ Add optgroups with key names
     Object.keys(grouped).forEach(keyName => {
         const optgroup = document.createElement('optgroup');
         optgroup.label = `🔑 ${keyName}`;
@@ -1078,10 +1082,10 @@ function populateEditFacebookAccounts(selectedId) {
             option.dataset.keyId = account.key_id || '';
             option.dataset.keyName = account.key_name || '';
             
-            // ✅ Check if this account matches the pipeline's account
             if (account.id === selectedId) {
                 option.selected = true;
                 foundSelected = true;
+                console.log(`✅ Found selected account: ${account.name} (${account.id}) in key: ${keyName}`);
             }
             optgroup.appendChild(option);
         });
@@ -1089,18 +1093,31 @@ function populateEditFacebookAccounts(selectedId) {
         select.appendChild(optgroup);
     });
     
-    // ✅ If the selected account wasn't found, add it as a disabled option
+    // If the selected account wasn't found, add it as a disabled option
     if (selectedId && !foundSelected) {
-        const option = document.createElement('option');
-        option.value = selectedId;
-        option.textContent = `⚠️ ${selectedId} (not in current keys)`;
-        option.disabled = true;
-        option.selected = true;
-        select.appendChild(option);
-        console.warn(`⚠️ Account ${selectedId} not found in zernioAccounts`);
+        // Try to find the account in zernioAccounts
+        const account = zernioAccounts.find(a => a.id === selectedId);
+        if (account) {
+            const option = document.createElement('option');
+            option.value = account.id;
+            option.textContent = `${account.name} (${account.key_name})`;
+            option.dataset.keyId = account.key_id || '';
+            option.dataset.keyName = account.key_name || '';
+            option.selected = true;
+            select.appendChild(option);
+            console.log(`✅ Added selected account: ${account.name}`);
+        } else {
+            const option = document.createElement('option');
+            option.value = selectedId;
+            option.textContent = `⚠️ ${selectedId}`;
+            option.disabled = true;
+            option.selected = true;
+            select.appendChild(option);
+            console.warn(`⚠️ Account ${selectedId} not found in zernioAccounts`);
+        }
     }
     
-    console.log(`✅ Populated edit dropdown with ${zernioAccounts.length} accounts, selected: ${selectedId} (found: ${foundSelected})`);
+    console.log(`✅ Populated edit dropdown with ${zernioAccounts.length} accounts, found: ${foundSelected}`);
 }
 
 // ==================== FORCE REFRESH ACCOUNTS ====================

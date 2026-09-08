@@ -544,6 +544,9 @@
     </div>
 </div>
 
+
+
+
 <!-- ============ EDIT PIPELINE MODAL ============ -->
 <div id="edit-pipeline-modal" class="modal-overlay" hidden>
     <div class="modal-content premium-card">
@@ -567,7 +570,7 @@
             </div>
             
             <div class="form-group">
-                <label for="edit-pipeline-facebook-account">Facebook Account ID</label>
+                <label for="edit-pipeline-facebook-account">Facebook Account</label>
                 <select id="edit-pipeline-facebook-account" class="input-field">
                     <option value="">Select Facebook account...</option>
                 </select>
@@ -576,6 +579,12 @@
             <div class="form-group">
                 <label for="edit-pipeline-daily-limit">Daily Post Limit</label>
                 <input type="number" id="edit-pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />
+            </div>
+            
+            <!-- ✅ ZERNIO KEY INFO - Shows current key assigned to pipeline -->
+            <div class="form-group">
+                <label>🔑 Current Zernio Key</label>
+                <div id="edit-pipeline-key-info" style="padding: 8px 12px; background: var(--bg-secondary); border-radius: 4px; font-size: 13px; border-left: 3px solid var(--accent);" hidden></div>
             </div>
             
             <div class="form-group checkbox-group">
@@ -593,8 +602,6 @@
         </div>
     </div>
 </div>
-
-
 
 
 
