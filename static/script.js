@@ -2497,50 +2497,64 @@ async function deletePipeline(pipelineId, pipelineName) {
 // ==================== EDIT PIPELINE FUNCTIONS ====================
 
 async function editPipeline(pipelineId) {
-  const modal = document.getElementById('edit-pipeline-modal');
-  const status = document.getElementById('edit-pipeline-status');
-  
-  modal.hidden = false;
-  status.style.display = 'none';
-  status.className = 'status-message';
-  
-  try {
-    const response = await fetch(`/api/pipelines/${pipelineId}`, {
-      credentials: 'same-origin'
-    });
-    const data = await response.json();
+    const modal = document.getElementById('edit-pipeline-modal');
+    const status = document.getElementById('edit-pipeline-status');
     
-    if (data.status === 'success' && data.pipeline) {
-      const pipeline = data.pipeline;
-      
-      document.getElementById('edit-pipeline-id').value = pipeline.id;
-      document.getElementById('edit-pipeline-name').value = pipeline.name || '';
-      document.getElementById('edit-pipeline-username').value = pipeline.profile_username || '';
-      document.getElementById('edit-pipeline-daily-limit').value = pipeline.daily_limit || 2;
-      document.getElementById('edit-pipeline-active').checked = pipeline.is_active;
-      
-      // ✅ Show current key info
-      const keyInfoEl = document.getElementById('edit-pipeline-key-info');
-      if (keyInfoEl) {
-        if (pipeline.zernio_key_id) {
-          const key = zernioKeys.find(k => k.id === pipeline.zernio_key_id);
-          keyInfoEl.textContent = `🔑 Current Key: ${key ? key.name : 'Unknown'}`;
-          keyInfoEl.style.color = 'var(--success)';
+    modal.hidden = false;
+    status.style.display = 'none';
+    status.className = 'status-message';
+    
+    try {
+        const response = await fetch(`/api/pipelines/${pipelineId}`, {
+            credentials: 'same-origin'
+        });
+        const data = await response.json();
+        
+        if (data.status === 'success' && data.pipeline) {
+            const pipeline = data.pipeline;
+            
+            document.getElementById('edit-pipeline-id').value = pipeline.id;
+            document.getElementById('edit-pipeline-name').value = pipeline.name || '';
+            document.getElementById('edit-pipeline-username').value = pipeline.profile_username || '';
+            document.getElementById('edit-pipeline-daily-limit').value = pipeline.daily_limit || 2;
+            document.getElementById('edit-pipeline-active').checked = pipeline.is_active;
+            
+            // ✅ Show current account AND key info
+            const keyInfoEl = document.getElementById('edit-pipeline-key-info');
+            if (keyInfoEl) {
+                let accountName = 'Unknown Account';
+                let keyName = 'No key';
+                
+                // Find the account in zernioAccounts
+                const account = zernioAccounts.find(a => a.id === pipeline.facebook_account_id);
+                if (account) {
+                    accountName = account.name || account.id;
+                }
+                
+                if (pipeline.zernio_key_id) {
+                    const key = zernioKeys.find(k => k.id === pipeline.zernio_key_id);
+                    keyName = key ? key.name : 'Unknown Key';
+                    keyInfoEl.textContent = `📱 ${accountName} (🔑 ${keyName})`;
+                    keyInfoEl.style.color = 'var(--success)';
+                    keyInfoEl.style.borderLeftColor = '#22c55e';
+                } else {
+                    keyInfoEl.textContent = `⚠️ ${accountName} - No key assigned!`;
+                    keyInfoEl.style.color = 'var(--error)';
+                    keyInfoEl.style.borderLeftColor = '#ef4444';
+                }
+                keyInfoEl.hidden = false;
+            }
+            
+            // ✅ Populate accounts and select the current one
+            await populateEditFacebookAccounts(pipeline.facebook_account_id);
+            
         } else {
-          keyInfoEl.textContent = '⚠️ No key assigned!';
-          keyInfoEl.style.color = 'var(--error)';
+            showEditPipelineStatus('❌ Failed to load pipeline data', 'error');
         }
-        keyInfoEl.hidden = false;
-      }
-      
-      await populateEditFacebookAccounts(pipeline.facebook_account_id);
-    } else {
-      showEditPipelineStatus('❌ Failed to load pipeline data', 'error');
+    } catch (error) {
+        console.error('Error loading pipeline:', error);
+        showEditPipelineStatus(`❌ Error: ${error.message}`, 'error');
     }
-  } catch (error) {
-    console.error('Error loading pipeline:', error);
-    showEditPipelineStatus(`❌ Error: ${error.message}`, 'error');
-  }
 }
 
 async function populateEditFacebookAccounts(selectedId) {
