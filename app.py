@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import json
 import time
+import io
 import base64
 import random
 from datetime import datetime, timedelta
@@ -523,6 +524,411 @@ def get_key_usage_status(key_id):
 # Load Zernio keys on startup
 load_zernio_keys()
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ============== VIDEO URL GETTER FUNCTIONS ==============
+
+def get_direct_video_url_from_service(instagram_url):
+    """
+    Get direct video URL from the Instagram video URL getter service.
+    This replaces the yt-dlp + cookies approach.
+    """
+    try:
+        app.logger.info(f"📥 Fetching video URL from service: {IG_VIDEO_URL_GETTER}")
+        
+        response = requests.post(
+            f"{IG_VIDEO_URL_GETTER}/api/download",
+            json={"url": instagram_url},
+            timeout=60,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                video_data = data.get('data', {})
+                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
+                
+                if download_url:
+                    app.logger.info(f"✅ Video URL fetched from service: {download_url[:50]}...")
+                    return download_url
+                else:
+                    app.logger.warning(f"⚠️ No download URL in response")
+                    return None
+            else:
+                app.logger.warning(f"⚠️ Service returned error: {data.get('error')}")
+                return None
+        else:
+            app.logger.error(f"❌ Service returned {response.status_code}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        app.logger.error(f"⏰ Service timeout after 60s")
+        return None
+    except requests.exceptions.ConnectionError:
+        app.logger.error(f"🔌 Connection error to {IG_VIDEO_URL_GETTER}")
+        return None
+    except Exception as e:
+        app.logger.error(f"❌ Error fetching video URL: {e}")
+        return None
+
+
+def get_direct_video_url(url, media_id=None):
+    """
+    Get direct video URL using the Instagram video URL getter service.
+    Falls back to cache if service fails.
+    """
+    # Try the service first
+    video_url = get_direct_video_url_from_service(url)
+    
+    if video_url:
+        cache_direct_url(url, video_url, '')
+        app.logger.info(f"✅ Video URL fetched from service: {video_url[:50]}...")
+        return video_url
+    
+    # Try cache as fallback
+    video_url = get_direct_url_from_cache_only(url)
+    if video_url:
+        app.logger.info(f"✅ Video URL found in cache: {video_url[:50]}...")
+        return video_url
+    
+    app.logger.error(f"❌ No video URL found for: {url[:50]}...")
+    return None
+
+
+def get_video_with_captions(reel_url):
+    """
+    Get video URL and caption using the Instagram video URL getter service.
+    """
+    try:
+        app.logger.info(f"📥 Fetching video from service: {IG_VIDEO_URL_GETTER}")
+        
+        response = requests.post(
+            f"{IG_VIDEO_URL_GETTER}/api/download",
+            json={"url": reel_url},
+            timeout=60,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                video_data = data.get('data', {})
+                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
+                
+                if download_url:
+                    caption = video_data.get('caption', '') or ''
+                    thumbnail = video_data.get('thumbnail') or video_data.get('thumbnailUrl')
+                    
+                    app.logger.info(f"✅ Video URL fetched from service")
+                    return download_url, caption, thumbnail
+                else:
+                    app.logger.warning(f"⚠️ No download URL in response")
+                    return None, None, None
+            else:
+                app.logger.warning(f"⚠️ Service error: {data.get('error')}")
+                return None, None, None
+        else:
+            app.logger.error(f"❌ Service returned {response.status_code}")
+            return None, None, None
+            
+    except requests.exceptions.Timeout:
+        app.logger.error(f"⏰ Service timeout")
+        return None, None, None
+    except Exception as e:
+        app.logger.error(f"❌ Error: {e}")
+        return None, None, None
+
+
+def get_direct_url_with_caption_cache(reel_url):
+    conn = get_db_connection()
+    if not conn:
+        video_url, caption, _ = get_video_with_captions(reel_url)
+        return video_url, caption
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT direct_url, caption FROM reel_cache 
+            WHERE reel_url = %s AND created_at > NOW() - INTERVAL '7 days'
+        """, (reel_url,))
+        result = cur.fetchone()
+        if result and result[0]:
+            app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
+            return result[0], result[1] or ''
+        direct_url, caption, _ = get_video_with_captions(reel_url)
+        if direct_url:
+            cur.execute("""
+                INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (reel_url) DO UPDATE SET 
+                    direct_url = EXCLUDED.direct_url,
+                    caption = EXCLUDED.caption,
+                    created_at = NOW()
+            """, (reel_url, direct_url, caption or ''))
+            conn.commit()
+            app.logger.info(f"✅ Cached direct URL and caption for: {reel_url[:50]}...")
+        return direct_url, caption
+    except Exception as e:
+        app.logger.error(f"Error getting cached direct URL: {e}")
+        video_url, caption, _ = get_video_with_captions(reel_url)
+        return video_url, caption
+    finally:
+        cur.close()
+        conn.close()
+
+
+def download_video_file(url, media_id=None):
+    job_dir = os.path.join('/tmp', f"igdl_{uuid.uuid4().hex[:8]}")
+    os.makedirs(job_dir, exist_ok=True)
+    outtmpl = os.path.join(job_dir, "%(id)s.%(ext)s")
+    opts = base_ydl_opts({"outtmpl": outtmpl})
+    if media_id:
+        opts["playlist_items"] = None
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except yt_dlp.utils.DownloadError as e:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise Exception(clean_error(str(e)))
+    except Exception as e:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise Exception("Download failed: " + str(e))
+    entries = info.get("entries") if "entries" in info else [info]
+    entries = [e for e in entries if e]
+    target = None
+    if media_id:
+        target = next((e for e in entries if e.get("id") == media_id), None)
+    if target is None and entries:
+        target = entries[0]
+    if target is None:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise Exception("No video found to download.")
+    filepath = target.get("requested_downloads", [{}])[0].get("filepath") or os.path.join(
+        job_dir, f"{target.get('id')}.{target.get('ext', 'mp4')}"
+    )
+    if not os.path.exists(filepath):
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise Exception("File was fetched but couldn't be located.")
+    return filepath, job_dir, target
+
+
+def base_ydl_opts(extra=None):
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "format": "best",
+        "nocheckcertificate": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        },
+    }
+
+    cookie_file = get_cookie_file()
+    if cookie_file and os.path.exists(cookie_file):
+        opts["cookiefile"] = cookie_file
+        app.logger.info(f"Using cookies from: {cookie_file}")
+
+    if extra:
+        opts.update(extra)
+    return opts
+
+
+def clean_error(msg: str) -> str:
+    msg = msg.replace("ERROR: ", "").strip()
+    if "Private" in msg or "login" in msg.lower():
+        return "This post is private or requires login — it can't be downloaded."
+    if "Video unavailable" in msg:
+        return "The video is unavailable. It may have been removed or is restricted."
+    if "rate limited" in msg.lower():
+        return "Too many requests. Please wait a moment and try again."
+    if "cookies" in msg.lower() or "cookie" in msg.lower():
+        return "Authentication required. Please upload your cookies.json file."
+    if len(msg) > 160:
+        return "Couldn't process that link. Double-check it's a public post and try again."
+    return msg
+
+
+def store_caption_in_database(reel_url, caption, profile_username):
+    """Store caption in database for future use."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cur = conn.cursor()
+        
+        cur.execute("""
+            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+            VALUES (%s, '', %s, NOW())
+            ON CONFLICT (reel_url) DO UPDATE SET 
+                caption = EXCLUDED.caption,
+                created_at = NOW()
+        """, (reel_url, caption))
+        conn.commit()
+        
+        if profile_username:
+            cur.execute("""
+                SELECT id, results FROM scraped_reels 
+                WHERE EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(results) AS elem
+                    WHERE elem->>'username' = %s
+                )
+                ORDER BY created_at DESC LIMIT 1
+            """, (profile_username,))
+            result = cur.fetchone()
+            if result:
+                results = result[1]
+                if isinstance(results, str):
+                    results = json.loads(results)
+                for profile_idx, profile in enumerate(results):
+                    if profile.get('username') == profile_username:
+                        for reel_idx, reel in enumerate(profile.get('reels', [])):
+                            if isinstance(reel, dict) and reel.get('url') == reel_url:
+                                results[profile_idx]['reels'][reel_idx]['caption'] = caption
+                                break
+                        break
+                cur.execute("""
+                    UPDATE scraped_reels SET results = %s, updated_at = NOW()
+                    WHERE id = %s
+                """, (json.dumps(results), result[0]))
+                conn.commit()
+        
+        cur.close()
+        conn.close()
+        app.logger.info(f"💾 Caption stored for: {reel_url[:50]}...")
+    except Exception as e:
+        app.logger.error(f"Error storing caption: {e}")
+
+
+def fetch_caption_from_service(reel_url, timeout=5, async_mode=True, webhook_url=None, 
+                                pipeline_id=None, profile_username=None, post_id=None):
+    """
+    Fetch caption from the caption service.
+    """
+    try:
+        caption_service_url = get_caption_service_url()
+        
+        payload = {"url": reel_url}
+        
+        if async_mode and webhook_url:
+            payload["webhook_url"] = webhook_url
+            payload["async"] = True
+            payload["pipeline_id"] = pipeline_id
+            payload["profile_username"] = profile_username
+            payload["post_id"] = post_id
+        
+        app.logger.info(f"📞 Fetching caption for: {reel_url[:50]}... (async={async_mode})")
+        
+        response = requests.post(
+            caption_service_url,
+            json=payload,
+            timeout=timeout,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                if async_mode:
+                    app.logger.info(f"✅ Async caption fetch triggered for: {reel_url[:50]}...")
+                    return None
+                else:
+                    caption = data.get('caption', '')
+                    app.logger.info(f"✅ Caption fetched: {caption[:50] if caption else 'Empty'}...")
+                    return caption
+        elif response.status_code in [202, 204]:
+            app.logger.info(f"✅ Async request accepted for: {reel_url[:50]}...")
+            return None
+        
+        return None
+        
+    except requests.exceptions.Timeout:
+        if async_mode:
+            app.logger.info(f"⏰ Async request sent (timeout expected) for: {reel_url[:50]}...")
+            return None
+        else:
+            app.logger.error(f"⏰ Timeout fetching caption for {reel_url[:50]}...")
+            raise
+    except Exception as e:
+        app.logger.error(f"Service error: {e}")
+        return None
+
+
+def cache_direct_url(reel_url, direct_url, caption=''):
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (reel_url) DO UPDATE SET 
+                direct_url = EXCLUDED.direct_url,
+                caption = EXCLUDED.caption,
+                created_at = NOW()
+        """, (reel_url, direct_url, caption))
+        conn.commit()
+        app.logger.info(f"✅ Cached CDN URL for: {reel_url[:50]}...")
+        return True
+    except Exception as e:
+        app.logger.error(f"Cache error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_direct_url_from_cache_only(reel_url):
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT direct_url FROM reel_cache WHERE reel_url = %s AND created_at > NOW() - INTERVAL '30 days'", (reel_url,))
+        result = cur.fetchone()
+        if result and result[0]:
+            app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
+            return result[0]
+        return None
+    except Exception as e:
+        app.logger.error(f"Cache lookup error: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+
+
+
+
+
+
+
+
+
 # ============== RANDOM TIME GENERATOR ==============
 
 def generate_random_post_times(num_posts, start_hour=0, end_hour=23):
@@ -642,27 +1048,6 @@ def fetch_captions_batch(reel_urls):
         app.logger.error(f"Caption service error: {e}")
         return {}
 
-def fetch_caption_from_service(reel_url):
-    """Fetch a single caption from the caption service - called during posting."""
-    try:
-        app.logger.info(f"📞 Fetching caption NOW for: {reel_url[:50]}...")
-        caption_service_url = get_caption_service_url()
-        response = requests.post(
-            caption_service_url,
-            json={"url": reel_url},
-            timeout=30,
-            headers={"Content-Type": "application/json"}
-        )
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success'):
-                caption = data.get('caption', '')
-                app.logger.info(f"✅ Caption fetched: {caption[:50] if caption else 'Empty'}...")
-                return caption
-        return None
-    except Exception as e:
-        app.logger.error(f"Caption service error for {reel_url}: {e}")
-        return None
 
 def process_reels_with_captions(reels):
     urls_to_fetch = []
@@ -1361,328 +1746,10 @@ def create_browserless_profile(cookies):
 
 
 
-def get_direct_video_url_from_service(instagram_url):
-    """
-    Get direct video URL from the Instagram video URL getter service.
-    This replaces the yt-dlp + cookies approach.
-    """
-    try:
-        app.logger.info(f"📥 Fetching video URL from service: {IG_VIDEO_URL_GETTER}")
-        
-        response = requests.post(
-            f"{IG_VIDEO_URL_GETTER}/api/download",
-            json={"url": instagram_url},
-            timeout=60,
-            headers={"Content-Type": "application/json"}
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success'):
-                video_data = data.get('data', {})
-                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
-                
-                if download_url:
-                    app.logger.info(f"✅ Video URL fetched from service: {download_url[:50]}...")
-                    return download_url
-                else:
-                    app.logger.warning(f"⚠️ No download URL in response: {data}")
-                    return None
-            else:
-                app.logger.warning(f"⚠️ Service returned error: {data.get('error')}")
-                return None
-        else:
-            app.logger.error(f"❌ Service returned {response.status_code}: {response.text[:200]}")
-            return None
-            
-    except requests.exceptions.Timeout:
-        app.logger.error(f"⏰ Service timeout after 60s")
-        return None
-    except requests.exceptions.ConnectionError:
-        app.logger.error(f"🔌 Connection error to {IG_VIDEO_URL_GETTER}")
-        return None
-    except Exception as e:
-        app.logger.error(f"❌ Error fetching video URL: {e}")
-        return None
-
-# ============== UPDATE YT-DLP FUNCTIONS ==============
-
-def get_direct_video_url(url, media_id=None):
-    """
-    Get direct video URL using the Instagram video URL getter service.
-    Falls back to yt-dlp if the service fails.
-    """
-    # ✅ Try the service first
-    video_url = get_direct_video_url_from_service(url)
-    
-    if video_url:
-        # Cache the URL
-        cache_direct_url(url, video_url, '')
-        return video_url
-    
-    # ⚠️ Fallback to yt-dlp if service fails
-    app.logger.warning(f"⚠️ Service failed, falling back to yt-dlp for: {url[:50]}...")
-    
-    opts = base_ydl_opts({"format": "best[ext=mp4]/best"})
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            entries = info.get("entries") if "entries" in info else [info]
-            entries = [e for e in entries if e]
-            target = None
-            if media_id:
-                target = next((e for e in entries if e.get("id") == media_id), None)
-            else:
-                target = entries[0] if entries else None
-            if not target:
-                return None
-            formats = target.get("formats", [])
-            if not formats:
-                return target.get("url") or target.get("webpage_url")
-            for fmt in formats:
-                if fmt.get("ext") == "mp4" and fmt.get("acodec") != "none" and fmt.get("vcodec") != "none":
-                    return fmt.get("url")
-            return formats[0].get("url") if formats else None
-    except Exception as e:
-        app.logger.error(f"❌ Fallback yt-dlp error: {e}")
-        return None
-
-def get_video_with_captions(reel_url):
-    """
-    Get video URL and caption using the Instagram video URL getter service.
-    """
-    try:
-        # ✅ Try the service first
-        app.logger.info(f"📥 Fetching video from service: {IG_VIDEO_URL_GETTER}")
-        
-        response = requests.post(
-            f"{IG_VIDEO_URL_GETTER}/api/download",
-            json={"url": reel_url},
-            timeout=60,
-            headers={"Content-Type": "application/json"}
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success'):
-                video_data = data.get('data', {})
-                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
-                
-                if download_url:
-                    # The service might also return a caption
-                    caption = video_data.get('caption', '') or ''
-                    thumbnail = video_data.get('thumbnail') or video_data.get('thumbnailUrl')
-                    
-                    app.logger.info(f"✅ Video URL fetched from service")
-                    return download_url, caption, thumbnail
-                else:
-                    app.logger.warning(f"⚠️ No download URL in response")
-                    return None, None, None
-            else:
-                app.logger.warning(f"⚠️ Service error: {data.get('error')}")
-                return None, None, None
-        else:
-            app.logger.error(f"❌ Service returned {response.status_code}")
-            return None, None, None
-            
-    except requests.exceptions.Timeout:
-        app.logger.error(f"⏰ Service timeout")
-        return None, None, None
-    except Exception as e:
-        app.logger.error(f"❌ Error: {e}")
-        return None, None, None
 
 
 
 
-
-
-
-
-def base_ydl_opts(extra=None):
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "format": "best",
-        "nocheckcertificate": True,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        },
-    }
-
-    cookie_file = get_cookie_file()
-    if cookie_file and os.path.exists(cookie_file):
-        opts["cookiefile"] = cookie_file
-        app.logger.info(f"Using cookies from: {cookie_file}")
-
-    if extra:
-        opts.update(extra)
-    return opts
-
-def get_video_with_captions(reel_url):
-    try:
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "format": "best[ext=mp4]/best",
-            "nocheckcertificate": True,
-            "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            "extract_flat": False,
-            "writeinfo": True
-        }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(reel_url, download=False)
-            caption = info.get('description') or info.get('title') or ''
-            caption = caption.strip()
-            if len(caption) > 5000:
-                caption = caption[:4997] + "..."
-            entries = info.get("entries") if "entries" in info else [info]
-            entries = [e for e in entries if e]
-            target = entries[0] if entries else None
-            if not target:
-                return None, None, None
-            thumbnail = target.get('thumbnail') or info.get('thumbnail')
-            formats = target.get("formats", [])
-            if not formats:
-                video_url = target.get("url") or target.get("webpage_url")
-            else:
-                video_url = None
-                for fmt in formats:
-                    if fmt.get("ext") == "mp4" and fmt.get("acodec") != "none" and fmt.get("vcodec") != "none":
-                        video_url = fmt.get("url")
-                        break
-                if not video_url:
-                    video_url = formats[0].get("url") if formats else None
-            return video_url, caption, thumbnail
-    except Exception as e:
-        app.logger.error(f"Error extracting video with captions: {e}")
-        return None, None, None
-
-def get_direct_video_url(url, media_id=None):
-    """
-    Get direct video URL using the Instagram video URL getter service.
-    Falls back to yt-dlp if the service fails.
-    """
-    # ✅ Try the service first
-    video_url = get_direct_video_url_from_service(url)
-    
-    if video_url:
-        # Cache the URL
-        cache_direct_url(url, video_url, '')
-        return video_url
-    
-    # ⚠️ Fallback to yt-dlp if service fails
-    app.logger.warning(f"⚠️ Service failed, falling back to yt-dlp for: {url[:50]}...")
-    
-    opts = base_ydl_opts({"format": "best[ext=mp4]/best"})
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            entries = info.get("entries") if "entries" in info else [info]
-            entries = [e for e in entries if e]
-            target = None
-            if media_id:
-                target = next((e for e in entries if e.get("id") == media_id), None)
-            else:
-                target = entries[0] if entries else None
-            if not target:
-                return None
-            formats = target.get("formats", [])
-            if not formats:
-                return target.get("url") or target.get("webpage_url")
-            for fmt in formats:
-                if fmt.get("ext") == "mp4" and fmt.get("acodec") != "none" and fmt.get("vcodec") != "none":
-                    return fmt.get("url")
-            return formats[0].get("url") if formats else None
-    except Exception as e:
-        app.logger.error(f"❌ Fallback yt-dlp error: {e}")
-        return None
-
-def get_direct_url_with_caption_cache(reel_url):
-    conn = get_db_connection()
-    if not conn:
-        video_url, caption, _ = get_video_with_captions(reel_url)
-        return video_url, caption
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT direct_url, caption FROM reel_cache 
-            WHERE reel_url = %s AND created_at > NOW() - INTERVAL '7 days'
-        """, (reel_url,))
-        result = cur.fetchone()
-        if result and result[0]:
-            app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
-            return result[0], result[1] or ''
-        direct_url, caption, _ = get_video_with_captions(reel_url)
-        if direct_url:
-            cur.execute("""
-                INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
-                VALUES (%s, %s, %s, NOW())
-                ON CONFLICT (reel_url) DO UPDATE SET 
-                    direct_url = EXCLUDED.direct_url,
-                    caption = EXCLUDED.caption,
-                    created_at = NOW()
-            """, (reel_url, direct_url, caption or ''))
-            conn.commit()
-            app.logger.info(f"✅ Cached direct URL and caption for: {reel_url[:50]}...")
-        return direct_url, caption
-    except Exception as e:
-        app.logger.error(f"Error getting cached direct URL: {e}")
-        video_url, caption, _ = get_video_with_captions(reel_url)
-        return video_url, caption
-    finally:
-        cur.close()
-        conn.close()
-
-def download_video_file(url, media_id=None):
-    job_dir = os.path.join('/tmp', f"igdl_{uuid.uuid4().hex[:8]}")
-    os.makedirs(job_dir, exist_ok=True)
-    outtmpl = os.path.join(job_dir, "%(id)s.%(ext)s")
-    opts = base_ydl_opts({"outtmpl": outtmpl})
-    if media_id:
-        opts["playlist_items"] = None
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except yt_dlp.utils.DownloadError as e:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise Exception(clean_error(str(e)))
-    except Exception as e:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise Exception("Download failed: " + str(e))
-    entries = info.get("entries") if "entries" in info else [info]
-    entries = [e for e in entries if e]
-    target = None
-    if media_id:
-        target = next((e for e in entries if e.get("id") == media_id), None)
-    if target is None and entries:
-        target = entries[0]
-    if target is None:
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise Exception("No video found to download.")
-    filepath = target.get("requested_downloads", [{}])[0].get("filepath") or os.path.join(
-        job_dir, f"{target.get('id')}.{target.get('ext', 'mp4')}"
-    )
-    if not os.path.exists(filepath):
-        shutil.rmtree(job_dir, ignore_errors=True)
-        raise Exception("File was fetched but couldn't be located.")
-    return filepath, job_dir, target
-
-def clean_error(msg: str) -> str:
-    msg = msg.replace("ERROR: ", "").strip()
-    if "Private" in msg or "login" in msg.lower():
-        return "This post is private or requires login — it can't be downloaded."
-    if "Video unavailable" in msg:
-        return "The video is unavailable. It may have been removed or is restricted."
-    if "rate limited" in msg.lower():
-        return "Too many requests. Please wait a moment and try again."
-    if "cookies" in msg.lower() or "cookie" in msg.lower():
-        return "Authentication required. Please upload your cookies.json file."
-    if len(msg) > 160:
-        return "Couldn't process that link. Double-check it's a public post and try again."
-    return msg
 
 # ============== BLUESKY FUNCTIONS ==============
 
@@ -2325,6 +2392,20 @@ def process_pending_post(post):
         except:
             pass
         return False
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
 def get_caption_for_reel(reel_url, profile_username, pipeline_id, max_retries=3):
     """
@@ -2504,58 +2585,7 @@ def fetch_caption_from_service(reel_url, timeout=5, async_mode=True, webhook_url
         app.logger.error(f"Service error: {e}")
         return None
 
-def store_caption_in_database(reel_url, caption, profile_username):
-    """Store caption in database for future use."""
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    try:
-        cur = conn.cursor()
-        
-        # Store in reel_cache
-        cur.execute("""
-            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
-            VALUES (%s, '', %s, NOW())
-            ON CONFLICT (reel_url) DO UPDATE SET 
-                caption = EXCLUDED.caption,
-                created_at = NOW()
-        """, (reel_url, caption))
-        conn.commit()
-        
-        # Update scraped_reels if possible
-        if profile_username:
-            cur.execute("""
-                SELECT id, results FROM scraped_reels 
-                WHERE EXISTS (
-                    SELECT 1 FROM jsonb_array_elements(results) AS elem
-                    WHERE elem->>'username' = %s
-                )
-                ORDER BY created_at DESC LIMIT 1
-            """, (profile_username,))
-            result = cur.fetchone()
-            if result:
-                results = result[1]
-                if isinstance(results, str):
-                    results = json.loads(results)
-                for profile_idx, profile in enumerate(results):
-                    if profile.get('username') == profile_username:
-                        for reel_idx, reel in enumerate(profile.get('reels', [])):
-                            if isinstance(reel, dict) and reel.get('url') == reel_url:
-                                results[profile_idx]['reels'][reel_idx]['caption'] = caption
-                                break
-                        break
-                cur.execute("""
-                    UPDATE scraped_reels SET results = %s, updated_at = NOW()
-                    WHERE id = %s
-                """, (json.dumps(results), result[0]))
-                conn.commit()
-        
-        cur.close()
-        conn.close()
-        app.logger.info(f"💾 Caption stored for: {reel_url[:50]}...")
-    except Exception as e:
-        app.logger.error(f"Error storing caption: {e}")
+
 
 def store_caption_in_database(reel_url, caption, profile_username):
     """Store caption in database for future use."""
@@ -3671,6 +3701,18 @@ def download_video():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route("/api/commands/download", methods=["POST"])
 def api_download():
     data = request.get_json(silent=True) or {}
@@ -3686,225 +3728,93 @@ def api_download():
     try:
         response = {"status": "success", "url": url, "media_id": media_id, "action": action, "timestamp": datetime.utcnow().isoformat()}
         
-        # ========== FIRST ATTEMPT: Try with existing cookies ==========
-        with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
-            info = ydl.extract_info(url, download=False)
+        # ✅ USE THE VIDEO URL GETTER SERVICE - NO MORE YT-DLP!
+        app.logger.info(f"📥 Fetching video from service: {IG_VIDEO_URL_GETTER}")
         
-        entries = info.get("entries") if "entries" in info else [info]
-        entries = [e for e in entries if e]
-        if not entries:
-            return jsonify({"error": "No videos found"}), 422
+        service_response = requests.post(
+            f"{IG_VIDEO_URL_GETTER}/api/download",
+            json={"url": url},
+            timeout=60,
+            headers={"Content-Type": "application/json"}
+        )
         
-        target = entries[0]
-        if media_id:
-            target = next((e for e in entries if e.get("id") == media_id), None) or target
-        
-        video_info = {
-            "id": target.get("id"),
-            "title": target.get("title", "Instagram video"),
-            "duration": target.get("duration"),
-            "uploader": target.get("uploader") or target.get("uploader_id"),
-            "thumbnail": target.get("thumbnail"),
-            "ext": target.get("ext", "mp4")
-        }
-        response["video_info"] = video_info
-        session['current_video_url'] = get_direct_video_url(url, media_id)
-        session['current_video_title'] = video_info.get('title')
-        session['current_video_thumbnail'] = video_info.get('thumbnail')
-        
-        if action == "url_only":
-            direct_url = get_direct_video_url(url, media_id)
-            if direct_url:
-                response["download_url"] = direct_url
-            else:
-                response["download_url"] = f"/api/download?url={url}&id={media_id}"
-                response["warning"] = "Direct URL not available, using streaming fallback"
-        elif action == "download":
-            filepath, job_dir, target = download_video_file(url, media_id)
-            download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
-            @after_this_request
-            def cleanup(response_obj):
-                shutil.rmtree(job_dir, ignore_errors=True)
-                return response_obj
-            return send_file(filepath, as_attachment=True, download_name=download_name)
-        else:
-            return jsonify({"error": f"Unknown action: {action}"}), 400
-        return jsonify(response)
-        
-    except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        app.logger.warning(f"⚠️ Download error: {error_msg[:200]}")
-        
-        # ========== CHECK IF IT'S A PRIVATE/LOGIN ERROR ==========
-        if "private" in error_msg.lower() or "login" in error_msg.lower() or "cookie" in error_msg.lower():
-            app.logger.info("🔄 Private/login error detected. Attempting to extract fresh cookies...")
+        if service_response.status_code == 200:
+            service_data = service_response.json()
             
-            # ========== STEP 1: Extract fresh cookies from Render service ==========
-            extraction_success = extract_cookies_from_render_service()
-            
-            if extraction_success:
-                app.logger.info("✅ Fresh cookies extracted. Retrying download...")
+            if service_data.get('success'):
+                video_data = service_data.get('data', {})
+                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
                 
-                try:
-                    # ========== STEP 2: Retry with fresh cookies ==========
-                    with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
-                        info = ydl.extract_info(url, download=False)
+                if download_url:
+                    app.logger.info(f"✅ Video URL fetched from service")
                     
-                    entries = info.get("entries") if "entries" in info else [info]
-                    entries = [e for e in entries if e]
-                    if not entries:
-                        return jsonify({"error": "No videos found after retry"}), 422
-                    
-                    target = entries[0]
-                    if media_id:
-                        target = next((e for e in entries if e.get("id") == media_id), None) or target
-                    
+                    # Get video info
                     video_info = {
-                        "id": target.get("id"),
-                        "title": target.get("title", "Instagram video"),
-                        "duration": target.get("duration"),
-                        "uploader": target.get("uploader") or target.get("uploader_id"),
-                        "thumbnail": target.get("thumbnail"),
-                        "ext": target.get("ext", "mp4")
+                        "id": media_id or video_data.get('id', 'instagram_video'),
+                        "title": video_data.get('filename', 'Instagram video'),
+                        "duration": None,
+                        "uploader": None,
+                        "thumbnail": video_data.get('thumbnail') or video_data.get('thumbnailUrl'),
+                        "ext": "mp4"
                     }
+                    
                     response["video_info"] = video_info
-                    session['current_video_url'] = get_direct_video_url(url, media_id)
+                    session['current_video_url'] = download_url
                     session['current_video_title'] = video_info.get('title')
                     session['current_video_thumbnail'] = video_info.get('thumbnail')
                     
                     if action == "url_only":
-                        direct_url = get_direct_video_url(url, media_id)
-                        if direct_url:
-                            response["download_url"] = direct_url
-                            response["cookies_refreshed"] = True
-                            response["message"] = "Cookies were automatically refreshed"
-                        else:
-                            response["download_url"] = f"/api/download?url={url}&id={media_id}"
-                            response["warning"] = "Direct URL not available, using streaming fallback"
+                        response["download_url"] = download_url
+                        return jsonify(response)
+                        
                     elif action == "download":
-                        filepath, job_dir, target = download_video_file(url, media_id)
-                        download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
-                        @after_this_request
-                        def cleanup(response_obj):
-                            shutil.rmtree(job_dir, ignore_errors=True)
-                            return response_obj
-                        return send_file(filepath, as_attachment=True, download_name=download_name)
+                        # Download the video
+                        try:
+                            video_response = requests.get(download_url, stream=True, timeout=60)
+                            if video_response.status_code == 200:
+                                filename = video_data.get('filename', 'instagram_video.mp4')
+                                # Create a BytesIO object
+                                from io import BytesIO
+                                video_bytes = BytesIO(video_response.content)
+                                return send_file(
+                                    video_bytes,
+                                    as_attachment=True,
+                                    download_name=filename,
+                                    mimetype='video/mp4'
+                                )
+                            else:
+                                app.logger.warning(f"⚠️ Download failed: {video_response.status_code}")
+                                response["warning"] = "Could not download video, but URL is available"
+                                response["download_url"] = download_url
+                                return jsonify(response)
+                        except Exception as e:
+                            app.logger.error(f"❌ Download error: {e}")
+                            response["warning"] = "Could not download video, but URL is available"
+                            response["download_url"] = download_url
+                            return jsonify(response)
+                            
                     else:
                         return jsonify({"error": f"Unknown action: {action}"}), 400
-                    
-                    app.logger.info("✅ Retry successful with fresh cookies!")
-                    return jsonify(response)
-                    
-                except yt_dlp.utils.DownloadError as retry_error:
-                    retry_msg = str(retry_error)
-                    app.logger.error(f"❌ Retry still failed: {retry_msg[:200]}")
-                    
-                    # ========== STEP 3: If retry still fails, call Browserless refresh ==========
-                    if "login required" in retry_msg.lower() or "private" in retry_msg.lower() or "rate-limit" in retry_msg.lower():
-                        app.logger.info("🔄 Cookies still not working, attempting Browserless profile refresh...")
-                        
-                        refresh_result = refresh_browserless_profile()
-                        
-                        if refresh_result.get('success'):
-                            app.logger.info("✅ Browserless profile refreshed, retrying download one more time...")
-                            
-                            try:
-                                # ========== STEP 4: Final retry after Browserless refresh ==========
-                                with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
-                                    info = ydl.extract_info(url, download=False)
-                                
-                                entries = info.get("entries") if "entries" in info else [info]
-                                entries = [e for e in entries if e]
-                                if not entries:
-                                    return jsonify({"error": "No videos found after refresh"}), 422
-                                
-                                target = entries[0]
-                                if media_id:
-                                    target = next((e for e in entries if e.get("id") == media_id), None) or target
-                                
-                                video_info = {
-                                    "id": target.get("id"),
-                                    "title": target.get("title", "Instagram video"),
-                                    "duration": target.get("duration"),
-                                    "uploader": target.get("uploader") or target.get("uploader_id"),
-                                    "thumbnail": target.get("thumbnail"),
-                                    "ext": target.get("ext", "mp4")
-                                }
-                                response["video_info"] = video_info
-                                session['current_video_url'] = get_direct_video_url(url, media_id)
-                                session['current_video_title'] = video_info.get('title')
-                                session['current_video_thumbnail'] = video_info.get('thumbnail')
-                                
-                                if action == "url_only":
-                                    direct_url = get_direct_video_url(url, media_id)
-                                    if direct_url:
-                                        response["download_url"] = direct_url
-                                        response["cookies_refreshed"] = True
-                                        response["profile_refreshed"] = True
-                                        response["message"] = "Profile refreshed and cookies updated"
-                                    else:
-                                        response["download_url"] = f"/api/download?url={url}&id={media_id}"
-                                        response["warning"] = "Direct URL not available, using streaming fallback"
-                                elif action == "download":
-                                    filepath, job_dir, target = download_video_file(url, media_id)
-                                    download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
-                                    @after_this_request
-                                    def cleanup(response_obj):
-                                        shutil.rmtree(job_dir, ignore_errors=True)
-                                        return response_obj
-                                    return send_file(filepath, as_attachment=True, download_name=download_name)
-                                else:
-                                    return jsonify({"error": f"Unknown action: {action}"}), 400
-                                
-                                app.logger.info("✅ Final retry successful after profile refresh!")
-                                return jsonify(response)
-                                
-                            except yt_dlp.utils.DownloadError as final_error:
-                                return jsonify({
-                                    "error": clean_error(str(final_error)),
-                                    "cookies_refreshed": True,
-                                    "profile_refreshed": True,
-                                    "cookies_attempted": True,
-                                    "requires_cookies": True
-                                }), 403
-                        else:
-                            app.logger.error(f"❌ Browserless refresh failed: {refresh_result.get('error')}")
-                            return jsonify({
-                                "error": clean_error(retry_msg),
-                                "cookies_refreshed": True,
-                                "profile_refreshed": False,
-                                "cookies_attempted": True,
-                                "requires_cookies": True
-                            }), 403
-                    else:
-                        return jsonify({
-                            "error": clean_error(retry_msg),
-                            "cookies_refreshed": True,
-                            "cookies_attempted": True,
-                            "requires_cookies": True
-                        }), 403
-                        
-                except Exception as retry_err:
-                    app.logger.error(f"❌ Retry exception: {retry_err}")
-                    return jsonify({
-                        "error": clean_error(str(retry_err)),
-                        "cookies_refreshed": True,
-                        "cookies_attempted": True
-                    }), 500
+                else:
+                    app.logger.warning(f"⚠️ No download URL in service response")
+                    return jsonify({"error": "No video URL found in service response"}), 404
             else:
-                app.logger.warning("⚠️ Failed to extract fresh cookies from Render service")
-                return jsonify({
-                    "error": clean_error(error_msg),
-                    "requires_cookies": True,
-                    "cookies_refreshed": False
-                }), 403
+                error_msg = service_data.get('error', 'Service error')
+                app.logger.warning(f"⚠️ Service error: {error_msg}")
+                return jsonify({"error": error_msg}), 500
         else:
-            return jsonify({"error": clean_error(error_msg)}), 500
+            app.logger.error(f"❌ Service returned {service_response.status_code}")
+            return jsonify({"error": f"Video service returned {service_response.status_code}"}), 500
+            
+    except requests.exceptions.Timeout:
+        app.logger.error(f"⏰ Service timeout")
+        return jsonify({"error": "Video service timeout"}), 504
+    except requests.exceptions.ConnectionError:
+        app.logger.error(f"🔌 Connection error to {IG_VIDEO_URL_GETTER}")
+        return jsonify({"error": "Connection error to video service"}), 503
     except Exception as e:
         app.logger.error(f"❌ Download error: {e}")
         return jsonify({"error": clean_error(str(e))}), 500
-    
-    
     
     
     
