@@ -2822,7 +2822,7 @@ def get_direct_url_from_cache_only(reel_url):
 def run_pipeline(pipeline_id):
     """
     Process DUE posts for a specific pipeline only.
-    Uses webhooks for caption fetching - no more timeout errors!
+    Pipeline ONLY triggers webhooks - publishing is done by the webhook.
     """
     conn = get_db_connection()
     if not conn:
@@ -2861,7 +2861,6 @@ def run_pipeline(pipeline_id):
         webhook_triggered = 0
         
         for post in due_posts:
-            # ✅ Store the scheduled post ID
             scheduled_post_id = post['id']
             
             try:
@@ -2894,98 +2893,78 @@ def run_pipeline(pipeline_id):
                                 WHERE id = %s
                             """, (direct_video_url, scheduled_post_id))
                             conn.commit()
-                        else:
-                            app.logger.info(f"🔄 Trying yt-dlp fallback for: {post['reel_url'][:50]}...")
-                            direct_video_url = get_direct_video_url(post['reel_url'])
-                            if direct_video_url:
-                                cache_direct_url(post['reel_url'], direct_video_url, '')
-                                cur.execute("""
-                                    UPDATE scheduled_posts 
-                                    SET direct_video_url = %s, updated_at = NOW()
-                                    WHERE id = %s
-                                """, (direct_video_url, scheduled_post_id))
-                                conn.commit()
-                                app.logger.info(f"✅ Video URL fetched via yt-dlp fallback")
                 
                 if not direct_video_url:
                     app.logger.warning(f"⚠️ No video URL for: {post['reel_url'][:50]}... - will retry later")
                     continue
                 
-                # Step 2: Check if caption already exists
+                # ✅ Step 2: Check if caption already exists
                 caption = post.get('caption', '')
                 
-                # ✅ If caption exists, post immediately
+                # ✅ If caption exists, we can trigger webhook to publish immediately
                 if caption and caption.strip():
-                    app.logger.info(f"✅ Caption already in database, posting immediately...")
+                    app.logger.info(f"✅ Caption already in database, triggering webhook to publish...")
                     
-                    key_id = pipeline.get('zernio_key_id')
+                    # ✅ Mark as processing (webhook will handle publishing)
+                    cur.execute("""
+                        UPDATE scheduled_posts 
+                        SET status = 'processing', updated_at = NOW()
+                        WHERE id = %s
+                    """, (scheduled_post_id,))
+                    conn.commit()
                     
-                    result = publish_to_facebook(
-                        video_url=direct_video_url,
-                        text=caption,
-                        account_id=pipeline['facebook_account_id'],
-                        publish_now=True,
-                        key_id=key_id
-                    )
+                    # ✅ Send to webhook immediately with the caption
+                    webhook_url = f"https://fetchgram-one.vercel.app/api/webhook/caption"
                     
-                    if result and not result.get('error'):
-                        post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
-                        post_url = None
-                        platforms = result.get('post', {}).get('platforms', [])
-                        for platform in platforms:
-                            if platform.get('platform') == 'facebook':
-                                post_url = platform.get('publishedUrl')
-                                break
-                        
-                        # ✅ Step 1: Mark in posted_reels
-                        mark_reel_as_posted(
-                            pipeline_id=post['pipeline_id'],
-                            reel_url=post['reel_url'],
-                            direct_video_url=direct_video_url,
-                            caption=caption,
-                            facebook_post_id=post_result_id,
-                            facebook_post_url=post_url,
-                            status='success'
+                    try:
+                        response = requests.post(
+                            webhook_url,
+                            json={
+                                "reel_url": post['reel_url'],
+                                "caption": caption,
+                                "job_id": f"pipeline_{scheduled_post_id}",
+                                "status": "completed",
+                                "profile_username": pipeline['profile_username'],
+                                "pipeline_id": post['pipeline_id'],
+                                "post_id": scheduled_post_id
+                            },
+                            timeout=30,
+                            headers={"Content-Type": "application/json"}
                         )
                         
-                        # ✅ Step 2: CRITICAL - Update scheduled_posts status to 'posted'
+                        if response.status_code == 200:
+                            app.logger.info(f"✅ Webhook triggered for caption (immediate publish)")
+                            webhook_triggered += 1
+                        else:
+                            app.logger.error(f"❌ Webhook failed: {response.status_code}")
+                            cur.execute("""
+                                UPDATE scheduled_posts 
+                                SET status = 'failed', 
+                                    error_message = 'Webhook failed',
+                                    updated_at = NOW()
+                                WHERE id = %s
+                            """, (scheduled_post_id,))
+                            conn.commit()
+                            failed_count += 1
+                            
+                    except Exception as e:
+                        app.logger.error(f"❌ Webhook error: {e}")
                         cur.execute("""
                             UPDATE scheduled_posts 
-                            SET status = 'posted', posted_at = NOW(), updated_at = NOW()
+                            SET status = 'failed', 
+                                error_message = %s,
+                                updated_at = NOW()
                             WHERE id = %s
-                        """, (scheduled_post_id,))
+                        """, (str(e), scheduled_post_id))
                         conn.commit()
-                        
-                        app.logger.info(f"✅ Post {scheduled_post_id} published and marked as posted!")
-                        posted_count += 1
-                        
-                    else:
-                        error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
-                        app.logger.error(f"❌ Facebook publish failed: {error_msg}")
-                        
-                        # Mark as failed in both tables
-                        mark_reel_as_posted(
-                            pipeline_id=post['pipeline_id'],
-                            reel_url=post['reel_url'],
-                            direct_video_url=direct_video_url,
-                            caption=caption,
-                            status='failed',
-                            error_message=str(error_msg)
-                        )
-                        
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET status = 'failed', error_message = %s, updated_at = NOW()
-                            WHERE id = %s
-                        """, (str(error_msg), scheduled_post_id))
-                        conn.commit()
-                        
                         failed_count += 1
+                    
                     continue
                 
-                # ✅ No caption - TRIGGER WEBHOOK (ASYNC)
-                app.logger.info(f"📝 No caption in DB, triggering webhook for: {post['reel_url'][:50]}...")
+                # ✅ No caption - TRIGGER WEBHOOK TO FETCH CAPTION (ASYNC)
+                app.logger.info(f"📝 No caption in DB, triggering webhook to fetch caption...")
                 
+                # Mark post as "processing" (waiting for caption)
                 cur.execute("""
                     UPDATE scheduled_posts 
                     SET status = 'processing', updated_at = NOW()
@@ -2993,6 +2972,7 @@ def run_pipeline(pipeline_id):
                 """, (scheduled_post_id,))
                 conn.commit()
                 
+                # Trigger async caption fetch with webhook
                 webhook_url = f"https://fetchgram-one.vercel.app/api/webhook/caption"
                 
                 try:
@@ -3007,7 +2987,7 @@ def run_pipeline(pipeline_id):
                             "webhook_url": webhook_url,
                             "pipeline_id": post['pipeline_id'],
                             "profile_username": pipeline['profile_username'],
-                            "post_id": scheduled_post_id,  # ✅ Pass the scheduled post ID
+                            "post_id": scheduled_post_id,
                             "async": True
                         },
                         timeout=5,
@@ -3015,7 +2995,7 @@ def run_pipeline(pipeline_id):
                     )
                     
                     if response.status_code in [200, 202]:
-                        app.logger.info(f"✅ Webhook triggered for: {post['reel_url'][:50]}...")
+                        app.logger.info(f"✅ Webhook triggered for caption fetch: {post['reel_url'][:50]}...")
                         webhook_triggered += 1
                     else:
                         app.logger.warning(f"⚠️ Webhook trigger failed: {response.status_code}")
@@ -3074,7 +3054,7 @@ def run_pipeline(pipeline_id):
         )
         
         return {
-            "message": f"Posted: {posted_count}, Failed: {failed_count}, Webhooks: {webhook_triggered}",
+            "message": f"Webhooks triggered: {webhook_triggered}, Failed: {failed_count}",
             "posted": posted_count,
             "failed": failed_count,
             "webhooks_triggered": webhook_triggered,
