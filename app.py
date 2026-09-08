@@ -3704,10 +3704,59 @@ def download_video():
 
 
 
+# ============== DOWNLOAD JOBS TRACKING ==============
+DOWNLOAD_JOBS = {}  # Track async download jobs
 
-
-
-
+def send_download_webhook(job_id, instagram_url, video_url, media_id, action, error, caption=None):
+    """Send webhook notification for async download"""
+    try:
+        job_data = DOWNLOAD_JOBS.get(job_id, {})
+        webhook_url = job_data.get('webhook_url')
+        
+        if not webhook_url:
+            app.logger.warning(f"⚠️ [ASYNC Job {job_id}] No webhook URL provided")
+            return
+        
+        payload = {
+            "job_id": job_id,
+            "url": instagram_url,
+            "media_id": media_id,
+            "action": action,
+            "status": "completed" if video_url else "failed",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        if video_url:
+            payload["video_url"] = video_url
+            payload["download_url"] = video_url
+            payload["video_info"] = {
+                "id": media_id or 'instagram_video',
+                "title": caption or "Instagram video",
+                "thumbnail": None,
+                "ext": "mp4"
+            }
+            if caption:
+                payload["caption"] = caption
+            app.logger.info(f"✅ [ASYNC Job {job_id}] Sending success webhook to: {webhook_url[:50]}...")
+        else:
+            payload["error"] = error or "Failed to get video URL"
+            payload["status"] = "failed"
+            app.logger.info(f"❌ [ASYNC Job {job_id}] Sending failure webhook to: {webhook_url[:50]}...")
+        
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=30,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            app.logger.info(f"✅ [ASYNC Job {job_id}] Webhook sent successfully")
+        else:
+            app.logger.warning(f"⚠️ [ASYNC Job {job_id}] Webhook returned {response.status_code}")
+            
+    except Exception as e:
+        app.logger.error(f"❌ [ASYNC Job {job_id}] Failed to send webhook: {e}")
 
 
 @app.route("/api/commands/download", methods=["POST"])
@@ -3716,17 +3765,188 @@ def api_download():
     url = data.get("url", "").strip()
     media_id = data.get("media_id", "").strip()
     action = data.get("action", "url_only")
+    webhook_url = data.get("webhook_url")  # Optional webhook for async response
     
     if not url:
         return jsonify({"error": "Missing 'url' parameter"}), 400
     if not is_valid_instagram_url(url):
         return jsonify({"error": "Invalid Instagram URL"}), 400
     
-    try:
-        response = {"status": "success", "url": url, "media_id": media_id, "action": action, "timestamp": datetime.utcnow().isoformat()}
+    # ============================================================
+    # ASYNC MODE - Don't wait for video URL, use webhook
+    # ============================================================
+    if webhook_url:
+        app.logger.info(f"📤 [ASYNC] Download request with webhook for: {url[:50]}...")
         
-        # ✅ USE THE VIDEO URL GETTER SERVICE - NO MORE YT-DLP!
-        app.logger.info(f"📥 Fetching video from service: {IG_VIDEO_URL_GETTER}")
+        # Generate a job ID for tracking
+        job_id = str(uuid.uuid4())
+        
+        # Store the request status
+        DOWNLOAD_JOBS[job_id] = {
+            'url': url,
+            'status': 'processing',
+            'created_at': datetime.utcnow().isoformat(),
+            'webhook_url': webhook_url,
+            'media_id': media_id,
+            'action': action
+        }
+        
+        # Start the video fetch in a background thread
+        import threading
+        
+        def process_async_download():
+            def run_async():
+                with app.app_context():
+                    try:
+                        app.logger.info(f"📥 [ASYNC Job {job_id}] Starting video fetch for: {url[:50]}...")
+                        
+                        # Step 1: Try to get from cache first
+                        direct_video_url = get_direct_url_from_cache_only(url)
+                        caption = None
+                        
+                        if direct_video_url:
+                            app.logger.info(f"✅ [ASYNC Job {job_id}] Found in cache: {direct_video_url[:50]}...")
+                            DOWNLOAD_JOBS[job_id]['video_url'] = direct_video_url
+                            DOWNLOAD_JOBS[job_id]['status'] = 'completed'
+                            DOWNLOAD_JOBS[job_id]['completed_at'] = datetime.utcnow().isoformat()
+                            
+                            # Get caption from cache
+                            conn = get_db_connection()
+                            if conn:
+                                try:
+                                    cur = conn.cursor()
+                                    cur.execute("SELECT caption FROM reel_cache WHERE reel_url = %s", (url,))
+                                    result = cur.fetchone()
+                                    if result and result[0]:
+                                        caption = result[0]
+                                    cur.close()
+                                    conn.close()
+                                except:
+                                    pass
+                            
+                            send_download_webhook(job_id, url, direct_video_url, media_id, action, None, caption)
+                            return
+                        
+                        # Step 2: Try to get video with caption from service
+                        app.logger.info(f"📥 [ASYNC Job {job_id}] Calling video URL service: {IG_VIDEO_URL_GETTER}")
+                        direct_video_url, caption, thumbnail = get_video_with_captions(url)
+                        
+                        if direct_video_url:
+                            app.logger.info(f"✅ [ASYNC Job {job_id}] Got video URL: {direct_video_url[:50]}...")
+                            
+                            cache_direct_url(url, direct_video_url, caption or '')
+                            
+                            DOWNLOAD_JOBS[job_id]['video_url'] = direct_video_url
+                            DOWNLOAD_JOBS[job_id]['caption'] = caption
+                            DOWNLOAD_JOBS[job_id]['status'] = 'completed'
+                            DOWNLOAD_JOBS[job_id]['completed_at'] = datetime.utcnow().isoformat()
+                            
+                            send_download_webhook(job_id, url, direct_video_url, media_id, action, None, caption)
+                            
+                        else:
+                            # Step 3: Try cache as fallback
+                            app.logger.warning(f"⚠️ [ASYNC Job {job_id}] Service failed, checking cache...")
+                            direct_video_url = get_direct_url_from_cache_only(url)
+                            
+                            if direct_video_url:
+                                app.logger.info(f"✅ [ASYNC Job {job_id}] Found in cache: {direct_video_url[:50]}...")
+                                DOWNLOAD_JOBS[job_id]['video_url'] = direct_video_url
+                                DOWNLOAD_JOBS[job_id]['status'] = 'completed'
+                                DOWNLOAD_JOBS[job_id]['completed_at'] = datetime.utcnow().isoformat()
+                                
+                                conn = get_db_connection()
+                                if conn:
+                                    try:
+                                        cur = conn.cursor()
+                                        cur.execute("SELECT caption FROM reel_cache WHERE reel_url = %s", (url,))
+                                        result = cur.fetchone()
+                                        if result and result[0]:
+                                            caption = result[0]
+                                        cur.close()
+                                        conn.close()
+                                    except:
+                                        pass
+                                
+                                send_download_webhook(job_id, url, direct_video_url, media_id, action, None, caption)
+                            else:
+                                app.logger.error(f"❌ [ASYNC Job {job_id}] No video URL found")
+                                DOWNLOAD_JOBS[job_id]['status'] = 'failed'
+                                DOWNLOAD_JOBS[job_id]['error'] = 'No video URL found'
+                                DOWNLOAD_JOBS[job_id]['completed_at'] = datetime.utcnow().isoformat()
+                                send_download_webhook(job_id, url, None, media_id, action, 'No video URL found', None)
+                                
+                    except Exception as e:
+                        app.logger.error(f"❌ [ASYNC Job {job_id}] Error: {e}")
+                        import traceback
+                        app.logger.error(traceback.format_exc())
+                        DOWNLOAD_JOBS[job_id]['status'] = 'failed'
+                        DOWNLOAD_JOBS[job_id]['error'] = str(e)
+                        DOWNLOAD_JOBS[job_id]['completed_at'] = datetime.utcnow().isoformat()
+                        send_download_webhook(job_id, url, None, media_id, action, str(e), None)
+            
+            thread = threading.Thread(target=run_async)
+            thread.daemon = True
+            thread.start()
+        
+        process_async_download()
+        
+        return jsonify({
+            "status": "accepted",
+            "job_id": job_id,
+            "message": "Download request accepted. You will receive a webhook when ready.",
+            "action": action,
+            "webhook_url": webhook_url,
+            "timestamp": datetime.utcnow().isoformat()
+        }), 202
+    
+    # ============================================================
+    # SYNC MODE - Original behavior (wait for response)
+    # ============================================================
+    try:
+        app.logger.info(f"📥 [SYNC] Download request for: {url[:50]}...")
+        
+        # Try cache first
+        direct_video_url = get_direct_url_from_cache_only(url)
+        caption = None
+        
+        if direct_video_url:
+            app.logger.info(f"✅ [SYNC] Found in cache: {direct_video_url[:50]}...")
+            
+            conn = get_db_connection()
+            if conn:
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT caption FROM reel_cache WHERE reel_url = %s", (url,))
+                    result = cur.fetchone()
+                    if result and result[0]:
+                        caption = result[0]
+                    cur.close()
+                    conn.close()
+                except:
+                    pass
+            
+            response = {
+                "status": "success", 
+                "url": url, 
+                "media_id": media_id, 
+                "action": action,
+                "download_url": direct_video_url,
+                "video_info": {
+                    "id": media_id or 'instagram_video',
+                    "title": caption or "Instagram video",
+                    "thumbnail": None,
+                    "ext": "mp4"
+                }
+            }
+            if caption:
+                response["caption"] = caption
+            
+            session['current_video_url'] = direct_video_url
+            session['current_video_title'] = caption or "Instagram video"
+            return jsonify(response)
+        
+        # Call the service (sync mode)
+        app.logger.info(f"📥 [SYNC] Calling video URL service: {IG_VIDEO_URL_GETTER}")
         
         service_response = requests.post(
             f"{IG_VIDEO_URL_GETTER}/api/download",
@@ -3741,79 +3961,104 @@ def api_download():
             if service_data.get('success'):
                 video_data = service_data.get('data', {})
                 download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
+                caption = video_data.get('caption', '') or ''
                 
                 if download_url:
-                    app.logger.info(f"✅ Video URL fetched from service")
+                    app.logger.info(f"✅ [SYNC] Video URL fetched from service")
                     
-                    # Get video info
+                    cache_direct_url(url, download_url, caption)
+                    
                     video_info = {
                         "id": media_id or video_data.get('id', 'instagram_video'),
-                        "title": video_data.get('filename', 'Instagram video'),
+                        "title": video_data.get('filename', caption or 'Instagram video'),
                         "duration": None,
                         "uploader": None,
                         "thumbnail": video_data.get('thumbnail') or video_data.get('thumbnailUrl'),
                         "ext": "mp4"
                     }
                     
-                    response["video_info"] = video_info
                     session['current_video_url'] = download_url
                     session['current_video_title'] = video_info.get('title')
                     session['current_video_thumbnail'] = video_info.get('thumbnail')
                     
-                    if action == "url_only":
-                        response["download_url"] = download_url
-                        return jsonify(response)
-                        
-                    elif action == "download":
-                        # Download the video
-                        try:
-                            video_response = requests.get(download_url, stream=True, timeout=60)
-                            if video_response.status_code == 200:
-                                filename = video_data.get('filename', 'instagram_video.mp4')
-                                # Create a BytesIO object
-                                from io import BytesIO
-                                video_bytes = BytesIO(video_response.content)
-                                return send_file(
-                                    video_bytes,
-                                    as_attachment=True,
-                                    download_name=filename,
-                                    mimetype='video/mp4'
-                                )
-                            else:
-                                app.logger.warning(f"⚠️ Download failed: {video_response.status_code}")
-                                response["warning"] = "Could not download video, but URL is available"
-                                response["download_url"] = download_url
-                                return jsonify(response)
-                        except Exception as e:
-                            app.logger.error(f"❌ Download error: {e}")
-                            response["warning"] = "Could not download video, but URL is available"
-                            response["download_url"] = download_url
-                            return jsonify(response)
-                            
-                    else:
-                        return jsonify({"error": f"Unknown action: {action}"}), 400
+                    response = {
+                        "status": "success",
+                        "url": url,
+                        "media_id": media_id,
+                        "action": action,
+                        "download_url": download_url,
+                        "video_info": video_info,
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    if caption:
+                        response["caption"] = caption
+                    
+                    return jsonify(response)
                 else:
-                    app.logger.warning(f"⚠️ No download URL in service response")
+                    app.logger.warning(f"⚠️ [SYNC] No download URL in service response")
                     return jsonify({"error": "No video URL found in service response"}), 404
             else:
                 error_msg = service_data.get('error', 'Service error')
-                app.logger.warning(f"⚠️ Service error: {error_msg}")
+                app.logger.warning(f"⚠️ [SYNC] Service error: {error_msg}")
                 return jsonify({"error": error_msg}), 500
         else:
-            app.logger.error(f"❌ Service returned {service_response.status_code}")
+            app.logger.error(f"❌ [SYNC] Service returned {service_response.status_code}")
             return jsonify({"error": f"Video service returned {service_response.status_code}"}), 500
             
     except requests.exceptions.Timeout:
-        app.logger.error(f"⏰ Service timeout")
+        app.logger.error(f"⏰ [SYNC] Service timeout")
         return jsonify({"error": "Video service timeout"}), 504
     except requests.exceptions.ConnectionError:
-        app.logger.error(f"🔌 Connection error to {IG_VIDEO_URL_GETTER}")
+        app.logger.error(f"🔌 [SYNC] Connection error to {IG_VIDEO_URL_GETTER}")
         return jsonify({"error": "Connection error to video service"}), 503
     except Exception as e:
-        app.logger.error(f"❌ Download error: {e}")
+        app.logger.error(f"❌ [SYNC] Download error: {e}")
         return jsonify({"error": clean_error(str(e))}), 500
+
+
+# ============================================================
+# GET ASYNC JOB STATUS - SINGLE ENDPOINT (REMOVE DUPLICATES)
+# ============================================================
+
+@app.route("/api/download/job/<job_id>", methods=["GET"])
+def get_download_job_status(job_id):
+    """Get status of an async download job"""
+    job = DOWNLOAD_JOBS.get(job_id)
     
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
     
+    return jsonify({
+        "status": "success",
+        "job": {
+            "job_id": job_id,
+            "url": job.get('url'),
+            "status": job.get('status'),
+            "video_url": job.get('video_url'),
+            "caption": job.get('caption'),
+            "error": job.get('error'),
+            "created_at": job.get('created_at'),
+            "completed_at": job.get('completed_at')
+        }
+    })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     
     
     
