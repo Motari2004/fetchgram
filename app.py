@@ -1245,80 +1245,61 @@ BROWSERLESS_PROFILE = os.environ.get('BROWSERLESS_PROFILE', 'instagram-login')
 
 def refresh_browserless_profile():
     """
-    Refresh the Browserless profile with fresh Instagram cookies.
-    Calls the Browserless /profile/refresh endpoint directly.
+    Refresh the Browserless profile by calling the Render service.
+    The Render service already handles the Browserless refresh correctly.
     """
-    app.logger.info("🔄 Refreshing Browserless profile...")
-    
-    if not BROWSERLESS_TOKEN:
-        app.logger.error("❌ BROWSERLESS_API_KEY not set")
-        return {"success": False, "error": "BROWSERLESS_API_KEY not set"}
+    app.logger.info("🔄 Refreshing Browserless profile via Render service...")
     
     try:
-        # Step 1: Get fresh cookies from Render service
-        app.logger.info("🍪 Getting fresh cookies from Render service...")
-        extract_result = extract_cookies_from_render_service()
-        
-        if not extract_result:
-            app.logger.error("❌ Failed to get fresh cookies from Render service")
-            return {"success": False, "error": "Failed to get fresh cookies"}
-        
-        # Step 2: Get cookies from database
-        db_cookies = get_cookies_from_db()
-        if not db_cookies:
-            app.logger.error("❌ No cookies in database after extraction")
-            return {"success": False, "error": "No cookies in database"}
-        
-        cookies = db_cookies.get('cookie_data', [])
-        app.logger.info(f"✅ Got {len(cookies)} fresh cookies")
-        
-        # Step 3: Refresh the profile with new cookies
-        refresh_url = f"{BROWSERLESS_ORIGIN}/profile/refresh?token={BROWSERLESS_TOKEN}"
-        
-        # Format cookies for Browserless refresh endpoint
-        formatted_cookies = []
-        for cookie in cookies:
-            formatted_cookies.append({
-                "name": cookie.get('name', ''),
-                "value": cookie.get('value', ''),
-                "domain": cookie.get('domain', '.instagram.com'),
-                "path": cookie.get('path', '/'),
-                "expires": cookie.get('expirationDate', -1),
-                "httpOnly": cookie.get('httpOnly', False),
-                "secure": cookie.get('secure', False),
-                "session": cookie.get('session', True)
-            })
-        
-        refresh_payload = {
-            "name": BROWSERLESS_PROFILE,
-            "state": {
-                "cookies": formatted_cookies
-            }
-        }
-        
-        app.logger.info(f"📤 Sending refresh request to Browserless...")
-        
+        # ✅ Call the Render service's /api/refresh endpoint
+        # This endpoint already handles the Browserless refresh with the correct payload
         response = requests.post(
-            refresh_url,
-            json=refresh_payload,
-            headers={"Content-Type": "application/json"},
-            timeout=30
+            f"{COOKIE_EXTRACTOR_URL}/api/refresh",
+            timeout=60,
+            headers={"Content-Type": "application/json"}
         )
         
         if response.status_code == 200:
-            app.logger.info("✅ Browserless profile refreshed successfully!")
-            return {
-                "success": True,
-                "message": "Profile refreshed with fresh cookies",
-                "cookies_count": len(cookies)
-            }
-        elif response.status_code == 404:
-            app.logger.warning("⚠️ Profile not found, creating new profile instead...")
-            return create_browserless_profile(cookies)
+            data = response.json()
+            if data.get('success'):
+                app.logger.info("✅ Browserless profile refreshed successfully via Render service")
+                # Get cookies from the response
+                cookies = data.get('cookies', [])
+                if cookies:
+                    # Save cookies to database
+                    username = None
+                    for cookie in cookies:
+                        if cookie.get('name') == 'ds_user_id':
+                            username = cookie.get('value')
+                            break
+                    save_cookies_to_db(cookies, username or 'Instagram User')
+                    
+                    # Write cookie files
+                    write_netscape_cookies(cookies, '/tmp/cookies_netscape.txt')
+                    cookie_file_path = os.path.join('/tmp', 'cookies.json')
+                    with open(cookie_file_path, 'w') as f:
+                        json.dump(cookies, f, indent=2)
+                    
+                    app.logger.info(f"✅ Saved {len(cookies)} cookies after refresh")
+                
+                return {
+                    "success": True,
+                    "message": data.get('message', 'Profile refreshed successfully'),
+                    "cookies_count": len(cookies)
+                }
+            else:
+                app.logger.error(f"❌ Render service refresh failed: {data.get('error')}")
+                return {"success": False, "error": data.get('error', 'Unknown error')}
         else:
-            app.logger.error(f"❌ Refresh failed: {response.status_code} - {response.text}")
-            return {"success": False, "error": f"Refresh failed: {response.status_code}"}
+            app.logger.error(f"❌ Render service returned {response.status_code}")
+            return {"success": False, "error": f"Render service returned {response.status_code}"}
             
+    except requests.exceptions.Timeout:
+        app.logger.error("❌ Render service timeout")
+        return {"success": False, "error": "Render service timeout"}
+    except requests.exceptions.ConnectionError:
+        app.logger.error("❌ Render service connection error")
+        return {"success": False, "error": "Render service connection error"}
     except Exception as e:
         app.logger.error(f"❌ Refresh error: {e}")
         return {"success": False, "error": str(e)}
