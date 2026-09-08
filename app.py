@@ -5626,6 +5626,57 @@ def generate_random_times():
 
 
 
+@app.route("/api/cookies/sync", methods=["POST"])
+def sync_cookies_from_render():
+    """
+    Receive cookies from the Render cookie extractor service.
+    """
+    data = request.get_json(silent=True) or {}
+    cookies = data.get('cookies', [])
+    username = data.get('username', 'Instagram User')
+    
+    if not cookies:
+        return jsonify({"error": "No cookies provided"}), 400
+    
+    try:
+        # Save cookies to database
+        success = save_cookies_to_db(cookies, username)
+        if success:
+            app.logger.info(f"✅ Synced {len(cookies)} cookies from Render service for user: {username}")
+            
+            # Also write to file for immediate use
+            cookie_file_path = os.path.join('/tmp', 'cookies.json')
+            with open(cookie_file_path, 'w') as f:
+                json.dump(cookies, f, indent=2)
+            
+            # Write Netscape format for yt-dlp
+            write_netscape_cookies(cookies, '/tmp/cookies_netscape.txt')
+            
+            # Write Instagram-specific cookie file
+            safe_user = re.sub(r'[^a-zA-Z0-9_-]', '_', str(username or 'default'))[:40]
+            instagram_cookie_file = os.path.join('/tmp', f'instagram_cookies_{safe_user}.txt')
+            write_netscape_cookies(cookies, instagram_cookie_file)
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Synced {len(cookies)} cookies",
+                "cookies_count": len(cookies)
+            })
+        else:
+            return jsonify({"error": "Failed to save cookies to database"}), 500
+            
+    except Exception as e:
+        app.logger.error(f"Error syncing cookies: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
+
+
+
 
 
 
