@@ -45,7 +45,8 @@ CORS(app, supports_credentials=True)
 COOKIE_EXTRACTOR_URL = os.environ.get('COOKIE_EXTRACTOR_URL', 'https://profilecookieextractor.onrender.com')
 
 
-
+# ============== VIDEO URL GETTER SERVICE ==============
+IG_VIDEO_URL_GETTER = os.environ.get('IG_VIDEO_URL_GETTER', 'https://igvideourl.onrender.com')
 
 
 
@@ -1360,6 +1361,139 @@ def create_browserless_profile(cookies):
 
 
 
+def get_direct_video_url_from_service(instagram_url):
+    """
+    Get direct video URL from the Instagram video URL getter service.
+    This replaces the yt-dlp + cookies approach.
+    """
+    try:
+        app.logger.info(f"📥 Fetching video URL from service: {IG_VIDEO_URL_GETTER}")
+        
+        response = requests.post(
+            f"{IG_VIDEO_URL_GETTER}/api/download",
+            json={"url": instagram_url},
+            timeout=60,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                video_data = data.get('data', {})
+                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
+                
+                if download_url:
+                    app.logger.info(f"✅ Video URL fetched from service: {download_url[:50]}...")
+                    return download_url
+                else:
+                    app.logger.warning(f"⚠️ No download URL in response: {data}")
+                    return None
+            else:
+                app.logger.warning(f"⚠️ Service returned error: {data.get('error')}")
+                return None
+        else:
+            app.logger.error(f"❌ Service returned {response.status_code}: {response.text[:200]}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        app.logger.error(f"⏰ Service timeout after 60s")
+        return None
+    except requests.exceptions.ConnectionError:
+        app.logger.error(f"🔌 Connection error to {IG_VIDEO_URL_GETTER}")
+        return None
+    except Exception as e:
+        app.logger.error(f"❌ Error fetching video URL: {e}")
+        return None
+
+# ============== UPDATE YT-DLP FUNCTIONS ==============
+
+def get_direct_video_url(url, media_id=None):
+    """
+    Get direct video URL using the Instagram video URL getter service.
+    Falls back to yt-dlp if the service fails.
+    """
+    # ✅ Try the service first
+    video_url = get_direct_video_url_from_service(url)
+    
+    if video_url:
+        # Cache the URL
+        cache_direct_url(url, video_url, '')
+        return video_url
+    
+    # ⚠️ Fallback to yt-dlp if service fails
+    app.logger.warning(f"⚠️ Service failed, falling back to yt-dlp for: {url[:50]}...")
+    
+    opts = base_ydl_opts({"format": "best[ext=mp4]/best"})
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            entries = info.get("entries") if "entries" in info else [info]
+            entries = [e for e in entries if e]
+            target = None
+            if media_id:
+                target = next((e for e in entries if e.get("id") == media_id), None)
+            else:
+                target = entries[0] if entries else None
+            if not target:
+                return None
+            formats = target.get("formats", [])
+            if not formats:
+                return target.get("url") or target.get("webpage_url")
+            for fmt in formats:
+                if fmt.get("ext") == "mp4" and fmt.get("acodec") != "none" and fmt.get("vcodec") != "none":
+                    return fmt.get("url")
+            return formats[0].get("url") if formats else None
+    except Exception as e:
+        app.logger.error(f"❌ Fallback yt-dlp error: {e}")
+        return None
+
+def get_video_with_captions(reel_url):
+    """
+    Get video URL and caption using the Instagram video URL getter service.
+    """
+    try:
+        # ✅ Try the service first
+        app.logger.info(f"📥 Fetching video from service: {IG_VIDEO_URL_GETTER}")
+        
+        response = requests.post(
+            f"{IG_VIDEO_URL_GETTER}/api/download",
+            json={"url": reel_url},
+            timeout=60,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                video_data = data.get('data', {})
+                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
+                
+                if download_url:
+                    # The service might also return a caption
+                    caption = video_data.get('caption', '') or ''
+                    thumbnail = video_data.get('thumbnail') or video_data.get('thumbnailUrl')
+                    
+                    app.logger.info(f"✅ Video URL fetched from service")
+                    return download_url, caption, thumbnail
+                else:
+                    app.logger.warning(f"⚠️ No download URL in response")
+                    return None, None, None
+            else:
+                app.logger.warning(f"⚠️ Service error: {data.get('error')}")
+                return None, None, None
+        else:
+            app.logger.error(f"❌ Service returned {response.status_code}")
+            return None, None, None
+            
+    except requests.exceptions.Timeout:
+        app.logger.error(f"⏰ Service timeout")
+        return None, None, None
+    except Exception as e:
+        app.logger.error(f"❌ Error: {e}")
+        return None, None, None
+
+
+
 
 
 
@@ -1427,6 +1561,21 @@ def get_video_with_captions(reel_url):
         return None, None, None
 
 def get_direct_video_url(url, media_id=None):
+    """
+    Get direct video URL using the Instagram video URL getter service.
+    Falls back to yt-dlp if the service fails.
+    """
+    # ✅ Try the service first
+    video_url = get_direct_video_url_from_service(url)
+    
+    if video_url:
+        # Cache the URL
+        cache_direct_url(url, video_url, '')
+        return video_url
+    
+    # ⚠️ Fallback to yt-dlp if service fails
+    app.logger.warning(f"⚠️ Service failed, falling back to yt-dlp for: {url[:50]}...")
+    
     opts = base_ydl_opts({"format": "best[ext=mp4]/best"})
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1448,7 +1597,7 @@ def get_direct_video_url(url, media_id=None):
                     return fmt.get("url")
             return formats[0].get("url") if formats else None
     except Exception as e:
-        app.logger.error(f"Error getting direct video URL: {e}")
+        app.logger.error(f"❌ Fallback yt-dlp error: {e}")
         return None
 
 def get_direct_url_with_caption_cache(reel_url):
@@ -2654,7 +2803,7 @@ def get_direct_url_from_cache_only(reel_url):
 def run_pipeline(pipeline_id):
     """
     Process DUE posts for a specific pipeline only.
-    Like scheduler/process but filtered by pipeline_id.
+    Uses webhooks for caption fetching - no more timeout errors!
     """
     conn = get_db_connection()
     if not conn:
@@ -2690,19 +2839,23 @@ def run_pipeline(pipeline_id):
         
         posted_count = 0
         failed_count = 0
+        webhook_triggered = 0
         
         for post in due_posts:
             try:
                 app.logger.info(f"📤 Processing due post: {post['reel_url'][:50]}...")
                 
-                # Step 1: Get video URL
+                # Step 1: Get video URL - ✅ USE THE NEW SERVICE
                 direct_video_url = post.get('direct_video_url', '')
                 
                 if not direct_video_url:
-                    app.logger.info(f"📥 Fetching video URL for: {post['reel_url'][:50]}...")
-                    direct_video_url = get_direct_video_url(post['reel_url'])
+                    app.logger.info(f"📥 Fetching video URL from service for: {post['reel_url'][:50]}...")
+                    
+                    # ✅ Use the new video URL getter service
+                    direct_video_url = get_direct_video_url_from_service(post['reel_url'])
                     
                     if direct_video_url:
+                        # Cache the URL
                         cache_direct_url(post['reel_url'], direct_video_url, '')
                         cur.execute("""
                             UPDATE scheduled_posts 
@@ -2710,7 +2863,7 @@ def run_pipeline(pipeline_id):
                             WHERE id = %s
                         """, (direct_video_url, post['id']))
                         conn.commit()
-                        app.logger.info(f"✅ Video URL fetched")
+                        app.logger.info(f"✅ Video URL fetched from service")
                     else:
                         # Try cache as fallback
                         direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
@@ -2722,28 +2875,32 @@ def run_pipeline(pipeline_id):
                                 WHERE id = %s
                             """, (direct_video_url, post['id']))
                             conn.commit()
+                        else:
+                            # ⚠️ Final fallback to yt-dlp
+                            app.logger.info(f"🔄 Trying yt-dlp fallback for: {post['reel_url'][:50]}...")
+                            direct_video_url = get_direct_video_url(post['reel_url'])
+                            if direct_video_url:
+                                cache_direct_url(post['reel_url'], direct_video_url, '')
+                                cur.execute("""
+                                    UPDATE scheduled_posts 
+                                    SET direct_video_url = %s, updated_at = NOW()
+                                    WHERE id = %s
+                                """, (direct_video_url, post['id']))
+                                conn.commit()
+                                app.logger.info(f"✅ Video URL fetched via yt-dlp fallback")
                 
                 if not direct_video_url:
                     app.logger.warning(f"⚠️ No video URL for: {post['reel_url'][:50]}... - will retry later")
                     continue
                 
-                # Step 2: Get caption
+                # Step 2: Check if caption already exists
                 caption = post.get('caption', '')
-                if not caption or not caption.strip():
-                    app.logger.info(f"📝 Fetching caption for: {post['reel_url'][:50]}...")
-                    caption = fetch_caption_from_service(post['reel_url'])
-                    if caption:
-                        store_caption_in_database(post['reel_url'], caption, pipeline['profile_username'])
-                        # Update the scheduled post with the caption
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET caption = %s, updated_at = NOW()
-                            WHERE id = %s
-                        """, (caption, post['id']))
-                        conn.commit()
                 
-                # Step 3: Publish to Facebook NOW
-                if caption and caption.strip() and direct_video_url:
+                # ✅ If caption exists, post immediately
+                if caption and caption.strip():
+                    app.logger.info(f"✅ Caption already in database, posting immediately...")
+                    
+                    # Publish to Facebook NOW
                     key_id = pipeline.get('zernio_key_id')
                     
                     result = publish_to_facebook(
@@ -2755,7 +2912,6 @@ def run_pipeline(pipeline_id):
                     )
                     
                     if result and not result.get('error'):
-                        # Get post ID and URL from result
                         post_id = result.get('post', {}).get('_id') or result.get('post_id')
                         post_url = None
                         platforms = result.get('post', {}).get('platforms', [])
@@ -2764,7 +2920,6 @@ def run_pipeline(pipeline_id):
                                 post_url = platform.get('publishedUrl')
                                 break
                         
-                        # Mark as posted
                         mark_reel_as_posted(
                             pipeline_id=post['pipeline_id'],
                             reel_url=post['reel_url'],
@@ -2775,7 +2930,6 @@ def run_pipeline(pipeline_id):
                             status='success'
                         )
                         
-                        # Update scheduled post status
                         cur.execute("""
                             UPDATE scheduled_posts 
                             SET status = 'posted', posted_at = NOW(), updated_at = NOW()
@@ -2789,17 +2943,15 @@ def run_pipeline(pipeline_id):
                         error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
                         app.logger.error(f"❌ Facebook publish failed: {error_msg}")
                         
-                        # Mark reel as failed
                         mark_reel_as_posted(
                             pipeline_id=post['pipeline_id'],
                             reel_url=post['reel_url'],
                             direct_video_url=direct_video_url,
-                            caption=caption if caption else '',
+                            caption=caption,
                             status='failed',
                             error_message=str(error_msg)
                         )
                         
-                        # Update scheduled post status
                         cur.execute("""
                             UPDATE scheduled_posts 
                             SET status = 'failed', error_message = %s, updated_at = NOW()
@@ -2808,15 +2960,68 @@ def run_pipeline(pipeline_id):
                         conn.commit()
                         
                         failed_count += 1
-                else:
-                    app.logger.warning(f"⚠️ Missing data for: {post['reel_url'][:50]}...")
+                    continue
+                
+                # ✅ No caption - TRIGGER WEBHOOK (ASYNC)
+                app.logger.info(f"📝 No caption in DB, triggering webhook for: {post['reel_url'][:50]}...")
+                
+                # Mark post as "processing" (waiting for caption)
+                cur.execute("""
+                    UPDATE scheduled_posts 
+                    SET status = 'processing', updated_at = NOW()
+                    WHERE id = %s
+                """, (post['id'],))
+                conn.commit()
+                
+                # Trigger async caption fetch with webhook
+                webhook_url = f"https://fetchgram-one.vercel.app/api/webhook/caption"
+                
+                try:
+                    caption_service_url = get_caption_service_url()
+                    
+                    app.logger.info(f"📤 Sending async caption request to: {caption_service_url}")
+                    
+                    response = requests.post(
+                        caption_service_url,
+                        json={
+                            "url": post['reel_url'],
+                            "webhook_url": webhook_url,
+                            "pipeline_id": post['pipeline_id'],
+                            "profile_username": pipeline['profile_username'],
+                            "post_id": post['id'],
+                            "async": True
+                        },
+                        timeout=5,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    
+                    if response.status_code in [200, 202]:
+                        app.logger.info(f"✅ Webhook triggered for: {post['reel_url'][:50]}...")
+                        webhook_triggered += 1
+                    else:
+                        app.logger.warning(f"⚠️ Webhook trigger failed: {response.status_code}")
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET status = 'failed', 
+                                error_message = 'Webhook trigger failed',
+                                updated_at = NOW()
+                            WHERE id = %s
+                        """, (post['id'],))
+                        conn.commit()
+                        failed_count += 1
+                        
+                except requests.exceptions.Timeout:
+                    app.logger.info(f"⏰ Webhook request sent (timeout expected) for: {post['reel_url'][:50]}...")
+                    webhook_triggered += 1
+                except Exception as e:
+                    app.logger.error(f"❌ Webhook trigger error: {e}")
                     cur.execute("""
                         UPDATE scheduled_posts 
                         SET status = 'failed', 
-                            error_message = 'Missing video URL or caption', 
+                            error_message = %s,
                             updated_at = NOW()
                         WHERE id = %s
-                    """, (post['id'],))
+                    """, (str(e), post['id']))
                     conn.commit()
                     failed_count += 1
                     
@@ -2842,12 +3047,18 @@ def run_pipeline(pipeline_id):
         if posted_count > 0 or failed_count > 0:
             update_pipeline_stats(pipeline['id'], posted_count, failed_count)
         
-        log_pipeline_run(pipeline['id'], posted_count, failed_count, 'completed' if failed_count == 0 else 'partial')
+        log_pipeline_run(
+            pipeline['id'], 
+            posted_count, 
+            failed_count, 
+            'completed' if failed_count == 0 else 'partial'
+        )
         
         return {
-            "message": f"Processed {posted_count} due posts, {failed_count} failed",
+            "message": f"Posted: {posted_count}, Failed: {failed_count}, Webhooks: {webhook_triggered}",
             "posted": posted_count,
             "failed": failed_count,
+            "webhooks_triggered": webhook_triggered,
             "total": len(due_posts)
         }
         
