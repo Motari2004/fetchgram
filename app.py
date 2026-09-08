@@ -1246,13 +1246,13 @@ BROWSERLESS_PROFILE = os.environ.get('BROWSERLESS_PROFILE', 'instagram-login')
 def refresh_browserless_profile():
     """
     Refresh the Browserless profile by calling the Render service.
-    The Render service already handles the Browserless refresh correctly.
+    The Render service handles the Browserless refresh with the correct payload.
     """
     app.logger.info("🔄 Refreshing Browserless profile via Render service...")
     
     try:
         # ✅ Call the Render service's /api/refresh endpoint
-        # This endpoint already handles the Browserless refresh with the correct payload
+        # The Render service already knows the correct payload format
         response = requests.post(
             f"{COOKIE_EXTRACTOR_URL}/api/refresh",
             timeout=60,
@@ -1263,19 +1263,19 @@ def refresh_browserless_profile():
             data = response.json()
             if data.get('success'):
                 app.logger.info("✅ Browserless profile refreshed successfully via Render service")
-                # Get cookies from the response
+                
+                # Get cookies from the response and save them
                 cookies = data.get('cookies', [])
                 if cookies:
-                    # Save cookies to database
                     username = None
                     for cookie in cookies:
                         if cookie.get('name') == 'ds_user_id':
                             username = cookie.get('value')
                             break
-                    save_cookies_to_db(cookies, username or 'Instagram User')
                     
-                    # Write cookie files
+                    save_cookies_to_db(cookies, username or 'Instagram User')
                     write_netscape_cookies(cookies, '/tmp/cookies_netscape.txt')
+                    
                     cookie_file_path = os.path.join('/tmp', 'cookies.json')
                     with open(cookie_file_path, 'w') as f:
                         json.dump(cookies, f, indent=2)
@@ -1285,11 +1285,13 @@ def refresh_browserless_profile():
                 return {
                     "success": True,
                     "message": data.get('message', 'Profile refreshed successfully'),
+                    "cookies": cookies,
                     "cookies_count": len(cookies)
                 }
             else:
-                app.logger.error(f"❌ Render service refresh failed: {data.get('error')}")
-                return {"success": False, "error": data.get('error', 'Unknown error')}
+                error_msg = data.get('error', 'Unknown error')
+                app.logger.error(f"❌ Render service refresh failed: {error_msg}")
+                return {"success": False, "error": error_msg}
         else:
             app.logger.error(f"❌ Render service returned {response.status_code}")
             return {"success": False, "error": f"Render service returned {response.status_code}"}
