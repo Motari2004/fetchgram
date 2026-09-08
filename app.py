@@ -3499,14 +3499,14 @@ def api_download():
         if "private" in error_msg.lower() or "login" in error_msg.lower() or "cookie" in error_msg.lower():
             app.logger.info("🔄 Private/login error detected. Attempting to extract fresh cookies...")
             
-            # ========== EXTRACT FRESH COOKIES ==========
+            # ========== STEP 1: Extract fresh cookies from Render service ==========
             extraction_success = extract_cookies_from_render_service()
             
             if extraction_success:
                 app.logger.info("✅ Fresh cookies extracted. Retrying download...")
                 
                 try:
-                    # ========== RETRY WITH FRESH COOKIES ==========
+                    # ========== STEP 2: Retry with fresh cookies ==========
                     with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
                         info = ydl.extract_info(url, download=False)
                     
@@ -3558,13 +3558,92 @@ def api_download():
                 except yt_dlp.utils.DownloadError as retry_error:
                     retry_msg = str(retry_error)
                     app.logger.error(f"❌ Retry still failed: {retry_msg[:200]}")
-                    # Return the error with a flag indicating cookies were attempted
-                    return jsonify({
-                        "error": clean_error(retry_msg),
-                        "cookies_refreshed": True,
-                        "cookies_attempted": True,
-                        "requires_cookies": True
-                    }), 403
+                    
+                    # ========== STEP 3: If retry still fails, call Browserless refresh ==========
+                    if "login required" in retry_msg.lower() or "private" in retry_msg.lower() or "rate-limit" in retry_msg.lower():
+                        app.logger.info("🔄 Cookies still not working, attempting Browserless profile refresh...")
+                        
+                        refresh_result = refresh_browserless_profile()
+                        
+                        if refresh_result.get('success'):
+                            app.logger.info("✅ Browserless profile refreshed, retrying download one more time...")
+                            
+                            try:
+                                # ========== STEP 4: Final retry after Browserless refresh ==========
+                                with yt_dlp.YoutubeDL(base_ydl_opts()) as ydl:
+                                    info = ydl.extract_info(url, download=False)
+                                
+                                entries = info.get("entries") if "entries" in info else [info]
+                                entries = [e for e in entries if e]
+                                if not entries:
+                                    return jsonify({"error": "No videos found after refresh"}), 422
+                                
+                                target = entries[0]
+                                if media_id:
+                                    target = next((e for e in entries if e.get("id") == media_id), None) or target
+                                
+                                video_info = {
+                                    "id": target.get("id"),
+                                    "title": target.get("title", "Instagram video"),
+                                    "duration": target.get("duration"),
+                                    "uploader": target.get("uploader") or target.get("uploader_id"),
+                                    "thumbnail": target.get("thumbnail"),
+                                    "ext": target.get("ext", "mp4")
+                                }
+                                response["video_info"] = video_info
+                                session['current_video_url'] = get_direct_video_url(url, media_id)
+                                session['current_video_title'] = video_info.get('title')
+                                session['current_video_thumbnail'] = video_info.get('thumbnail')
+                                
+                                if action == "url_only":
+                                    direct_url = get_direct_video_url(url, media_id)
+                                    if direct_url:
+                                        response["download_url"] = direct_url
+                                        response["cookies_refreshed"] = True
+                                        response["profile_refreshed"] = True
+                                        response["message"] = "Profile refreshed and cookies updated"
+                                    else:
+                                        response["download_url"] = f"/api/download?url={url}&id={media_id}"
+                                        response["warning"] = "Direct URL not available, using streaming fallback"
+                                elif action == "download":
+                                    filepath, job_dir, target = download_video_file(url, media_id)
+                                    download_name = f"{target.get('id', 'instagram_video')}.{target.get('ext', 'mp4')}"
+                                    @after_this_request
+                                    def cleanup(response_obj):
+                                        shutil.rmtree(job_dir, ignore_errors=True)
+                                        return response_obj
+                                    return send_file(filepath, as_attachment=True, download_name=download_name)
+                                else:
+                                    return jsonify({"error": f"Unknown action: {action}"}), 400
+                                
+                                app.logger.info("✅ Final retry successful after profile refresh!")
+                                return jsonify(response)
+                                
+                            except yt_dlp.utils.DownloadError as final_error:
+                                return jsonify({
+                                    "error": clean_error(str(final_error)),
+                                    "cookies_refreshed": True,
+                                    "profile_refreshed": True,
+                                    "cookies_attempted": True,
+                                    "requires_cookies": True
+                                }), 403
+                        else:
+                            app.logger.error(f"❌ Browserless refresh failed: {refresh_result.get('error')}")
+                            return jsonify({
+                                "error": clean_error(retry_msg),
+                                "cookies_refreshed": True,
+                                "profile_refreshed": False,
+                                "cookies_attempted": True,
+                                "requires_cookies": True
+                            }), 403
+                    else:
+                        return jsonify({
+                            "error": clean_error(retry_msg),
+                            "cookies_refreshed": True,
+                            "cookies_attempted": True,
+                            "requires_cookies": True
+                        }), 403
+                        
                 except Exception as retry_err:
                     app.logger.error(f"❌ Retry exception: {retry_err}")
                     return jsonify({
