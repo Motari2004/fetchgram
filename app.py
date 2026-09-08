@@ -5186,21 +5186,52 @@ def get_pipelines():
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
     try:
+        # ✅ Set isolation level to READ COMMITTED to avoid deadlocks
+        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_READ_COMMITTED)
+        
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # ✅ FIX 1: Get pipelines first WITHOUT LEFT JOIN
         cur.execute("""
-            SELECT p.*, 
-                   COUNT(pr.id) as total_posted_count,
-                   SUM(CASE WHEN pr.status = 'success' THEN 1 ELSE 0 END) as success_count,
-                   SUM(CASE WHEN pr.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
-                   MAX(pr.posted_at) as last_post_time
+            SELECT 
+                p.id,
+                p.name,
+                p.profile_username,
+                p.facebook_account_id,
+                p.facebook_page_name,
+                p.daily_limit,
+                p.is_active,
+                p.last_run,
+                p.total_posted,
+                p.created_at,
+                p.updated_at,
+                p.zernio_key_id
             FROM pipelines p
-            LEFT JOIN posted_reels pr ON p.id = pr.pipeline_id
-            GROUP BY p.id ORDER BY p.created_at DESC
+            ORDER BY p.created_at DESC
         """)
         pipelines = cur.fetchall()
         
+        # ✅ FIX 2: Get counts separately for each pipeline
         for pipeline in pipelines:
-            # Get counts from scheduled_posts (new flow)
+            pipeline_id = pipeline['id']
+            
+            # Get posted_reels counts with simple queries
+            cur.execute("""
+                SELECT 
+                    COUNT(*) FILTER (WHERE status = 'success') as success_count,
+                    COUNT(*) FILTER (WHERE status = 'failed') as failed_count,
+                    MAX(posted_at) as last_post_time
+                FROM posted_reels 
+                WHERE pipeline_id = %s
+            """, (pipeline_id,))
+            stats = cur.fetchone()
+            
+            pipeline['success_count'] = stats['success_count'] or 0
+            pipeline['failed_count'] = stats['failed_count'] or 0
+            pipeline['last_post_time'] = stats['last_post_time']
+            pipeline['total_posted_count'] = stats['success_count'] or 0
+            
+            # Get scheduled_posts counts
             cur.execute("""
                 SELECT 
                     COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
@@ -5210,10 +5241,10 @@ def get_pipelines():
                     COUNT(*) as total_scheduled
                 FROM scheduled_posts 
                 WHERE pipeline_id = %s
-            """, (pipeline['id'],))
+            """, (pipeline_id,))
             scheduled_counts = cur.fetchone()
             
-            # Get counts from pending_posts (backward compatibility)
+            # Get pending_posts counts (backward compatibility)
             cur.execute("""
                 SELECT 
                     COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
@@ -5221,7 +5252,7 @@ def get_pipelines():
                     COUNT(*) FILTER (WHERE status = 'failed') as failed_count
                 FROM pending_posts 
                 WHERE pipeline_id = %s
-            """, (pipeline['id'],))
+            """, (pipeline_id,))
             pending_counts = cur.fetchone()
             
             # Combine counts from both tables
@@ -5235,16 +5266,30 @@ def get_pipelines():
             pipeline['posted_posts'] = total_posted
             pipeline['failed_posts'] = total_failed
             pipeline['total_scheduled'] = scheduled_counts['total_scheduled'] or 0
-            
+        
+        cur.close()
+        conn.close()
+        
         return jsonify({"status": "success", "pipelines": pipelines})
+        
+    except psycopg2.errors.DeadlockDetected:
+        app.logger.warning("⚠️ Deadlock detected in get_pipelines, retrying...")
+        conn.rollback()
+        # Retry once
+        try:
+            return get_pipelines()
+        except Exception as retry_e:
+            return jsonify({"error": f"Deadlock retry failed: {str(retry_e)}"}), 500
     except Exception as e:
         app.logger.error(f"Error fetching pipelines: {e}")
         import traceback
         app.logger.error(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
     finally:
-        cur.close()
-        conn.close()
+        try:
+            conn.close()
+        except:
+            pass
 
 @app.route('/api/pipelines', methods=['POST'])
 def create_pipeline():
