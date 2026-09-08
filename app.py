@@ -2822,7 +2822,7 @@ def get_direct_url_from_cache_only(reel_url):
 def run_pipeline(pipeline_id):
     """
     Process DUE posts for a specific pipeline only.
-    Pipeline ONLY triggers webhooks - publishing is done by the webhook.
+    Pipeline triggers the video URL service AND caption webhook.
     """
     conn = get_db_connection()
     if not conn:
@@ -2866,46 +2866,68 @@ def run_pipeline(pipeline_id):
             try:
                 app.logger.info(f"📤 Processing due post: {post['reel_url'][:50]}...")
                 
-                # Step 1: Get video URL
-                direct_video_url = post.get('direct_video_url', '')
+                # ============================================================
+                # STEP 1: GET VIDEO URL - ALWAYS CALL THE SERVICE
+                # ============================================================
+                # ✅ FIX: ALWAYS fetch from service, don't skip!
+                app.logger.info(f"📥 [Video Fetch] Calling video URL service for: {post['reel_url'][:50]}...")
                 
-                if not direct_video_url:
-                    app.logger.info(f"📥 Fetching video URL from service for: {post['reel_url'][:50]}...")
-                    
+                direct_video_url = None
+                
+                try:
+                    # Call the video URL getter service - same as fetch endpoint!
                     direct_video_url = get_direct_video_url_from_service(post['reel_url'])
                     
                     if direct_video_url:
+                        app.logger.info(f"✅ [Video Fetch] SUCCESS - Got video URL: {direct_video_url[:50]}...")
+                        
+                        # Cache it for future use
                         cache_direct_url(post['reel_url'], direct_video_url, '')
+                        
+                        # Update the scheduled post with the URL
                         cur.execute("""
                             UPDATE scheduled_posts 
                             SET direct_video_url = %s, updated_at = NOW()
                             WHERE id = %s
                         """, (direct_video_url, scheduled_post_id))
                         conn.commit()
-                        app.logger.info(f"✅ Video URL fetched from service")
+                        app.logger.info(f"✅ [Video Fetch] Updated scheduled_post with video URL")
                     else:
-                        direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
-                        if direct_video_url:
-                            app.logger.info(f"✅ Found video URL in cache")
-                            cur.execute("""
-                                UPDATE scheduled_posts 
-                                SET direct_video_url = %s, updated_at = NOW()
-                                WHERE id = %s
-                            """, (direct_video_url, scheduled_post_id))
-                            conn.commit()
+                        app.logger.warning(f"⚠️ [Video Fetch] Service returned no URL")
+                        
+                except Exception as e:
+                    app.logger.error(f"❌ [Video Fetch] Error calling video service: {e}")
+                    import traceback
+                    app.logger.error(traceback.format_exc())
+                    direct_video_url = None
                 
+                # If service failed, try cache as fallback
                 if not direct_video_url:
-                    app.logger.warning(f"⚠️ No video URL for: {post['reel_url'][:50]}... - will retry later")
+                    app.logger.info(f"📥 [Video Fetch] Service failed, checking cache...")
+                    direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
+                    if direct_video_url:
+                        app.logger.info(f"✅ [Video Fetch] Found video URL in cache: {direct_video_url[:50]}...")
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET direct_video_url = %s, updated_at = NOW()
+                            WHERE id = %s
+                        """, (direct_video_url, scheduled_post_id))
+                        conn.commit()
+                
+                # If still no URL, skip this post (will retry next run)
+                if not direct_video_url:
+                    app.logger.warning(f"⚠️ [Video Fetch] No video URL found for: {post['reel_url'][:50]}... - will retry later")
                     continue
                 
-                # ✅ Step 2: Check if caption already exists
+                # ============================================================
+                # STEP 2: CHECK IF CAPTION EXISTS
+                # ============================================================
                 caption = post.get('caption', '')
                 
-                # ✅ If caption exists, we can trigger webhook to publish immediately
                 if caption and caption.strip():
                     app.logger.info(f"✅ Caption already in database, triggering webhook to publish...")
                     
-                    # ✅ Mark as processing (webhook will handle publishing)
+                    # Mark as processing
                     cur.execute("""
                         UPDATE scheduled_posts 
                         SET status = 'processing', updated_at = NOW()
@@ -2913,15 +2935,17 @@ def run_pipeline(pipeline_id):
                     """, (scheduled_post_id,))
                     conn.commit()
                     
-                    # ✅ Send to webhook immediately with the caption
+                    # Send to webhook immediately with the caption AND video URL
                     webhook_url = f"https://fetchgram-one.vercel.app/api/webhook/caption"
                     
                     try:
+                        app.logger.info(f"📤 Sending webhook with caption and video URL...")
                         response = requests.post(
                             webhook_url,
                             json={
                                 "reel_url": post['reel_url'],
                                 "caption": caption,
+                                "video_url": direct_video_url,  # ← PASS VIDEO URL
                                 "job_id": f"pipeline_{scheduled_post_id}",
                                 "status": "completed",
                                 "profile_username": pipeline['profile_username'],
@@ -2935,6 +2959,7 @@ def run_pipeline(pipeline_id):
                         if response.status_code == 200:
                             app.logger.info(f"✅ Webhook triggered for caption (immediate publish)")
                             webhook_triggered += 1
+                            posted_count += 1
                         else:
                             app.logger.error(f"❌ Webhook failed: {response.status_code}")
                             cur.execute("""
@@ -2961,7 +2986,9 @@ def run_pipeline(pipeline_id):
                     
                     continue
                 
-                # ✅ No caption - TRIGGER WEBHOOK TO FETCH CAPTION (ASYNC)
+                # ============================================================
+                # STEP 3: NO CAPTION - TRIGGER WEBHOOK TO FETCH CAPTION
+                # ============================================================
                 app.logger.info(f"📝 No caption in DB, triggering webhook to fetch caption...")
                 
                 # Mark post as "processing" (waiting for caption)
@@ -2984,6 +3011,7 @@ def run_pipeline(pipeline_id):
                         caption_service_url,
                         json={
                             "url": post['reel_url'],
+                            "video_url": direct_video_url,  # ← PASS VIDEO URL TO CAPTION SERVICE
                             "webhook_url": webhook_url,
                             "pipeline_id": post['pipeline_id'],
                             "profile_username": pipeline['profile_username'],
