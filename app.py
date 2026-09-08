@@ -1224,7 +1224,140 @@ def extract_cookies_from_render_service():
 
 
 
+# ============== BROWSERLESS REFRESH FUNCTIONS ==============
 
+BROWSERLESS_TOKEN = os.environ.get('BROWSERLESS_API_KEY', '2V9phNVcUGlxvJJ9154e14b2c71b8c81d6e0f2f23bcfaf323')
+BROWSERLESS_ORIGIN = 'https://production-sfo.browserless.io'
+BROWSERLESS_PROFILE = os.environ.get('BROWSERLESS_PROFILE', 'instagram-login')
+
+def refresh_browserless_profile():
+    """
+    Refresh the Browserless profile with fresh Instagram cookies.
+    Calls the Browserless /profile/refresh endpoint directly.
+    """
+    app.logger.info("🔄 Refreshing Browserless profile...")
+    
+    if not BROWSERLESS_TOKEN:
+        app.logger.error("❌ BROWSERLESS_API_KEY not set")
+        return {"success": False, "error": "BROWSERLESS_API_KEY not set"}
+    
+    try:
+        # Step 1: Get fresh cookies from Render service
+        app.logger.info("🍪 Getting fresh cookies from Render service...")
+        extract_result = extract_cookies_from_render_service()
+        
+        if not extract_result:
+            app.logger.error("❌ Failed to get fresh cookies from Render service")
+            return {"success": False, "error": "Failed to get fresh cookies"}
+        
+        # Step 2: Get cookies from database
+        db_cookies = get_cookies_from_db()
+        if not db_cookies:
+            app.logger.error("❌ No cookies in database after extraction")
+            return {"success": False, "error": "No cookies in database"}
+        
+        cookies = db_cookies.get('cookie_data', [])
+        app.logger.info(f"✅ Got {len(cookies)} fresh cookies")
+        
+        # Step 3: Refresh the profile with new cookies
+        refresh_url = f"{BROWSERLESS_ORIGIN}/profile/refresh?token={BROWSERLESS_TOKEN}"
+        
+        # Format cookies for Browserless refresh endpoint
+        formatted_cookies = []
+        for cookie in cookies:
+            formatted_cookies.append({
+                "name": cookie.get('name', ''),
+                "value": cookie.get('value', ''),
+                "domain": cookie.get('domain', '.instagram.com'),
+                "path": cookie.get('path', '/'),
+                "expires": cookie.get('expirationDate', -1),
+                "httpOnly": cookie.get('httpOnly', False),
+                "secure": cookie.get('secure', False),
+                "session": cookie.get('session', True)
+            })
+        
+        refresh_payload = {
+            "name": BROWSERLESS_PROFILE,
+            "state": {
+                "cookies": formatted_cookies
+            }
+        }
+        
+        app.logger.info(f"📤 Sending refresh request to Browserless...")
+        
+        response = requests.post(
+            refresh_url,
+            json=refresh_payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            app.logger.info("✅ Browserless profile refreshed successfully!")
+            return {
+                "success": True,
+                "message": "Profile refreshed with fresh cookies",
+                "cookies_count": len(cookies)
+            }
+        elif response.status_code == 404:
+            app.logger.warning("⚠️ Profile not found, creating new profile instead...")
+            return create_browserless_profile(cookies)
+        else:
+            app.logger.error(f"❌ Refresh failed: {response.status_code} - {response.text}")
+            return {"success": False, "error": f"Refresh failed: {response.status_code}"}
+            
+    except Exception as e:
+        app.logger.error(f"❌ Refresh error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def create_browserless_profile(cookies):
+    """
+    Create a new Browserless profile with the provided cookies.
+    """
+    try:
+        create_url = f"{BROWSERLESS_ORIGIN}/profile/create?token={BROWSERLESS_TOKEN}"
+        
+        formatted_cookies = []
+        for cookie in cookies:
+            formatted_cookies.append({
+                "name": cookie.get('name', ''),
+                "value": cookie.get('value', ''),
+                "domain": cookie.get('domain', '.instagram.com'),
+                "path": cookie.get('path', '/'),
+                "expires": cookie.get('expirationDate', -1),
+                "httpOnly": cookie.get('httpOnly', False),
+                "secure": cookie.get('secure', False),
+                "session": cookie.get('session', True)
+            })
+        
+        create_payload = {
+            "name": BROWSERLESS_PROFILE,
+            "state": {
+                "cookies": formatted_cookies
+            }
+        }
+        
+        response = requests.post(
+            create_url,
+            json=create_payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        
+        if response.status_code == 200 or response.status_code == 201:
+            app.logger.info(f"✅ Browserless profile created: {BROWSERLESS_PROFILE}")
+            return {
+                "success": True,
+                "message": f"Profile '{BROWSERLESS_PROFILE}' created with {len(cookies)} cookies"
+            }
+        else:
+            app.logger.error(f"❌ Profile creation failed: {response.status_code}")
+            return {"success": False, "error": f"Profile creation failed: {response.status_code}"}
+            
+    except Exception as e:
+        app.logger.error(f"❌ Profile creation error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 
@@ -2050,8 +2183,8 @@ def process_pending_post(post):
 
 def get_caption_for_reel(reel_url, profile_username, pipeline_id, max_retries=3):
     """
-    Get caption with simple retry logic.
-    Checks database first, then retries the caption service multiple times.
+    Get caption with smart retry + Browserless refresh on failure.
+    If caption service fails, refresh Browserless profile and retry.
     """
     conn = get_db_connection()
     if not conn:
@@ -2102,14 +2235,22 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id, max_retries=3)
         cur.close()
         conn.close()
         
-        # ========== SECOND: Try caption service with retries ==========
-        app.logger.info(f"🔥 Caption not in database, fetching from service with retries...")
+        # ========== SECOND: Try caption service with Browserless refresh on retry ==========
+        app.logger.info(f"🔥 Caption not in database, fetching from service...")
         
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
+                    # ✅ Refresh Browserless profile before retry
+                    app.logger.info(f"🔄 Attempt {attempt+1}/{max_retries} - Refreshing Browserless profile...")
+                    refresh_result = refresh_browserless_profile()
+                    if refresh_result.get('success'):
+                        app.logger.info(f"✅ Browserless profile refreshed")
+                    else:
+                        app.logger.warning(f"⚠️ Browserless refresh failed: {refresh_result.get('error')}")
+                    
                     wait_time = 2 ** attempt * 3  # 3, 6, 12 seconds
-                    app.logger.info(f"⏳ Retry {attempt+1}/{max_retries} in {wait_time}s...")
+                    app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
                     time.sleep(wait_time)
                 
                 app.logger.info(f"📞 Attempt {attempt+1}/{max_retries} calling caption service...")
