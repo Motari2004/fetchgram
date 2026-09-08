@@ -2403,14 +2403,10 @@ def process_pending_post(post):
     
     
     
-    
-    
-    
-
 def get_caption_for_reel(reel_url, profile_username, pipeline_id, max_retries=3):
     """
-    Get caption with smart retry + Browserless refresh on failure.
-    If caption service fails, refresh Browserless profile and retry.
+    Get caption with simple retry.
+    NO Browserless refresh - just retry the caption service.
     """
     conn = get_db_connection()
     if not conn:
@@ -2461,22 +2457,15 @@ def get_caption_for_reel(reel_url, profile_username, pipeline_id, max_retries=3)
         cur.close()
         conn.close()
         
-        # ========== SECOND: Try caption service with Browserless refresh on retry ==========
+        # ========== SECOND: Try caption service with simple retry ==========
         app.logger.info(f"🔥 Caption not in database, fetching from service...")
         
         for attempt in range(max_retries):
             try:
+                # ✅ Simple retry with exponential backoff - NO Browserless refresh
                 if attempt > 0:
-                    # ✅ Refresh Browserless profile before retry
-                    app.logger.info(f"🔄 Attempt {attempt+1}/{max_retries} - Refreshing Browserless profile...")
-                    refresh_result = refresh_browserless_profile()
-                    if refresh_result.get('success'):
-                        app.logger.info(f"✅ Browserless profile refreshed")
-                    else:
-                        app.logger.warning(f"⚠️ Browserless refresh failed: {refresh_result.get('error')}")
-                    
                     wait_time = 2 ** attempt * 3  # 3, 6, 12 seconds
-                    app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
+                    app.logger.info(f"⏳ Attempt {attempt+1}/{max_retries} - Waiting {wait_time}s before retry...")
                     time.sleep(wait_time)
                 
                 app.logger.info(f"📞 Attempt {attempt+1}/{max_retries} calling caption service...")
