@@ -2861,30 +2861,30 @@ def run_pipeline(pipeline_id):
         webhook_triggered = 0
         
         for post in due_posts:
+            # ✅ Store the scheduled post ID
+            scheduled_post_id = post['id']
+            
             try:
                 app.logger.info(f"📤 Processing due post: {post['reel_url'][:50]}...")
                 
-                # Step 1: Get video URL - ✅ USE THE NEW SERVICE
+                # Step 1: Get video URL
                 direct_video_url = post.get('direct_video_url', '')
                 
                 if not direct_video_url:
                     app.logger.info(f"📥 Fetching video URL from service for: {post['reel_url'][:50]}...")
                     
-                    # ✅ Use the new video URL getter service
                     direct_video_url = get_direct_video_url_from_service(post['reel_url'])
                     
                     if direct_video_url:
-                        # Cache the URL
                         cache_direct_url(post['reel_url'], direct_video_url, '')
                         cur.execute("""
                             UPDATE scheduled_posts 
                             SET direct_video_url = %s, updated_at = NOW()
                             WHERE id = %s
-                        """, (direct_video_url, post['id']))
+                        """, (direct_video_url, scheduled_post_id))
                         conn.commit()
                         app.logger.info(f"✅ Video URL fetched from service")
                     else:
-                        # Try cache as fallback
                         direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
                         if direct_video_url:
                             app.logger.info(f"✅ Found video URL in cache")
@@ -2892,10 +2892,9 @@ def run_pipeline(pipeline_id):
                                 UPDATE scheduled_posts 
                                 SET direct_video_url = %s, updated_at = NOW()
                                 WHERE id = %s
-                            """, (direct_video_url, post['id']))
+                            """, (direct_video_url, scheduled_post_id))
                             conn.commit()
                         else:
-                            # ⚠️ Final fallback to yt-dlp
                             app.logger.info(f"🔄 Trying yt-dlp fallback for: {post['reel_url'][:50]}...")
                             direct_video_url = get_direct_video_url(post['reel_url'])
                             if direct_video_url:
@@ -2904,7 +2903,7 @@ def run_pipeline(pipeline_id):
                                     UPDATE scheduled_posts 
                                     SET direct_video_url = %s, updated_at = NOW()
                                     WHERE id = %s
-                                """, (direct_video_url, post['id']))
+                                """, (direct_video_url, scheduled_post_id))
                                 conn.commit()
                                 app.logger.info(f"✅ Video URL fetched via yt-dlp fallback")
                 
@@ -2919,7 +2918,6 @@ def run_pipeline(pipeline_id):
                 if caption and caption.strip():
                     app.logger.info(f"✅ Caption already in database, posting immediately...")
                     
-                    # Publish to Facebook NOW
                     key_id = pipeline.get('zernio_key_id')
                     
                     result = publish_to_facebook(
@@ -2931,7 +2929,7 @@ def run_pipeline(pipeline_id):
                     )
                     
                     if result and not result.get('error'):
-                        post_id = result.get('post', {}).get('_id') or result.get('post_id')
+                        post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
                         post_url = None
                         platforms = result.get('post', {}).get('platforms', [])
                         for platform in platforms:
@@ -2939,29 +2937,33 @@ def run_pipeline(pipeline_id):
                                 post_url = platform.get('publishedUrl')
                                 break
                         
+                        # ✅ Step 1: Mark in posted_reels
                         mark_reel_as_posted(
                             pipeline_id=post['pipeline_id'],
                             reel_url=post['reel_url'],
                             direct_video_url=direct_video_url,
                             caption=caption,
-                            facebook_post_id=post_id,
+                            facebook_post_id=post_result_id,
                             facebook_post_url=post_url,
                             status='success'
                         )
                         
+                        # ✅ Step 2: CRITICAL - Update scheduled_posts status to 'posted'
                         cur.execute("""
                             UPDATE scheduled_posts 
                             SET status = 'posted', posted_at = NOW(), updated_at = NOW()
                             WHERE id = %s
-                        """, (post['id'],))
+                        """, (scheduled_post_id,))
                         conn.commit()
                         
+                        app.logger.info(f"✅ Post {scheduled_post_id} published and marked as posted!")
                         posted_count += 1
-                        app.logger.info(f"✅ Posted successfully: {post['reel_url'][:50]}...")
+                        
                     else:
                         error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
                         app.logger.error(f"❌ Facebook publish failed: {error_msg}")
                         
+                        # Mark as failed in both tables
                         mark_reel_as_posted(
                             pipeline_id=post['pipeline_id'],
                             reel_url=post['reel_url'],
@@ -2975,7 +2977,7 @@ def run_pipeline(pipeline_id):
                             UPDATE scheduled_posts 
                             SET status = 'failed', error_message = %s, updated_at = NOW()
                             WHERE id = %s
-                        """, (str(error_msg), post['id']))
+                        """, (str(error_msg), scheduled_post_id))
                         conn.commit()
                         
                         failed_count += 1
@@ -2984,15 +2986,13 @@ def run_pipeline(pipeline_id):
                 # ✅ No caption - TRIGGER WEBHOOK (ASYNC)
                 app.logger.info(f"📝 No caption in DB, triggering webhook for: {post['reel_url'][:50]}...")
                 
-                # Mark post as "processing" (waiting for caption)
                 cur.execute("""
                     UPDATE scheduled_posts 
                     SET status = 'processing', updated_at = NOW()
                     WHERE id = %s
-                """, (post['id'],))
+                """, (scheduled_post_id,))
                 conn.commit()
                 
-                # Trigger async caption fetch with webhook
                 webhook_url = f"https://fetchgram-one.vercel.app/api/webhook/caption"
                 
                 try:
@@ -3007,7 +3007,7 @@ def run_pipeline(pipeline_id):
                             "webhook_url": webhook_url,
                             "pipeline_id": post['pipeline_id'],
                             "profile_username": pipeline['profile_username'],
-                            "post_id": post['id'],
+                            "post_id": scheduled_post_id,  # ✅ Pass the scheduled post ID
                             "async": True
                         },
                         timeout=5,
@@ -3025,7 +3025,7 @@ def run_pipeline(pipeline_id):
                                 error_message = 'Webhook trigger failed',
                                 updated_at = NOW()
                             WHERE id = %s
-                        """, (post['id'],))
+                        """, (scheduled_post_id,))
                         conn.commit()
                         failed_count += 1
                         
@@ -3040,7 +3040,7 @@ def run_pipeline(pipeline_id):
                             error_message = %s,
                             updated_at = NOW()
                         WHERE id = %s
-                    """, (str(e), post['id']))
+                    """, (str(e), scheduled_post_id))
                     conn.commit()
                     failed_count += 1
                     
@@ -3056,7 +3056,7 @@ def run_pipeline(pipeline_id):
                             error_message = %s, 
                             updated_at = NOW()
                         WHERE id = %s
-                    """, (str(e), post['id']))
+                    """, (str(e), scheduled_post_id))
                     conn.commit()
                 except:
                     pass
