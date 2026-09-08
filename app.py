@@ -4472,10 +4472,6 @@ def cookie_extractor_status():
 
 
 
-
-
-
-
 # ============== CAPTION WEBHOOK ==============
 
 @app.route("/api/webhook/caption", methods=["POST"])
@@ -4493,7 +4489,7 @@ def webhook_caption():
     error = data.get('error')
     profile_username = data.get('profile_username')
     pipeline_id = data.get('pipeline_id')
-    post_id = data.get('post_id')  # ✅ Get post_id for scheduled_posts
+    post_id = data.get('post_id')
     
     app.logger.info(f"📥 [Job {job_id}] Webhook received for: {reel_url[:50] if reel_url else 'unknown'}...")
     app.logger.info(f"   Caption: {caption[:50] if caption else 'None'}...")
@@ -4504,7 +4500,6 @@ def webhook_caption():
     if not reel_url:
         return jsonify({"status": "error", "message": "reel_url required"}), 400
     
-    # Update CAPTION_FETCH_STATUS if tracking
     if reel_url in CAPTION_FETCH_STATUS:
         CAPTION_FETCH_STATUS[reel_url]['status'] = status
         CAPTION_FETCH_STATUS[reel_url]['message'] = 'Webhook received'
@@ -4518,9 +4513,10 @@ def webhook_caption():
         try:
             conn = get_db_connection()
             if conn:
-                cur = conn.cursor()
+                # ✅ FIX: Use RealDictCursor so post is a dict, not tuple
+                cur = conn.cursor(cursor_factory=RealDictCursor)
                 
-                # ✅ Store in reel_cache
+                # Store in reel_cache
                 cur.execute("""
                     INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
                     VALUES (%s, '', %s, NOW())
@@ -4528,7 +4524,7 @@ def webhook_caption():
                         caption = EXCLUDED.caption, created_at = NOW()
                 """, (reel_url, caption))
                 
-                # ✅ Store in scraped_reels if possible
+                # Store in scraped_reels if possible
                 if profile_username:
                     cur.execute("""
                         SELECT id, results FROM scraped_reels 
@@ -4540,8 +4536,8 @@ def webhook_caption():
                     """, (profile_username,))
                     result = cur.fetchone()
                     if result:
-                        row_id = result[0]
-                        results = result[1]
+                        row_id = result['id']
+                        results = result['results']
                         updated = False
                         if isinstance(results, str):
                             results = json.loads(results)
@@ -4563,7 +4559,7 @@ def webhook_caption():
                             conn.commit()
                             app.logger.info(f"💾 [Job {job_id}] Caption stored in scraped_reels")
                 
-                # ✅ Store in posted_reels if already posted
+                # Store in posted_reels if already posted
                 cur.execute("""
                     UPDATE posted_reels 
                     SET caption = %s 
@@ -4571,11 +4567,10 @@ def webhook_caption():
                 """, (caption, reel_url))
                 conn.commit()
                 
-                # ✅ PROCESS SCHEDULED POST - NEW FLOW
+                # PROCESS SCHEDULED POST - NEW FLOW
                 if post_id:
                     app.logger.info(f"🔥 [Job {job_id}] Processing scheduled post {post_id} with caption")
                     
-                    # Update the scheduled post with caption
                     cur.execute("""
                         UPDATE scheduled_posts 
                         SET caption = %s, updated_at = NOW()
@@ -4585,24 +4580,22 @@ def webhook_caption():
                     
                     updated = cur.fetchone()
                     if updated:
-                        # Get the full post and process it
                         cur.execute("""
                             SELECT sp.*, p.* 
                             FROM scheduled_posts sp
                             JOIN pipelines p ON sp.pipeline_id = p.id
                             WHERE sp.id = %s
                         """, (post_id,))
-                        post = cur.fetchone()
+                        post = cur.fetchone()  # Now returns a dict! ✅
                         
                         if post:
-                            # Process the post with the caption
                             process_post_with_caption(post, caption)
                         else:
                             app.logger.warning(f"⚠️ [Job {job_id}] Post {post_id} not found")
                     else:
                         app.logger.warning(f"⚠️ [Job {job_id}] Post {post_id} not in 'processing' status")
                 
-                # ✅ Fallback: Find scheduled post by reel_url and pipeline_id
+                # Fallback: Find scheduled post by reel_url and pipeline_id
                 elif pipeline_id:
                     app.logger.info(f"🔍 [Job {job_id}] Finding scheduled post by URL: {reel_url[:50]}...")
                     cur.execute("""
@@ -4613,30 +4606,28 @@ def webhook_caption():
                     result = cur.fetchone()
                     
                     if result:
-                        post_id = result[0]
-                        app.logger.info(f"🔥 [Job {job_id}] Found scheduled post {post_id} for caption")
+                        found_post_id = result['id']
+                        app.logger.info(f"🔥 [Job {job_id}] Found scheduled post {found_post_id} for caption")
                         
-                        # Update with caption
                         cur.execute("""
                             UPDATE scheduled_posts 
                             SET caption = %s, updated_at = NOW()
                             WHERE id = %s
-                        """, (caption, post_id))
+                        """, (caption, found_post_id))
                         conn.commit()
                         
-                        # Get and process the post
                         cur.execute("""
                             SELECT sp.*, p.* 
                             FROM scheduled_posts sp
                             JOIN pipelines p ON sp.pipeline_id = p.id
                             WHERE sp.id = %s
-                        """, (post_id,))
-                        post = cur.fetchone()
+                        """, (found_post_id,))
+                        post = cur.fetchone()  # Now returns a dict! ✅
                         
                         if post:
                             process_post_with_caption(post, caption)
                 
-                # ✅ Backward compatibility: Check pending_posts
+                # Backward compatibility: Check pending_posts
                 else:
                     app.logger.info(f"🔍 [Job {job_id}] Checking for pending post: {reel_url[:50]}...")
                     pending = get_pending_post(reel_url)
@@ -4655,9 +4646,8 @@ def webhook_caption():
                     else:
                         app.logger.info(f"ℹ️ [Job {job_id}] No pending post found")
                         
-                        # Check if already posted
                         cur.execute("SELECT COUNT(*) FROM posted_reels WHERE reel_url = %s AND status = 'success'", (reel_url,))
-                        already_posted = cur.fetchone()[0] > 0
+                        already_posted = cur.fetchone()['count'] > 0
                         if already_posted:
                             app.logger.info(f"✅ [Job {job_id}] Reel already posted")
                             cur.execute("""
@@ -4698,7 +4688,6 @@ def webhook_caption():
         if reel_url in CAPTION_FETCH_STATUS:
             CAPTION_FETCH_STATUS[reel_url]['error'] = error
         
-        # ✅ Mark scheduled post as failed
         if post_id:
             try:
                 conn = get_db_connection()
@@ -4716,7 +4705,6 @@ def webhook_caption():
             except Exception as e:
                 app.logger.error(f"❌ [Job {job_id}] Failed to mark scheduled post as failed: {e}")
         
-        # ✅ Fallback: Mark pending_posts as failed
         try:
             conn = get_db_connection()
             if conn:
