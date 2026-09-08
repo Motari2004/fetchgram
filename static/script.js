@@ -4316,32 +4316,123 @@ window.checkInstagramStatus = async function() {
 
 
 
-
-
-// ==================== MANUAL SCHEDULER (12-HOUR FORMAT) ====================
+// ==================== MANUAL SCHEDULER (Collapsible + Pagination) ====================
 
 let unpostedReels = [];
 let selectedReels = new Set();
 let schedulerPipelines = [];
+let schedulerCurrentPage = 1;
+let schedulerPageLimit = 25;
+let schedulerFilteredReels = [];
+let schedulerIsLoading = false;
+let isSchedulerExpanded = false;
 
-// Initialize manual scheduler
+// ==================== TOGGLE SCHEDULER ====================
+
+function toggleManualScheduler() {
+    const body = document.getElementById('manual-scheduler-body');
+    const status = document.getElementById('scheduler-status-indicator');
+    const toggleBtn = document.getElementById('scheduler-toggle-btn');
+    
+    if (body) {
+        isSchedulerExpanded = body.style.display !== 'none';
+        body.style.display = isSchedulerExpanded ? 'none' : 'block';
+        
+        if (status) {
+            status.textContent = isSchedulerExpanded ? '▼ Click to Expand' : '▲ Click to Collapse';
+        }
+        if (toggleBtn) {
+            toggleBtn.textContent = isSchedulerExpanded ? '▼' : '▲';
+        }
+        
+        // Load data when expanded
+        if (!isSchedulerExpanded) {
+            loadSchedulerPipelines();
+            const select = document.getElementById('scheduler-pipeline-select');
+            if (select && select.value) {
+                loadUnpostedReels(select.value);
+            }
+        }
+    }
+}
+
+// ==================== PAGINATION FUNCTIONS ====================
+
+function getPaginatedReels() {
+    const search = document.getElementById('scheduler-search')?.value?.toLowerCase() || '';
+    const limit = parseInt(document.getElementById('scheduler-page-limit')?.value || 25);
+    
+    // Filter reels by search
+    let filtered = unpostedReels;
+    if (search) {
+        filtered = unpostedReels.filter(reel => {
+            const url = reel.url || '';
+            const caption = reel.caption || '';
+            return url.toLowerCase().includes(search) || caption.toLowerCase().includes(search);
+        });
+    }
+    
+    schedulerFilteredReels = filtered;
+    schedulerPageLimit = limit;
+    
+    const total = filtered.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    
+    // Ensure current page is valid
+    if (schedulerCurrentPage > totalPages) {
+        schedulerCurrentPage = totalPages;
+    }
+    if (schedulerCurrentPage < 1) {
+        schedulerCurrentPage = 1;
+    }
+    
+    const start = (schedulerCurrentPage - 1) * limit;
+    const end = Math.min(start + limit, total);
+    const pageReels = filtered.slice(start, end);
+    
+    // Update stats
+    const loadedCountEl = document.getElementById('scheduler-loaded-count');
+    if (loadedCountEl) {
+        loadedCountEl.textContent = total;
+    }
+    
+    // Update pagination info
+    document.getElementById('scheduler-page-info').textContent = `Page ${schedulerCurrentPage} of ${totalPages}`;
+    document.getElementById('scheduler-prev-page').disabled = schedulerCurrentPage <= 1;
+    document.getElementById('scheduler-next-page').disabled = schedulerCurrentPage >= totalPages;
+    
+    return pageReels;
+}
+
+function goToPage(page) {
+    schedulerCurrentPage = page;
+    renderSchedulerReels(getPaginatedReels());
+}
+
+// ==================== INITIALIZE SCHEDULER ====================
+
 async function initManualScheduler() {
     await loadSchedulerPipelines();
     setupSchedulerEventListeners();
     setDefaultDates();
+    
+    // Start collapsed by default
+    const body = document.getElementById('manual-scheduler-body');
+    if (body) {
+        body.style.display = 'none';
+    }
 }
 
 // Set default dates for the scheduler
 function setDefaultDates() {
     const now = new Date();
-    
-    // Set default date to tomorrow
     const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
     document.getElementById('batch-start-date').value = tomorrow.toISOString().split('T')[0];
 }
 
-// Load pipelines for the scheduler dropdown
+// ==================== LOAD PIPELINES ====================
+
 async function loadSchedulerPipelines() {
     const select = document.getElementById('scheduler-pipeline-select');
     if (!select) return;
@@ -4352,25 +4443,43 @@ async function loadSchedulerPipelines() {
         
         if (data.status === 'success' && data.pipelines) {
             schedulerPipelines = data.pipelines;
+            const currentValue = select.value;
+            
             select.innerHTML = '<option value="">Select a pipeline...</option>';
             
             data.pipelines.forEach(p => {
                 const option = document.createElement('option');
                 option.value = p.id;
                 option.textContent = `${p.name} (@${p.profile_username})`;
+                if (p.id === currentValue) {
+                    option.selected = true;
+                }
                 select.appendChild(option);
             });
+            
+            // Update badge
+            updateSchedulerBadge();
         }
     } catch (error) {
         console.error('Failed to load pipelines:', error);
     }
 }
 
-// Load unposted reels for a pipeline
+function updateSchedulerBadge() {
+    const badge = document.getElementById('scheduler-post-count');
+    if (badge) {
+        const total = unpostedReels.length || 0;
+        badge.textContent = `${total} posts`;
+    }
+}
+
+// ==================== LOAD UNPOSTED REELS ====================
+
 async function loadUnpostedReels(pipelineId) {
     const container = document.getElementById('scheduler-reels-list');
     const stats = document.getElementById('scheduler-stats');
     const batchActions = document.getElementById('scheduler-batch-actions');
+    const pagination = document.getElementById('scheduler-pagination');
     
     if (!pipelineId) {
         container.innerHTML = `
@@ -4384,8 +4493,12 @@ async function loadUnpostedReels(pipelineId) {
         `;
         stats.hidden = true;
         batchActions.hidden = true;
+        pagination.hidden = true;
         return;
     }
+    
+    if (schedulerIsLoading) return;
+    schedulerIsLoading = true;
     
     container.innerHTML = `
         <div class="loading-state">
@@ -4403,15 +4516,22 @@ async function loadUnpostedReels(pipelineId) {
         if (data.status === 'success') {
             unpostedReels = data.reels || [];
             selectedReels = new Set();
+            schedulerCurrentPage = 1;
             
             // Update stats
             document.getElementById('scheduler-total-reels').textContent = unpostedReels.length;
             document.getElementById('scheduler-scheduled-count').textContent = data.scheduled_count || 0;
             document.getElementById('scheduler-selected-count').textContent = '0';
+            document.getElementById('scheduler-loaded-count').textContent = unpostedReels.length;
             stats.hidden = false;
             batchActions.hidden = false;
+            pagination.hidden = false;
             
-            renderSchedulerReels(unpostedReels);
+            // Update badge
+            updateSchedulerBadge();
+            
+            // Render first page
+            renderSchedulerReels(getPaginatedReels());
             
             // Set default date if not set
             if (!document.getElementById('batch-start-date').value) {
@@ -4429,6 +4549,7 @@ async function loadUnpostedReels(pipelineId) {
             `;
             stats.hidden = true;
             batchActions.hidden = true;
+            pagination.hidden = true;
         }
     } catch (error) {
         console.error('Failed to load reels:', error);
@@ -4441,23 +4562,42 @@ async function loadUnpostedReels(pipelineId) {
         `;
         stats.hidden = true;
         batchActions.hidden = true;
+        pagination.hidden = true;
+    } finally {
+        schedulerIsLoading = false;
     }
 }
 
-// Render reels in the scheduler
+// ==================== RENDER SCHEDULER REELS ====================
+
 function renderSchedulerReels(reels) {
     const container = document.getElementById('scheduler-reels-list');
     
     if (!reels || reels.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div style="font-size: 32px; margin-bottom: 12px;">🎉</div>
-                <strong>All reels are scheduled or posted!</strong>
-                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-                    No unposted reels found for this pipeline.
-                </p>
-            </div>
-        `;
+        const hasFiltered = schedulerFilteredReels && schedulerFilteredReels.length > 0;
+        const hasUnposted = unpostedReels && unpostedReels.length > 0;
+        
+        if (hasFiltered && !hasUnposted) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div style="font-size: 32px; margin-bottom: 12px;">🔍</div>
+                    <strong>No results match your search</strong>
+                    <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                        Try adjusting your search terms.
+                    </p>
+                </div>
+            `;
+        } else {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div style="font-size: 32px; margin-bottom: 12px;">🎉</div>
+                    <strong>All reels are scheduled or posted!</strong>
+                    <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                        No unposted reels found for this pipeline.
+                    </p>
+                </div>
+            `;
+        }
         return;
     }
     
@@ -4571,21 +4711,12 @@ function format12HourTime(hours, minutes) {
     return `${h12}:${m} ${ampm}`;
 }
 
-function get12HourOptions() {
-    return {
-        hours: [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-        minutes: ['00', '15', '30', '45'],
-        ampm: ['AM', 'PM']
-    };
-}
-
-// ==================== SINGLE SCHEDULE MODAL (12-HOUR) ====================
+// ==================== SINGLE SCHEDULE MODAL ====================
 
 function openSingleScheduleModal(url) {
     const reel = unpostedReels.find(r => r.url === url);
     if (!reel) return;
     
-    // Create modal if it doesn't exist
     let modal = document.getElementById('single-schedule-modal');
     if (!modal) {
         modal = document.createElement('div');
@@ -4644,11 +4775,9 @@ function openSingleScheduleModal(url) {
         });
     }
     
-    // Populate modal
     document.getElementById('single-schedule-url').value = url;
     document.getElementById('single-schedule-caption').value = reel.caption || '';
     
-    // Set default date to tomorrow
     const now = new Date();
     const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -4657,7 +4786,6 @@ function openSingleScheduleModal(url) {
     document.getElementById('single-schedule-status').style.display = 'none';
     modal.hidden = false;
     
-    // Confirm button
     document.getElementById('single-schedule-confirm').onclick = async function() {
         const date = document.getElementById('single-schedule-date').value;
         const hour = document.getElementById('single-schedule-hour').value;
@@ -4673,14 +4801,10 @@ function openSingleScheduleModal(url) {
             return;
         }
         
-        // Parse 12-hour time
         const { hours, minutes } = parse12HourTime(hour, minute, ampm);
-        
-        // Create datetime
         const scheduledDate = new Date(date);
         scheduledDate.setHours(hours, minutes, 0, 0);
         
-        // Check if time is in the past
         if (scheduledDate < new Date()) {
             status.textContent = '⚠️ This time is in the past. Please select a future time.';
             status.className = 'status-message error';
@@ -4737,7 +4861,8 @@ function openSingleScheduleModal(url) {
     };
 }
 
-// Unschedule a single reel
+// ==================== UNSCHEDULE SINGLE REEL ====================
+
 async function unscheduleSingleReel(url) {
     if (!confirm(`Remove this reel from the schedule?`)) return;
     
@@ -4773,7 +4898,73 @@ async function unscheduleSingleReel(url) {
     }
 }
 
-// ==================== BATCH SCHEDULING (12-HOUR) ====================
+// ==================== SETUP EVENT LISTENERS ====================
+
+function setupSchedulerEventListeners() {
+    // Pipeline selection
+    document.getElementById('scheduler-pipeline-select')?.addEventListener('change', function() {
+        if (this.value) {
+            loadUnpostedReels(this.value);
+        }
+    });
+    
+    // Load posts button
+    document.getElementById('load-unposted-btn')?.addEventListener('click', function() {
+        const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+        if (pipelineId) {
+            loadUnpostedReels(pipelineId);
+        } else {
+            showToast('⚠️ Please select a pipeline first', 'warning');
+        }
+    });
+    
+    // Refresh button
+    document.getElementById('refresh-unposted-btn')?.addEventListener('click', function() {
+        const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+        if (pipelineId) {
+            loadUnpostedReels(pipelineId);
+        } else {
+            loadSchedulerPipelines();
+        }
+    });
+    
+    // Pagination buttons
+    document.getElementById('scheduler-prev-page')?.addEventListener('click', function() {
+        if (schedulerCurrentPage > 1) {
+            goToPage(schedulerCurrentPage - 1);
+        }
+    });
+    
+    document.getElementById('scheduler-next-page')?.addEventListener('click', function() {
+        const totalPages = Math.ceil(schedulerFilteredReels.length / schedulerPageLimit) || 1;
+        if (schedulerCurrentPage < totalPages) {
+            goToPage(schedulerCurrentPage + 1);
+        }
+    });
+    
+    // Page limit change
+    document.getElementById('scheduler-page-limit')?.addEventListener('change', function() {
+        schedulerCurrentPage = 1;
+        renderSchedulerReels(getPaginatedReels());
+    });
+    
+    // Search
+    document.getElementById('scheduler-search')?.addEventListener('input', function() {
+        schedulerCurrentPage = 1;
+        renderSchedulerReels(getPaginatedReels());
+    });
+    
+    // Clear selection
+    document.getElementById('clear-selection-btn')?.addEventListener('click', function() {
+        document.querySelectorAll('.reel-select-checkbox:not(:disabled)').forEach(cb => {
+            cb.checked = false;
+        });
+        updateSelectedCount();
+        showToast('✅ Selection cleared', 'success');
+    });
+}
+
+// ==================== BATCH SCHEDULING ====================
 
 // Schedule selected reels sequentially
 document.getElementById('schedule-sequential-btn')?.addEventListener('click', async function() {
@@ -4794,10 +4985,8 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
         return;
     }
     
-    // Parse 12-hour time
     const { hours, minutes } = parse12HourTime(hour, minute, ampm);
     
-    // Get selected reels
     const checkboxes = document.querySelectorAll('.reel-select-checkbox:checked:not(:disabled)');
     if (checkboxes.length === 0) {
         showToast('❌ Please select at least one reel', 'error');
@@ -4807,7 +4996,6 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
     const startTime = new Date(date);
     startTime.setHours(hours, minutes, 0, 0);
     
-    // Check if time is in the past
     if (startTime < new Date()) {
         showToast('⚠️ Start time is in the past. Please select a future time.', 'error');
         return;
@@ -4835,7 +5023,6 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
             caption: reel?.caption || ''
         });
         
-        // Add interval for next post
         currentTime = new Date(currentTime.getTime() + intervalMinutes * 60 * 1000);
     });
     
@@ -4866,7 +5053,7 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
     }
 });
 
-// Schedule selected reels randomly within a time range (12-hour)
+// Schedule selected reels randomly
 document.getElementById('schedule-random-btn')?.addEventListener('click', async function() {
     const pipelineId = document.getElementById('scheduler-pipeline-select').value;
     const date = document.getElementById('batch-start-date').value;
@@ -4883,7 +5070,6 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
         return;
     }
     
-    // Get selected reels
     const checkboxes = document.querySelectorAll('.reel-select-checkbox:checked:not(:disabled)');
     if (checkboxes.length === 0) {
         showToast('❌ Please select at least one reel', 'error');
@@ -4906,7 +5092,6 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
     this.textContent = '⏳ Generating...';
     
     try {
-        // Generate random times using the backend
         const timeResponse = await fetch('/api/scheduler/generate-random-times', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -4924,7 +5109,6 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
             return;
         }
         
-        // Use the selected date as base
         const baseDate = new Date(date);
         baseDate.setHours(0, 0, 0, 0);
         
@@ -4932,7 +5116,6 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
         const urls = [];
         checkboxes.forEach(cb => urls.push(cb.dataset.url));
         
-        // Shuffle URLs
         const shuffledUrls = [...urls].sort(() => Math.random() - 0.5);
         
         shuffledUrls.forEach((url, index) => {
@@ -4940,12 +5123,10 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
             const timeStr = timeData.times[index];
             const scheduledTime = new Date(timeStr);
             
-            // Use the base date
             scheduledTime.setFullYear(baseDate.getFullYear());
             scheduledTime.setMonth(baseDate.getMonth());
             scheduledTime.setDate(baseDate.getDate());
             
-            // If time is in the past, add a day
             if (scheduledTime < new Date()) {
                 scheduledTime.setDate(scheduledTime.getDate() + 1);
             }
@@ -4983,8 +5164,7 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
     }
 });
 
-// ==================== AUTO-SCHEDULE ALL (12-HOUR) ====================
-
+// Auto-schedule all
 document.getElementById('auto-schedule-all-btn')?.addEventListener('click', async function() {
     const pipelineId = document.getElementById('scheduler-pipeline-select').value;
     const rangeStart = parseInt(document.getElementById('batch-range-start').value) || 8;
@@ -5018,7 +5198,6 @@ document.getElementById('auto-schedule-all-btn')?.addEventListener('click', asyn
     this.textContent = '⏳ Scheduling...';
     
     try {
-        // Generate random times
         const timeResponse = await fetch('/api/scheduler/generate-random-times', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5042,7 +5221,6 @@ document.getElementById('auto-schedule-all-btn')?.addEventListener('click', asyn
             scheduledTime.setMonth(baseDate.getMonth());
             scheduledTime.setDate(baseDate.getDate());
             
-            // Ensure time is in the future
             if (scheduledTime < new Date()) {
                 scheduledTime.setDate(scheduledTime.getDate() + 1);
             }
@@ -5076,46 +5254,50 @@ document.getElementById('auto-schedule-all-btn')?.addEventListener('click', asyn
         showToast(`❌ Error: ${error.message}`, 'error');
     } finally {
         this.disabled = false;
-        this.textContent = '🎲 Auto-Schedule All';
+        this.textContent = '🎯 Auto-Schedule All';
     }
 });
 
-// Load unposted button
-document.getElementById('load-unposted-btn')?.addEventListener('click', function() {
-    const pipelineId = document.getElementById('scheduler-pipeline-select').value;
-    loadUnpostedReels(pipelineId);
-});
+// ==================== TOAST NOTIFICATION ====================
 
-// Refresh unposted button
-document.getElementById('refresh-unposted-btn')?.addEventListener('click', function() {
-    const pipelineId = document.getElementById('scheduler-pipeline-select').value;
-    if (pipelineId) {
-        loadUnpostedReels(pipelineId);
-    } else {
-        loadSchedulerPipelines();
-    }
-});
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        padding: 12px 20px;
+        border-radius: 8px;
+        color: #fff;
+        font-size: 14px;
+        z-index: 9999;
+        animation: slideIn 0.3s ease;
+        max-width: 400px;
+        background: ${type === 'success' ? 'rgba(34, 197, 94, 0.9)' : 
+                     type === 'error' ? 'rgba(239, 68, 68, 0.9)' : 
+                     type === 'warning' ? 'rgba(245, 158, 11, 0.9)' : 
+                     'rgba(59, 130, 246, 0.9)'};
+    `;
+    
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
 
-// Initialize manual scheduler
+// ==================== INITIALIZE ====================
+
 document.addEventListener('DOMContentLoaded', function() {
-    initManualScheduler();
-});
-
-// Toggle manual scheduler visibility
-document.getElementById('toggle-manual-scheduler-btn')?.addEventListener('click', function() {
-    const container = document.getElementById('manual-scheduler-container');
-    if (container) {
-        const isHidden = container.style.display === 'none' || container.style.display === '';
-        container.style.display = isHidden ? 'block' : 'none';
-        this.textContent = isHidden ? '🎯 Hide Scheduler' : '🎯 Manual Scheduler';
-        
-        if (isHidden) {
-            loadSchedulerPipelines();
-        }
+    // Set initial collapsed state
+    const body = document.getElementById('manual-scheduler-body');
+    if (body) {
+        body.style.display = 'none';
     }
-});
-
-// Initialize manual scheduler
-document.addEventListener('DOMContentLoaded', function() {
+    
     initManualScheduler();
 });
