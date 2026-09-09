@@ -3360,6 +3360,58 @@ def get_direct_url_from_cache_only(reel_url):
 
 # ============== UPDATED RUN_PIPELINE - PURE SCHEDULING ==============
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ============== UPDATED RUN_PIPELINE - WITH PIPELINE & POST TRACKING ==============
 
 def run_pipeline(pipeline_id):
@@ -3731,6 +3783,46 @@ def run_pipeline(pipeline_id):
     finally:
         cur.close()
         conn.close()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def run_all_active_pipelines():
