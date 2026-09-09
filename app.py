@@ -1058,58 +1058,227 @@ def store_caption_in_database(reel_url, caption, profile_username):
         app.logger.error(f"Error storing caption: {e}")
 
 
+# ============== CAPTION SERVICE WITH WAKE-UP MECHANISM ==============
+
+def get_caption_service_url():
+    """Get caption service URL from settings."""
+    return get_setting('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption')
+
+def wake_up_caption_service(max_retries=2, delay=3):
+    """
+    Wake up the caption service by sending a ping request.
+    This ensures the service is awake before sending the actual request.
+    """
+    caption_service_url = get_caption_service_url()
+    health_url = caption_service_url.replace('/api/caption', '/health')
+    
+    for attempt in range(max_retries):
+        try:
+            app.logger.info(f"💤 [Wake-up Attempt {attempt + 1}/{max_retries}] Waking up caption service...")
+            
+            # Send a ping request with a short timeout
+            response = requests.get(
+                health_url,
+                timeout=2,
+                headers={"User-Agent": "FetchGram-WakeUp/1.0"}
+            )
+            
+            if response.status_code == 200:
+                app.logger.info(f"✅ [Wake-up] Caption service is awake (attempt {attempt + 1})")
+                return True
+                
+        except requests.exceptions.Timeout:
+            app.logger.info(f"⏰ [Wake-up] Attempt {attempt + 1} timed out (expected if service is waking up)")
+        except requests.exceptions.ConnectionError:
+            app.logger.info(f"🔌 [Wake-up] Attempt {attempt + 1} connection error")
+        except Exception as e:
+            app.logger.info(f"⚠️ [Wake-up] Attempt {attempt + 1} error: {e}")
+        
+        # Wait before retry
+        if attempt < max_retries - 1:
+            wait_time = delay * (attempt + 1)  # 3s, 6s
+            app.logger.info(f"⏳ Waiting {wait_time}s before next wake-up attempt...")
+            time.sleep(wait_time)
+    
+    app.logger.info(f"⚠️ [Wake-up] Could not wake up caption service after {max_retries} attempts")
+    return False
+
+def fetch_caption_from_service_with_retry(reel_url, timeout=5, async_mode=True, webhook_url=None, 
+                                          pipeline_id=None, profile_username=None, post_id=None,
+                                          max_retries=3, wake_up=True):
+    """
+    Fetch caption from the caption service with retry and wake-up mechanism.
+    """
+    caption_service_url = get_caption_service_url()
+    
+    # ============================================================
+    # STEP 1: Wake up the service if needed
+    # ============================================================
+    if wake_up:
+        app.logger.info(f"💤 Sending wake-up ping to caption service...")
+        wake_up_caption_service(max_retries=2, delay=3)
+        
+        # Give the service a moment to fully initialize after wake-up
+        time.sleep(1)
+    
+    # ============================================================
+    # STEP 2: Send the actual request with retries
+    # ============================================================
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            # Build payload
+            payload = {"url": reel_url}
+            
+            if async_mode and webhook_url:
+                payload["webhook_url"] = webhook_url
+                payload["async"] = True
+                payload["pipeline_id"] = pipeline_id
+                payload["profile_username"] = profile_username
+                payload["post_id"] = post_id
+            
+            # Use longer timeout for first attempt (cold start)
+            actual_timeout = timeout * (2 if attempt == 0 and wake_up else 1)
+            
+            app.logger.info(f"📞 [Attempt {attempt + 1}/{max_retries}] Fetching caption for: {reel_url[:50]}... (timeout: {actual_timeout}s, async={async_mode})")
+            
+            response = requests.post(
+                caption_service_url,
+                json=payload,
+                timeout=actual_timeout,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            # ============================================================
+            # STEP 3: Handle response
+            # ============================================================
+            
+            # Success
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success'):
+                    if async_mode:
+                        app.logger.info(f"✅ [Attempt {attempt + 1}] Async caption fetch triggered for: {reel_url[:50]}...")
+                        return None
+                    else:
+                        caption = data.get('caption', '')
+                        app.logger.info(f"✅ [Attempt {attempt + 1}] Caption fetched: {caption[:50] if caption else 'Empty'}...")
+                        return caption
+                else:
+                    error_msg = data.get('error', 'Unknown error')
+                    app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Service returned error: {error_msg}")
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt * 2  # 2s, 4s, 8s
+                        app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    return None
+            
+            # Accepted (async mode)
+            elif response.status_code in [202, 204]:
+                app.logger.info(f"✅ [Attempt {attempt + 1}] Async request accepted for: {reel_url[:50]}...")
+                return None
+            
+            # Gateway errors - service might be waking up
+            elif response.status_code in [502, 503, 504]:
+                app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Gateway error: {response.status_code}")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 3 + 2  # 4s, 8s, 14s
+                    app.logger.info(f"⏳ Retrying in {wait_time}s (gateway error)...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts failed - gateway errors")
+                    return None
+            
+            # Other errors
+            else:
+                app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Service returned {response.status_code}")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 2
+                    app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                return None
+                
+        except requests.exceptions.Timeout:
+            # Timeout handling
+            if attempt == 0 and wake_up:
+                # First attempt timed out - service might be cold starting
+                app.logger.info(f"⏰ [Attempt {attempt + 1}] Timeout (service may be waking up)")
+                if attempt < max_retries - 1:
+                    wait_time = 5  # Wait 5 seconds for service to fully start
+                    app.logger.info(f"⏳ Waiting {wait_time}s for service to start...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts timed out")
+                    raise TimeoutError(f"Caption service timeout after {max_retries} attempts")
+            else:
+                app.logger.warning(f"⏰ [Attempt {attempt + 1}] Timeout")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 3
+                    app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts timed out")
+                    raise TimeoutError(f"Caption service timeout after {max_retries} attempts")
+                
+        except requests.exceptions.ConnectionError as e:
+            app.logger.warning(f"🔌 [Attempt {attempt + 1}] Connection error: {e}")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt * 3
+                app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                app.logger.error(f"❌ All attempts failed - connection errors")
+                return None
+                
+        except Exception as e:
+            app.logger.error(f"❌ [Attempt {attempt + 1}] Service error: {e}")
+            last_error = e
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt * 2
+                app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            return None
+    
+    app.logger.error(f"❌ All {max_retries} attempts failed for: {reel_url[:50]}...")
+    return None
+
+
 def fetch_caption_from_service(reel_url, timeout=5, async_mode=True, webhook_url=None, 
                                 pipeline_id=None, profile_username=None, post_id=None):
     """
-    Fetch caption from the caption service.
+    Fetch caption from the caption service with retry and wake-up mechanism.
+    
+    Args:
+        reel_url: The Instagram reel URL
+        timeout: Timeout for the request (short for async mode)
+        async_mode: If True, uses webhook callback instead of waiting
+        webhook_url: URL to receive the caption via webhook
+        pipeline_id: Pipeline ID for the post
+        profile_username: Instagram username
+        post_id: Scheduled post ID
+    
+    Returns:
+        caption: The caption if fetched synchronously, or None if async
     """
-    try:
-        caption_service_url = get_caption_service_url()
-        
-        payload = {"url": reel_url}
-        
-        if async_mode and webhook_url:
-            payload["webhook_url"] = webhook_url
-            payload["async"] = True
-            payload["pipeline_id"] = pipeline_id
-            payload["profile_username"] = profile_username
-            payload["post_id"] = post_id
-        
-        app.logger.info(f"📞 Fetching caption for: {reel_url[:50]}... (async={async_mode})")
-        
-        response = requests.post(
-            caption_service_url,
-            json=payload,
-            timeout=timeout,
-            headers={"Content-Type": "application/json"}
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success'):
-                if async_mode:
-                    app.logger.info(f"✅ Async caption fetch triggered for: {reel_url[:50]}...")
-                    return None
-                else:
-                    caption = data.get('caption', '')
-                    app.logger.info(f"✅ Caption fetched: {caption[:50] if caption else 'Empty'}...")
-                    return caption
-        elif response.status_code in [202, 204]:
-            app.logger.info(f"✅ Async request accepted for: {reel_url[:50]}...")
-            return None
-        
-        return None
-        
-    except requests.exceptions.Timeout:
-        if async_mode:
-            app.logger.info(f"⏰ Async request sent (timeout expected) for: {reel_url[:50]}...")
-            return None
-        else:
-            app.logger.error(f"⏰ Timeout fetching caption for {reel_url[:50]}...")
-            raise
-    except Exception as e:
-        app.logger.error(f"Service error: {e}")
-        return None
+    return fetch_caption_from_service_with_retry(
+        reel_url=reel_url,
+        timeout=timeout,
+        async_mode=async_mode,
+        webhook_url=webhook_url,
+        pipeline_id=pipeline_id,
+        profile_username=profile_username,
+        post_id=post_id,
+        max_retries=3,
+        wake_up=True  # ✅ Always wake up the service first
+    )
 
 
 def cache_direct_url(reel_url, direct_url, caption=''):
@@ -1249,9 +1418,144 @@ CAPTION_FETCH_STATUS = {}
 
 # ============== CAPTION SERVICE INTEGRATION ==============
 
+# ============== CAPTION SERVICE WITH WAKE-UP MECHANISM ==============
+
 def get_caption_service_url():
     """Get caption service URL from settings."""
     return get_setting('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption')
+
+def wake_up_caption_service(max_retries=3, delay=5):
+    """
+    Wake up the caption service by sending a ping request.
+    This ensures the service is awake before sending the actual request.
+    """
+    caption_service_url = get_caption_service_url()
+    
+    for attempt in range(max_retries):
+        try:
+            app.logger.info(f"💤 [Wake-up Attempt {attempt + 1}] Waking up caption service...")
+            
+            # Send a ping request with a short timeout
+            response = requests.get(
+                f"{caption_service_url.replace('/api/caption', '/health')}",
+                timeout=2,
+                headers={"User-Agent": "FetchGram-WakeUp/1.0"}
+            )
+            
+            if response.status_code == 200:
+                app.logger.info(f"✅ [Wake-up] Caption service is awake (attempt {attempt + 1})")
+                return True
+                
+        except requests.exceptions.Timeout:
+            app.logger.info(f"⏰ [Wake-up] Attempt {attempt + 1} timed out (expected)")
+        except requests.exceptions.ConnectionError:
+            app.logger.info(f"🔌 [Wake-up] Attempt {attempt + 1} connection error")
+        except Exception as e:
+            app.logger.info(f"⚠️ [Wake-up] Attempt {attempt + 1} error: {e}")
+        
+        # Wait before retry
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    
+    app.logger.info(f"⚠️ [Wake-up] Could not wake up caption service after {max_retries} attempts")
+    return False
+
+def fetch_caption_from_service_with_retry(reel_url, timeout=5, async_mode=True, webhook_url=None, 
+                                          pipeline_id=None, profile_username=None, post_id=None,
+                                          max_retries=3, wake_up=True):
+    """
+    Fetch caption from the caption service with retry and wake-up mechanism.
+    """
+    # First, wake up the service if needed
+    if wake_up:
+        wake_up_caption_service(max_retries=2, delay=3)
+    
+    # Try sending the actual request with retries
+    for attempt in range(max_retries):
+        try:
+            caption_service_url = get_caption_service_url()
+            
+            payload = {"url": reel_url}
+            
+            if async_mode and webhook_url:
+                payload["webhook_url"] = webhook_url
+                payload["async"] = True
+                payload["pipeline_id"] = pipeline_id
+                payload["profile_username"] = profile_username
+                payload["post_id"] = post_id
+            
+            # Use a longer timeout for the first attempt to allow for cold start
+            actual_timeout = timeout * (2 if attempt == 0 and wake_up else 1)
+            
+            app.logger.info(f"📞 [Attempt {attempt + 1}] Fetching caption for: {reel_url[:50]}... (timeout: {actual_timeout}s)")
+            
+            response = requests.post(
+                caption_service_url,
+                json=payload,
+                timeout=actual_timeout,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success'):
+                    if async_mode:
+                        app.logger.info(f"✅ Async caption fetch triggered for: {reel_url[:50]}...")
+                        return None
+                    else:
+                        caption = data.get('caption', '')
+                        app.logger.info(f"✅ Caption fetched: {caption[:50] if caption else 'Empty'}...")
+                        return caption
+            elif response.status_code in [202, 204]:
+                app.logger.info(f"✅ Async request accepted for: {reel_url[:50]}...")
+                return None
+            elif response.status_code in [502, 503, 504]:
+                # Gateway errors - service might be waking up
+                app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Gateway error: {response.status_code}")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 5  # 5, 10, 20 seconds
+                    app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts failed - gateway errors")
+                    return None
+            else:
+                app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Service returned {response.status_code}")
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                return None
+                
+        except requests.exceptions.Timeout:
+            if attempt == 0 and wake_up:
+                # First attempt timed out - service might be cold starting
+                app.logger.info(f"⏰ [Attempt {attempt + 1}] Timeout (expected during wake-up)")
+                if attempt < max_retries - 1:
+                    wait_time = 10  # Wait 10 seconds for service to fully start
+                    app.logger.info(f"⏳ Waiting {wait_time}s for service to start...")
+                    time.sleep(wait_time)
+                    continue
+            else:
+                app.logger.warning(f"⏰ [Attempt {attempt + 1}] Timeout")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 3
+                    app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts timed out")
+                    return None
+                
+        except Exception as e:
+            app.logger.error(f"❌ [Attempt {attempt + 1}] Service error: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(5)
+                continue
+            return None
+    
+    app.logger.error(f"❌ All {max_retries} attempts failed for: {reel_url[:50]}...")
+    return None
 
 def get_zernio_base_url():
     """Get Zernio base URL from settings."""
