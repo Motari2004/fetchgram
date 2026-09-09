@@ -2819,10 +2819,13 @@ def get_direct_url_from_cache_only(reel_url):
 
 # ============== UPDATED RUN_PIPELINE - PURE SCHEDULING ==============
 
+# ============== UPDATED RUN_PIPELINE - WITH PIPELINE & POST TRACKING ==============
+
 def run_pipeline(pipeline_id):
     """
     Process DUE posts for a specific pipeline only.
     Pipeline triggers the video URL service AND caption webhook.
+    Now passes pipeline_id, post_id, and profile_username for autonomy.
     """
     conn = get_db_connection()
     if not conn:
@@ -2865,18 +2868,25 @@ def run_pipeline(pipeline_id):
             
             try:
                 app.logger.info(f"📤 Processing due post: {post['reel_url'][:50]}...")
+                app.logger.info(f"   Pipeline ID: {pipeline_id}")
+                app.logger.info(f"   Post ID: {scheduled_post_id}")
+                app.logger.info(f"   Profile: {pipeline['profile_username']}")
                 
                 # ============================================================
-                # STEP 1: GET VIDEO URL - ALWAYS CALL THE SERVICE
+                # STEP 1: GET VIDEO URL - CALL SERVICE WITH ALL IDENTIFIERS
                 # ============================================================
-                # ✅ FIX: ALWAYS fetch from service, don't skip!
                 app.logger.info(f"📥 [Video Fetch] Calling video URL service for: {post['reel_url'][:50]}...")
                 
                 direct_video_url = None
                 
                 try:
-                    # Call the video URL getter service - same as fetch endpoint!
-                    direct_video_url = get_direct_video_url_from_service(post['reel_url'])
+                    # ✅ PASS ALL IDENTIFIERS for autonomy
+                    direct_video_url = get_direct_video_url_from_service(
+                        post['reel_url'],
+                        pipeline_id=pipeline_id,                    # ← PASS PIPELINE ID
+                        post_id=scheduled_post_id,                  # ← PASS POST ID
+                        profile_username=pipeline['profile_username']  # ← PASS PROFILE
+                    )
                     
                     if direct_video_url:
                         app.logger.info(f"✅ [Video Fetch] SUCCESS - Got video URL: {direct_video_url[:50]}...")
@@ -2949,8 +2959,8 @@ def run_pipeline(pipeline_id):
                                 "job_id": f"pipeline_{scheduled_post_id}",
                                 "status": "completed",
                                 "profile_username": pipeline['profile_username'],
-                                "pipeline_id": post['pipeline_id'],
-                                "post_id": scheduled_post_id
+                                "pipeline_id": pipeline_id,      # ← PASS PIPELINE ID
+                                "post_id": scheduled_post_id      # ← PASS POST ID
                             },
                             timeout=30,
                             headers={"Content-Type": "application/json"}
@@ -3006,6 +3016,9 @@ def run_pipeline(pipeline_id):
                     caption_service_url = get_caption_service_url()
                     
                     app.logger.info(f"📤 Sending async caption request to: {caption_service_url}")
+                    app.logger.info(f"   Pipeline ID: {pipeline_id}")
+                    app.logger.info(f"   Post ID: {scheduled_post_id}")
+                    app.logger.info(f"   Profile: {pipeline['profile_username']}")
                     
                     response = requests.post(
                         caption_service_url,
@@ -3013,9 +3026,9 @@ def run_pipeline(pipeline_id):
                             "url": post['reel_url'],
                             "video_url": direct_video_url,  # ← PASS VIDEO URL TO CAPTION SERVICE
                             "webhook_url": webhook_url,
-                            "pipeline_id": post['pipeline_id'],
+                            "pipeline_id": pipeline_id,      # ← PASS PIPELINE ID
                             "profile_username": pipeline['profile_username'],
-                            "post_id": scheduled_post_id,
+                            "post_id": scheduled_post_id,    # ← PASS POST ID
                             "async": True
                         },
                         timeout=5,
@@ -3108,18 +3121,23 @@ def run_all_active_pipelines():
         return {"error": "Database connection failed"}
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT id FROM pipelines WHERE is_active = TRUE")
+        cur.execute("SELECT id, name, profile_username FROM pipelines WHERE is_active = TRUE")
         pipelines = cur.fetchall()
         cur.close()
+        
+        app.logger.info(f"🔄 Running all active pipelines: {len(pipelines)} found")
         
         results = []
         total_posted = 0
         total_failed = 0
         
         for pipeline in pipelines:
+            app.logger.info(f"📋 Processing pipeline: {pipeline['name']} (@{pipeline['profile_username']})")
             result = run_pipeline(pipeline['id'])
             results.append({
-                "pipeline_id": pipeline['id'], 
+                "pipeline_id": pipeline['id'],
+                "pipeline_name": pipeline['name'],
+                "profile_username": pipeline['profile_username'],
                 "result": result
             })
             if result.get('posted'):
@@ -3127,13 +3145,17 @@ def run_all_active_pipelines():
             if result.get('failed'):
                 total_failed += result['failed']
         
+        app.logger.info(f"✅ All pipelines processed: {total_posted} posted, {total_failed} failed")
+        
         return {
             "message": f"Processed {total_posted} due posts, {total_failed} failed across {len(pipelines)} pipelines",
             "total_posted": total_posted,
             "total_failed": total_failed,
+            "total_pipelines": len(pipelines),
             "results": results
         }
     except Exception as e:
+        app.logger.error(f"Error running all pipelines: {e}")
         return {"error": str(e)}
     finally:
         conn.close()
