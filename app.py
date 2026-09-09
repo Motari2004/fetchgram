@@ -529,36 +529,38 @@ load_zernio_keys()
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ============== VIDEO URL GETTER FUNCTIONS ==============
-
-def get_direct_video_url_from_service(instagram_url):
+def get_direct_video_url_from_service(instagram_url, pipeline_id=None, post_id=None, profile_username=None):
     """
     Get direct video URL from the Instagram video URL getter service.
-    This replaces the yt-dlp + cookies approach.
+    Now supports autonomous pipeline and post tracking.
+    
+    Args:
+        instagram_url: The Instagram reel URL
+        pipeline_id: (Optional) Pipeline ID for tracking
+        post_id: (Optional) Scheduled post ID for tracking
+        profile_username: (Optional) Profile username for tracking
+    
+    Returns:
+        str: The direct video URL or None if failed
     """
     try:
         app.logger.info(f"📥 Fetching video URL from service: {IG_VIDEO_URL_GETTER}")
+        app.logger.info(f"   Pipeline ID: {pipeline_id or 'None'}")
+        app.logger.info(f"   Post ID: {post_id or 'None'}")
+        app.logger.info(f"   Profile: {profile_username or 'None'}")
+        
+        # Build payload with all identifiers for autonomy
+        payload = {"url": instagram_url}
+        if pipeline_id:
+            payload["pipeline_id"] = pipeline_id
+        if post_id:
+            payload["post_id"] = post_id
+        if profile_username:
+            payload["profile_username"] = profile_username
         
         response = requests.post(
             f"{IG_VIDEO_URL_GETTER}/api/download",
-            json={"url": instagram_url},
+            json=payload,
             timeout=60,
             headers={"Content-Type": "application/json"}
         )
@@ -593,6 +595,201 @@ def get_direct_video_url_from_service(instagram_url):
         return None
 
 
+
+
+
+
+
+
+
+def get_direct_video_url(url, media_id=None, pipeline_id=None, post_id=None, profile_username=None):
+    """
+    Get direct video URL using the Instagram video URL getter service.
+    Falls back to cache if service fails.
+    Now supports autonomous pipeline and post tracking.
+    """
+    # Try the service first with pipeline context
+    video_url = get_direct_video_url_from_service(
+        url, 
+        pipeline_id=pipeline_id, 
+        post_id=post_id,
+        profile_username=profile_username
+    )
+    
+    if video_url:
+        cache_direct_url(url, video_url, '')
+        app.logger.info(f"✅ Video URL fetched from service: {video_url[:50]}...")
+        return video_url
+    
+    # Try cache as fallback
+    video_url = get_direct_url_from_cache_only(url)
+    if video_url:
+        app.logger.info(f"✅ Video URL found in cache: {video_url[:50]}...")
+        return video_url
+    
+    app.logger.error(f"❌ No video URL found for: {url[:50]}...")
+    return None
+
+
+
+
+
+
+def store_video_url_with_context(reel_url, video_url, pipeline_id=None, post_id=None, profile_username=None):
+    """
+    Store video URL in database with pipeline context for autonomy.
+    This ensures the video URL is associated with the correct pipeline and post.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        
+        # 1. Store in reel_cache
+        cur.execute("""
+            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+            VALUES (%s, %s, '', NOW())
+            ON CONFLICT (reel_url) DO UPDATE SET 
+                direct_url = EXCLUDED.direct_url,
+                created_at = NOW()
+        """, (reel_url, video_url))
+        conn.commit()
+        app.logger.info(f"💾 Video URL stored in reel_cache for: {reel_url[:50]}...")
+        
+        # 2. If we have post_id, update the scheduled_post
+        if post_id:
+            cur.execute("""
+                UPDATE scheduled_posts 
+                SET direct_video_url = %s, updated_at = NOW()
+                WHERE id = %s AND status IN ('pending', 'processing')
+                RETURNING id
+            """, (video_url, post_id))
+            updated = cur.fetchone()
+            if updated:
+                app.logger.info(f"✅ Updated scheduled_post {post_id} with video URL")
+                
+                # Check if we have both video URL and caption
+                cur.execute("""
+                    SELECT caption FROM scheduled_posts WHERE id = %s
+                """, (post_id,))
+                result = cur.fetchone()
+                if result and result[0]:
+                    app.logger.info(f"✅ Caption already exists! Processing post {post_id}...")
+                    # Process the post (caption already exists)
+                    cur.execute("""
+                        SELECT 
+                            sp.id as scheduled_id,
+                            sp.reel_url,
+                            sp.direct_video_url,
+                            sp.caption,
+                            sp.pipeline_id,
+                            p.id as pipeline_id,
+                            p.name as pipeline_name,
+                            p.profile_username,
+                            p.facebook_account_id,
+                            p.zernio_key_id
+                        FROM scheduled_posts sp
+                        JOIN pipelines p ON sp.pipeline_id = p.id
+                        WHERE sp.id = %s
+                    """, (post_id,))
+                    post = cur.fetchone()
+                    if post and post['caption']:
+                        # Process in background to avoid blocking
+                        import threading
+                        def process_post():
+                            with app.app_context():
+                                process_post_with_caption(post, post['caption'])
+                        thread = threading.Thread(target=process_post)
+                        thread.daemon = True
+                        thread.start()
+        
+        # 3. If we have pipeline_id but no post_id, update by pipeline
+        elif pipeline_id:
+            cur.execute("""
+                UPDATE scheduled_posts 
+                SET direct_video_url = %s, updated_at = NOW()
+                WHERE reel_url = %s AND pipeline_id = %s AND status IN ('pending', 'processing')
+                RETURNING id
+            """, (video_url, reel_url, pipeline_id))
+            updated = cur.fetchone()
+            if updated:
+                app.logger.info(f"✅ Updated scheduled_post for pipeline {pipeline_id} with video URL")
+                
+                # Check if we have both video URL and caption
+                cur.execute("""
+                    SELECT 
+                        sp.id as scheduled_id,
+                        sp.reel_url,
+                        sp.direct_video_url,
+                        sp.caption,
+                        sp.pipeline_id,
+                        p.id as pipeline_id,
+                        p.name as pipeline_name,
+                        p.profile_username,
+                        p.facebook_account_id,
+                        p.zernio_key_id
+                    FROM scheduled_posts sp
+                    JOIN pipelines p ON sp.pipeline_id = p.id
+                    WHERE sp.reel_url = %s AND sp.pipeline_id = %s AND sp.status = 'pending'
+                """, (reel_url, pipeline_id))
+                post = cur.fetchone()
+                if post and post['caption']:
+                    app.logger.info(f"✅ Caption exists! Processing post...")
+                    import threading
+                    def process_post():
+                        with app.app_context():
+                            process_post_with_caption(post, post['caption'])
+                    thread = threading.Thread(target=process_post)
+                    thread.daemon = True
+                    thread.start()
+        
+        # 4. If we have profile_username, try to find the pipeline
+        elif profile_username:
+            cur.execute("""
+                SELECT id FROM pipelines 
+                WHERE profile_username = %s AND is_active = TRUE
+                LIMIT 1
+            """, (profile_username,))
+            pipeline = cur.fetchone()
+            if pipeline:
+                pipeline_id = pipeline[0]
+                cur.execute("""
+                    UPDATE scheduled_posts 
+                    SET direct_video_url = %s, updated_at = NOW()
+                    WHERE reel_url = %s AND pipeline_id = %s AND status IN ('pending', 'processing')
+                    RETURNING id
+                """, (video_url, reel_url, pipeline_id))
+                updated = cur.fetchone()
+                if updated:
+                    app.logger.info(f"✅ Updated scheduled_post for profile @{profile_username} with video URL")
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+        
+    except Exception as e:
+        app.logger.error(f"❌ Error storing video URL with context: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return False
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def get_direct_video_url(url, media_id=None):
     """
     Get direct video URL using the Instagram video URL getter service.
@@ -616,16 +813,29 @@ def get_direct_video_url(url, media_id=None):
     return None
 
 
-def get_video_with_captions(reel_url):
+def get_video_with_captions(reel_url, pipeline_id=None, post_id=None, profile_username=None):
     """
     Get video URL and caption using the Instagram video URL getter service.
+    Now supports autonomous pipeline and post tracking.
     """
     try:
         app.logger.info(f"📥 Fetching video from service: {IG_VIDEO_URL_GETTER}")
+        app.logger.info(f"   Pipeline ID: {pipeline_id or 'None'}")
+        app.logger.info(f"   Post ID: {post_id or 'None'}")
+        app.logger.info(f"   Profile: {profile_username or 'None'}")
+        
+        # Build payload with all identifiers
+        payload = {"url": reel_url}
+        if pipeline_id:
+            payload["pipeline_id"] = pipeline_id
+        if post_id:
+            payload["post_id"] = post_id
+        if profile_username:
+            payload["profile_username"] = profile_username
         
         response = requests.post(
             f"{IG_VIDEO_URL_GETTER}/api/download",
-            json={"url": reel_url},
+            json=payload,
             timeout=60,
             headers={"Content-Type": "application/json"}
         )
@@ -641,6 +851,17 @@ def get_video_with_captions(reel_url):
                     thumbnail = video_data.get('thumbnail') or video_data.get('thumbnailUrl')
                     
                     app.logger.info(f"✅ Video URL fetched from service")
+                    
+                    # Store with context
+                    if pipeline_id or post_id:
+                        store_video_url_with_context(
+                            reel_url, 
+                            download_url, 
+                            pipeline_id=pipeline_id, 
+                            post_id=post_id,
+                            profile_username=profile_username
+                        )
+                    
                     return download_url, caption, thumbnail
                 else:
                     app.logger.warning(f"⚠️ No download URL in response")
