@@ -5199,8 +5199,17 @@ def create_zernio_key():
     if not api_key:
         return jsonify({"error": "API key is required"}), 400
     
-    if not name:
-        name = f"Key {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    # 🔥 FIX: Auto-generate incrementing name if not provided or if it's "Key 1"
+    if not name or name == "Key 1":
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor()
+            # Count existing keys
+            cur.execute("SELECT COUNT(*) FROM zernio_keys")
+            count = cur.fetchone()[0]
+            cur.close()
+            conn.close()
+            name = f"Key {count + 1}"
     
     conn = get_db_connection()
     if not conn:
