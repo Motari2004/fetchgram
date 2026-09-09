@@ -788,8 +788,6 @@ def store_video_url_with_context(reel_url, video_url, pipeline_id=None, post_id=
 
 
 
-
-
 def get_direct_video_url(url, media_id=None):
     """
     Get direct video URL using the Instagram video URL getter service.
@@ -881,11 +879,18 @@ def get_video_with_captions(reel_url, pipeline_id=None, post_id=None, profile_us
         return None, None, None
 
 
-def get_direct_url_with_caption_cache(reel_url):
+def get_direct_url_with_caption_cache(reel_url, pipeline_id=None, post_id=None, profile_username=None):
+    """Get direct URL with caption from cache, with pipeline context."""
     conn = get_db_connection()
     if not conn:
-        video_url, caption, _ = get_video_with_captions(reel_url)
+        video_url, caption, _ = get_video_with_captions(
+            reel_url, 
+            pipeline_id=pipeline_id, 
+            post_id=post_id,
+            profile_username=profile_username
+        )
         return video_url, caption
+    
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -896,7 +901,13 @@ def get_direct_url_with_caption_cache(reel_url):
         if result and result[0]:
             app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
             return result[0], result[1] or ''
-        direct_url, caption, _ = get_video_with_captions(reel_url)
+        
+        direct_url, caption, _ = get_video_with_captions(
+            reel_url,
+            pipeline_id=pipeline_id,
+            post_id=post_id,
+            profile_username=profile_username
+        )
         if direct_url:
             cur.execute("""
                 INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
@@ -911,7 +922,12 @@ def get_direct_url_with_caption_cache(reel_url):
         return direct_url, caption
     except Exception as e:
         app.logger.error(f"Error getting cached direct URL: {e}")
-        video_url, caption, _ = get_video_with_captions(reel_url)
+        video_url, caption, _ = get_video_with_captions(
+            reel_url,
+            pipeline_id=pipeline_id,
+            post_id=post_id,
+            profile_username=profile_username
+        )
         return video_url, caption
     finally:
         cur.close()
