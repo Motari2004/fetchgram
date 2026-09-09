@@ -6454,37 +6454,258 @@ def process_scheduled_posts():
 def daily_scheduler():
     """
     Daily scheduler - runs at midnight (12:00 AM).
-    🔥 Pure scheduling - no pending posts, just schedule all unposted reels.
+    Schedules posts for all active pipelines with random times throughout the day.
     Captions will be fetched during posting.
     """
     app.logger.info("🕐 Running daily scheduler at midnight...")
     
-    # Run all active pipelines to schedule posts
-    result = run_all_active_pipelines()
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
     
-    # Clean up old scheduled posts
     try:
-        conn = get_db_connection()
-        if conn:
-            cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # ============================================================
+        # STEP 1: Get all active pipelines
+        # ============================================================
+        cur.execute("""
+            SELECT 
+                id, 
+                name, 
+                profile_username, 
+                facebook_account_id,
+                daily_limit,
+                is_active,
+                zernio_key_id
+            FROM pipelines 
+            WHERE is_active = TRUE
+            ORDER BY name
+        """)
+        pipelines = cur.fetchall()
+        
+        if not pipelines:
+            app.logger.info("ℹ️ No active pipelines found")
+            cur.close()
+            conn.close()
+            return jsonify({
+                "status": "success",
+                "message": "No active pipelines found",
+                "total_pipelines": 0,
+                "total_scheduled": 0
+            })
+        
+        app.logger.info(f"📊 Found {len(pipelines)} active pipelines")
+        
+        total_scheduled = 0
+        total_failed = 0
+        results = []
+        
+        # ============================================================
+        # STEP 2: Process each pipeline
+        # ============================================================
+        for pipeline in pipelines:
+            pipeline_id = pipeline['id']
+            pipeline_name = pipeline['name']
+            profile_username = pipeline['profile_username']
+            daily_limit = pipeline['daily_limit'] or 2
+            
+            app.logger.info(f"📋 Processing pipeline: {pipeline_name} (daily_limit: {daily_limit})")
+            
+            try:
+                # Get unposted reels for this pipeline
+                unposted = get_unposted_reels(profile_username, pipeline_id, limit=100)
+                
+                if not unposted:
+                    app.logger.info(f"ℹ️ No unposted reels for pipeline: {pipeline_name}")
+                    results.append({
+                        "pipeline_id": pipeline_id,
+                        "pipeline_name": pipeline_name,
+                        "scheduled": 0,
+                        "available": 0,
+                        "message": "No unposted reels available"
+                    })
+                    continue
+                
+                # Filter out already scheduled reels (pending posts)
+                cur.execute("""
+                    SELECT reel_url FROM scheduled_posts 
+                    WHERE pipeline_id = %s AND status IN ('pending', 'processing')
+                """, (pipeline_id,))
+                already_scheduled = {row['reel_url'] for row in cur.fetchall()}
+                
+                available_reels = [r for r in unposted if r.get('url') not in already_scheduled]
+                
+                if not available_reels:
+                    app.logger.info(f"ℹ️ All reels already scheduled for pipeline: {pipeline_name}")
+                    results.append({
+                        "pipeline_id": pipeline_id,
+                        "pipeline_name": pipeline_name,
+                        "scheduled": 0,
+                        "available": len(unposted),
+                        "message": "All reels already scheduled"
+                    })
+                    continue
+                
+                # Determine how many to schedule (up to daily_limit)
+                schedule_count = min(daily_limit, len(available_reels))
+                
+                app.logger.info(f"📝 Scheduling {schedule_count} posts for pipeline: {pipeline_name}")
+                
+                # ============================================================
+                # STEP 3: Generate random times throughout the day (8 AM - 10 PM)
+                # ============================================================
+                times = generate_random_post_times(schedule_count, start_hour=8, end_hour=22)
+                
+                # ============================================================
+                # STEP 4: Create scheduled posts with random times
+                # ============================================================
+                scheduled_count = 0
+                failed_count = 0
+                
+                for i, reel in enumerate(available_reels[:schedule_count]):
+                    try:
+                        # Get the random time for this post
+                        if i < len(times):
+                            scheduled_time = times[i]
+                        else:
+                            # Fallback: generate a random time
+                            random_hour = random.randint(8, 22)
+                            random_minute = random.randint(0, 59)
+                            scheduled_time = datetime.utcnow().replace(
+                                hour=random_hour,
+                                minute=random_minute,
+                                second=0,
+                                microsecond=0
+                            )
+                            if scheduled_time < datetime.utcnow():
+                                scheduled_time += timedelta(days=1)
+                        
+                        reel_url = reel.get('url') if isinstance(reel, dict) else reel
+                        caption = reel.get('caption', '') if isinstance(reel, dict) else ''
+                        
+                        # Get direct video URL from cache if available
+                        direct_video_url = get_direct_url_from_cache_only(reel_url) or ''
+                        
+                        # Check if already scheduled (double-check)
+                        cur.execute(
+                            "SELECT id FROM scheduled_posts WHERE reel_url = %s AND pipeline_id = %s AND status = 'pending'",
+                            (reel_url, pipeline_id)
+                        )
+                        existing = cur.fetchone()
+                        
+                        if existing:
+                            app.logger.warning(f"⚠️ Reel already scheduled: {reel_url[:50]}...")
+                            continue
+                        
+                        # Insert the scheduled post with the random time
+                        cur.execute("""
+                            INSERT INTO scheduled_posts (
+                                reel_url,
+                                direct_video_url,
+                                caption,
+                                pipeline_id,
+                                scheduled_time,
+                                status,
+                                created_at,
+                                updated_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, 'pending', NOW(), NOW())
+                            RETURNING id
+                        """, (
+                            reel_url,
+                            direct_video_url,
+                            caption,
+                            pipeline_id,
+                            scheduled_time.isoformat()
+                        ))
+                        
+                        scheduled_count += 1
+                        
+                        # Log the scheduled time in 12-hour format
+                        time_str = scheduled_time.strftime('%I:%M %p')
+                        app.logger.info(f"✅ Scheduled: {reel_url[:50]}... at {time_str}")
+                        
+                    except Exception as e:
+                        app.logger.error(f"❌ Failed to schedule post: {e}")
+                        failed_count += 1
+                
+                total_scheduled += scheduled_count
+                total_failed += failed_count
+                
+                results.append({
+                    "pipeline_id": pipeline_id,
+                    "pipeline_name": pipeline_name,
+                    "scheduled": scheduled_count,
+                    "failed": failed_count,
+                    "available": len(available_reels),
+                    "daily_limit": daily_limit
+                })
+                
+                app.logger.info(f"✅ Pipeline {pipeline_name}: scheduled {scheduled_count}, failed {failed_count}")
+                
+            except Exception as e:
+                app.logger.error(f"❌ Error processing pipeline {pipeline_name}: {e}")
+                import traceback
+                app.logger.error(traceback.format_exc())
+                results.append({
+                    "pipeline_id": pipeline_id,
+                    "pipeline_name": pipeline_name,
+                    "scheduled": 0,
+                    "error": str(e)
+                })
+                total_failed += 1
+        
+        # ============================================================
+        # STEP 5: Clean up old scheduled posts
+        # ============================================================
+        try:
             cur.execute("""
                 UPDATE scheduled_posts 
-                SET status = 'failed', error_message = 'Expired - not posted within 48 hours'
+                SET status = 'failed', 
+                    error_message = 'Expired - not posted within 48 hours',
+                    updated_at = NOW()
                 WHERE status = 'pending' 
                 AND scheduled_time < NOW() - INTERVAL '48 hours'
             """)
             conn.commit()
-            cur.close()
-            conn.close()
-            app.logger.info(f"🧹 Cleaned up old scheduled posts")
+            expired_count = cur.rowcount
+            app.logger.info(f"🧹 Cleaned up {expired_count} expired scheduled posts")
+        except Exception as e:
+            app.logger.error(f"Cleanup error: {e}")
+        
+        cur.close()
+        conn.close()
+        
+        # ============================================================
+        # STEP 6: Process any due posts (including newly scheduled ones)
+        # ============================================================
+        process_result = run_all_active_pipelines()
+        
+        # ============================================================
+        # STEP 7: Return summary
+        # ============================================================
+        return jsonify({
+            "status": "success",
+            "message": f"Daily scheduler completed: {total_scheduled} posts scheduled, {total_failed} failed",
+            "total_pipelines": len(pipelines),
+            "total_scheduled": total_scheduled,
+            "total_failed": total_failed,
+            "results": results,
+            "process_result": process_result,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
     except Exception as e:
-        app.logger.error(f"Cleanup error: {e}")
-    
-    return jsonify({
-        "status": "success",
-        "message": "Daily scheduler completed at midnight",
-        "result": result
-    })
+        app.logger.error(f"❌ Daily scheduler error: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            conn.close()
+        except:
+            pass
 
 # ============== DEBUG ROUTES ==============
 
