@@ -3365,8 +3365,9 @@ def get_direct_url_from_cache_only(reel_url):
 def run_pipeline(pipeline_id):
     """
     Process DUE posts for a specific pipeline only.
-    Pipeline triggers the video URL service AND caption webhook.
-    Now passes pipeline_id, post_id, and profile_username for autonomy.
+    Pipeline triggers the video URL service THEN caption service twice:
+    1. Immediate wake-up (2s timeout)
+    2. Real fetch after 20 seconds (30s timeout)
     """
     conn = get_db_connection()
     if not conn:
@@ -3538,9 +3539,11 @@ def run_pipeline(pipeline_id):
                     continue
                 
                 # ============================================================
-                # STEP 3: NO CAPTION - TRIGGER WEBHOOK TO FETCH CAPTION
+                # STEP 3: NO CAPTION - TRIGGER CAPTION SERVICE TWICE
                 # ============================================================
-                app.logger.info(f"📝 No caption in DB, triggering webhook to fetch caption...")
+                app.logger.info(f"📝 No caption in DB - triggering TWO caption fetch calls:")
+                app.logger.info(f"   🔹 Call 1: Immediate (wake-up, 2s timeout)")
+                app.logger.info(f"   🔹 Call 2: After 20 seconds (real fetch, 30s timeout)")
                 
                 # Mark post as "processing" (waiting for caption)
                 cur.execute("""
@@ -3550,61 +3553,139 @@ def run_pipeline(pipeline_id):
                 """, (scheduled_post_id,))
                 conn.commit()
                 
-                # Trigger async caption fetch with webhook
+                # ============================================================
+                # CALL 1: IMMEDIATE WAKE-UP (2 second timeout)
+                # ============================================================
+                caption_service_url = get_caption_service_url()
                 webhook_url = f"https://fetchgram-one.vercel.app/api/webhook/caption"
+                job_id = str(uuid.uuid4())
                 
                 try:
-                    caption_service_url = get_caption_service_url()
+                    app.logger.info(f"💤 [CALL 1] Sending WAKE-UP caption request (timeout: 2s)...")
                     
-                    app.logger.info(f"📤 Sending async caption request to: {caption_service_url}")
-                    app.logger.info(f"   Pipeline ID: {pipeline_id}")
-                    app.logger.info(f"   Post ID: {scheduled_post_id}")
-                    app.logger.info(f"   Profile: {pipeline['profile_username']}")
+                    # Build payload with all identifiers
+                    payload = {
+                        "url": post['reel_url'],
+                        "video_url": direct_video_url,  # ← PASS VIDEO URL
+                        "webhook_url": webhook_url,
+                        "pipeline_id": pipeline_id,      # ← PASS PIPELINE ID
+                        "profile_username": pipeline['profile_username'],
+                        "post_id": scheduled_post_id,    # ← PASS POST ID
+                        "job_id": job_id,
+                        "async": True,
+                        "call_type": "wakeup",
+                        "call_number": 1
+                    }
                     
+                    # Send with SHORT timeout - just to wake up the service
                     response = requests.post(
                         caption_service_url,
-                        json={
-                            "url": post['reel_url'],
-                            "video_url": direct_video_url,  # ← PASS VIDEO URL TO CAPTION SERVICE
-                            "webhook_url": webhook_url,
-                            "pipeline_id": pipeline_id,      # ← PASS PIPELINE ID
-                            "profile_username": pipeline['profile_username'],
-                            "post_id": scheduled_post_id,    # ← PASS POST ID
-                            "async": True
-                        },
-                        timeout=5,
+                        json=payload,
+                        timeout=2,  # ← VERY SHORT TIMEOUT (2 seconds)
                         headers={"Content-Type": "application/json"}
                     )
                     
                     if response.status_code in [200, 202]:
-                        app.logger.info(f"✅ Webhook triggered for caption fetch: {post['reel_url'][:50]}...")
-                        webhook_triggered += 1
+                        app.logger.info(f"✅ [CALL 1] Wake-up request accepted: {response.status_code}")
                     else:
-                        app.logger.warning(f"⚠️ Webhook trigger failed: {response.status_code}")
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET status = 'failed', 
-                                error_message = 'Webhook trigger failed',
-                                updated_at = NOW()
-                            WHERE id = %s
-                        """, (scheduled_post_id,))
-                        conn.commit()
-                        failed_count += 1
-                        
+                        app.logger.info(f"ℹ️ [CALL 1] Wake-up returned: {response.status_code}")
+                    webhook_triggered += 1
+                    
                 except requests.exceptions.Timeout:
-                    app.logger.info(f"⏰ Webhook request sent (timeout expected) for: {post['reel_url'][:50]}...")
+                    app.logger.info(f"⏰ [CALL 1] Wake-up request timed out (expected - service is cold starting)")
+                    webhook_triggered += 1
+                except requests.exceptions.ConnectionError:
+                    app.logger.info(f"🔌 [CALL 1] Wake-up connection error (expected during cold start)")
                     webhook_triggered += 1
                 except Exception as e:
-                    app.logger.error(f"❌ Webhook trigger error: {e}")
-                    cur.execute("""
-                        UPDATE scheduled_posts 
-                        SET status = 'failed', 
-                            error_message = %s,
-                            updated_at = NOW()
-                        WHERE id = %s
-                    """, (str(e), scheduled_post_id))
-                    conn.commit()
-                    failed_count += 1
+                    app.logger.warning(f"⚠️ [CALL 1] Wake-up error: {e}")
+                    # Even if wake-up fails, we'll still try the second call
+                
+                # ============================================================
+                # CALL 2: REAL FETCH AFTER 20 SECONDS
+                # ============================================================
+                import threading
+                import time
+                
+                def send_real_caption_fetch():
+                    """Send the real caption fetch after 20 seconds with retries"""
+                    with app.app_context():
+                        try:
+                            # Wait 20 seconds before sending the real request
+                            app.logger.info(f"⏳ [CALL 2] Waiting 20 seconds before REAL fetch...")
+                            time.sleep(20)  # ← WAIT 20 SECONDS
+                            
+                            app.logger.info(f"📞 [CALL 2] Sending REAL caption fetch request (timeout: 30s)...")
+                            app.logger.info(f"   Pipeline ID: {pipeline_id}")
+                            app.logger.info(f"   Post ID: {scheduled_post_id}")
+                            app.logger.info(f"   Profile: {pipeline['profile_username']}")
+                            
+                            # Build payload for real fetch
+                            payload_2 = {
+                                "url": post['reel_url'],
+                                "video_url": direct_video_url,  # ← PASS VIDEO URL
+                                "webhook_url": webhook_url,
+                                "pipeline_id": pipeline_id,      # ← PASS PIPELINE ID
+                                "profile_username": pipeline['profile_username'],
+                                "post_id": scheduled_post_id,    # ← PASS POST ID
+                                "job_id": job_id,
+                                "async": True,
+                                "call_type": "real_fetch",
+                                "call_number": 2,
+                                "attempt": 1
+                            }
+                            
+                            # Send with LONGER timeout for the real fetch
+                            response = requests.post(
+                                caption_service_url,
+                                json=payload_2,
+                                timeout=30,  # ← LONGER TIMEOUT (30 seconds)
+                                headers={"Content-Type": "application/json"}
+                            )
+                            
+                            if response.status_code in [200, 202]:
+                                app.logger.info(f"✅ [CALL 2] Real fetch request accepted: {response.status_code}")
+                                webhook_triggered += 1
+                            else:
+                                app.logger.warning(f"⚠️ [CALL 2] Real fetch returned: {response.status_code}")
+                                
+                        except requests.exceptions.Timeout:
+                            app.logger.error(f"❌ [CALL 2] Real fetch timed out after 30s")
+                            # Try one more time with retry
+                            try:
+                                time.sleep(5)
+                                app.logger.info(f"🔄 [CALL 2] Retrying real fetch...")
+                                response = requests.post(
+                                    caption_service_url,
+                                    json={
+                                        "url": post['reel_url'],
+                                        "video_url": direct_video_url,
+                                        "webhook_url": webhook_url,
+                                        "pipeline_id": pipeline_id,
+                                        "profile_username": pipeline['profile_username'],
+                                        "post_id": scheduled_post_id,
+                                        "job_id": job_id,
+                                        "async": True,
+                                        "call_type": "real_fetch_retry",
+                                        "call_number": 2,
+                                        "attempt": 2
+                                    },
+                                    timeout=30,
+                                    headers={"Content-Type": "application/json"}
+                                )
+                                if response.status_code in [200, 202]:
+                                    app.logger.info(f"✅ [CALL 2] Retry successful!")
+                            except Exception as retry_e:
+                                app.logger.error(f"❌ [CALL 2] Retry failed: {retry_e}")
+                        except Exception as e:
+                            app.logger.error(f"❌ [CALL 2] Real fetch error: {e}")
+                
+                # Start the second call in background
+                thread = threading.Thread(target=send_real_caption_fetch)
+                thread.daemon = True
+                thread.start()
+                
+                app.logger.info(f"✅ [CALL 1] Wake-up sent, [CALL 2] will follow in 20 seconds")
                     
             except Exception as e:
                 app.logger.error(f"❌ Error processing post: {e}")
@@ -3636,7 +3717,7 @@ def run_pipeline(pipeline_id):
         )
         
         return {
-            "message": f"Webhooks triggered: {webhook_triggered}, Failed: {failed_count}",
+            "message": f"Caption fetch triggered: Wake-up (immediate) + Real fetch (after 20s). Webhooks: {webhook_triggered}",
             "posted": posted_count,
             "failed": failed_count,
             "webhooks_triggered": webhook_triggered,
