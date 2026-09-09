@@ -4316,7 +4316,39 @@ window.checkInstagramStatus = async function() {
 
 
 
-// ==================== MANUAL SCHEDULER (Collapsible + Pagination) ====================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== MANUAL SCHEDULER (Allow Past Dates) ====================
 
 let unpostedReels = [];
 let selectedReels = new Set();
@@ -4345,7 +4377,6 @@ function toggleManualScheduler() {
             toggleBtn.textContent = isSchedulerExpanded ? '▼' : '▲';
         }
         
-        // Load data when expanded
         if (!isSchedulerExpanded) {
             loadSchedulerPipelines();
             const select = document.getElementById('scheduler-pipeline-select');
@@ -4362,7 +4393,6 @@ function getPaginatedReels() {
     const search = document.getElementById('scheduler-search')?.value?.toLowerCase() || '';
     const limit = parseInt(document.getElementById('scheduler-page-limit')?.value || 25);
     
-    // Filter reels by search
     let filtered = unpostedReels;
     if (search) {
         filtered = unpostedReels.filter(reel => {
@@ -4378,7 +4408,6 @@ function getPaginatedReels() {
     const total = filtered.length;
     const totalPages = Math.ceil(total / limit) || 1;
     
-    // Ensure current page is valid
     if (schedulerCurrentPage > totalPages) {
         schedulerCurrentPage = totalPages;
     }
@@ -4390,13 +4419,11 @@ function getPaginatedReels() {
     const end = Math.min(start + limit, total);
     const pageReels = filtered.slice(start, end);
     
-    // Update stats
     const loadedCountEl = document.getElementById('scheduler-loaded-count');
     if (loadedCountEl) {
         loadedCountEl.textContent = total;
     }
     
-    // Update pagination info
     document.getElementById('scheduler-page-info').textContent = `Page ${schedulerCurrentPage} of ${totalPages}`;
     document.getElementById('scheduler-prev-page').disabled = schedulerCurrentPage <= 1;
     document.getElementById('scheduler-next-page').disabled = schedulerCurrentPage >= totalPages;
@@ -4416,19 +4443,41 @@ async function initManualScheduler() {
     setupSchedulerEventListeners();
     setDefaultDates();
     
-    // Start collapsed by default
     const body = document.getElementById('manual-scheduler-body');
     if (body) {
         body.style.display = 'none';
     }
 }
 
-// Set default dates for the scheduler
+// ==================== SET DEFAULT DATES ====================
+
 function setDefaultDates() {
     const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    document.getElementById('batch-start-date').value = tomorrow.toISOString().split('T')[0];
+    
+    // ✅ Default to TODAY instead of tomorrow (allows past dates)
+    const today = new Date(now);
+    document.getElementById('batch-start-date').value = today.toISOString().split('T')[0];
+    
+    // Set default time to current time + 1 hour
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    
+    // Set hour (12-hour format)
+    let hour12 = currentHour % 12 || 12;
+    const ampm = currentHour >= 12 ? 'PM' : 'AM';
+    
+    // Round minute to nearest 5
+    let minute = Math.round(currentMinute / 5) * 5;
+    if (minute >= 60) {
+        minute = 0;
+        hour12 = hour12 % 12 + 1;
+    }
+    const minuteStr = String(minute).padStart(2, '0');
+    
+    // Set default time
+    document.getElementById('batch-start-hour').value = hour12;
+    document.getElementById('batch-start-minute').value = minuteStr;
+    document.getElementById('batch-start-ampm').value = ampm;
 }
 
 // ==================== LOAD PIPELINES ====================
@@ -4457,7 +4506,6 @@ async function loadSchedulerPipelines() {
                 select.appendChild(option);
             });
             
-            // Update badge
             updateSchedulerBadge();
         }
     } catch (error) {
@@ -4518,7 +4566,6 @@ async function loadUnpostedReels(pipelineId) {
             selectedReels = new Set();
             schedulerCurrentPage = 1;
             
-            // Update stats
             document.getElementById('scheduler-total-reels').textContent = unpostedReels.length;
             document.getElementById('scheduler-scheduled-count').textContent = data.scheduled_count || 0;
             document.getElementById('scheduler-selected-count').textContent = '0';
@@ -4527,18 +4574,13 @@ async function loadUnpostedReels(pipelineId) {
             batchActions.hidden = false;
             pagination.hidden = false;
             
-            // Update badge
             updateSchedulerBadge();
-            
-            // Render first page
             renderSchedulerReels(getPaginatedReels());
             
             // Set default date if not set
             if (!document.getElementById('batch-start-date').value) {
                 const now = new Date();
-                const tomorrow = new Date(now);
-                tomorrow.setDate(tomorrow.getDate() + 1);
-                document.getElementById('batch-start-date').value = tomorrow.toISOString().split('T')[0];
+                document.getElementById('batch-start-date').value = now.toISOString().split('T')[0];
             }
         } else {
             container.innerHTML = `
@@ -4621,7 +4663,6 @@ function renderSchedulerReels(reels) {
         const caption = reel.caption || '';
         const url = reel.url || '';
         
-        // Format scheduled time in 12-hour format
         let scheduledDisplay = '';
         if (scheduledTime) {
             const date = new Date(scheduledTime);
@@ -4660,7 +4701,6 @@ function renderSchedulerReels(reels) {
     html += `</div>`;
     container.innerHTML = html;
     
-    // Event listeners
     document.getElementById('select-all-reels')?.addEventListener('change', function() {
         const checkboxes = container.querySelectorAll('.reel-select-checkbox:not(:disabled)');
         checkboxes.forEach(cb => cb.checked = this.checked);
@@ -4686,7 +4726,6 @@ function renderSchedulerReels(reels) {
     });
 }
 
-// Update selected count
 function updateSelectedCount() {
     const checkboxes = document.querySelectorAll('.reel-select-checkbox:checked:not(:disabled)');
     document.getElementById('scheduler-selected-count').textContent = checkboxes.length;
@@ -4711,7 +4750,7 @@ function format12HourTime(hours, minutes) {
     return `${h12}:${m} ${ampm}`;
 }
 
-// ==================== SINGLE SCHEDULE MODAL ====================
+// ==================== SINGLE SCHEDULE MODAL (ALLOWS PAST DATES) ====================
 
 function openSingleScheduleModal(url) {
     const reel = unpostedReels.find(r => r.url === url);
@@ -4740,6 +4779,7 @@ function openSingleScheduleModal(url) {
                     <div class="form-group">
                         <label>Schedule Date</label>
                         <input type="date" id="single-schedule-date" class="input-field" />
+                        <small style="color: var(--text-muted);">⚠️ Past dates are allowed for backfilling content</small>
                     </div>
                     <div class="form-group">
                         <label>Schedule Time (12-Hour)</label>
@@ -4762,7 +4802,14 @@ function openSingleScheduleModal(url) {
                             </select>
                         </div>
                     </div>
-                    <button id="single-schedule-confirm" class="btn btn-primary btn-block">📅 Schedule</button>
+                    <div class="form-group">
+                        <label>Post Now?</label>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button id="single-schedule-now-btn" class="btn btn-success">🚀 Post Now</button>
+                            <span style="color: var(--text-muted); font-size: 13px;">or</span>
+                            <button id="single-schedule-confirm" class="btn btn-primary">📅 Schedule</button>
+                        </div>
+                    </div>
                     <div id="single-schedule-status" class="status-message" hidden></div>
                 </div>
             </div>
@@ -4778,14 +4825,30 @@ function openSingleScheduleModal(url) {
     document.getElementById('single-schedule-url').value = url;
     document.getElementById('single-schedule-caption').value = reel.caption || '';
     
+    // ✅ Set default date to TODAY (allows past dates)
     const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    document.getElementById('single-schedule-date').value = tomorrow.toISOString().split('T')[0];
+    document.getElementById('single-schedule-date').value = now.toISOString().split('T')[0];
+    
+    // Set default time to current time + 1 hour
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    let hour12 = currentHour % 12 || 12;
+    const ampm = currentHour >= 12 ? 'PM' : 'AM';
+    let minute = Math.round(currentMinute / 5) * 5;
+    if (minute >= 60) {
+        minute = 0;
+        hour12 = hour12 % 12 + 1;
+    }
+    document.getElementById('single-schedule-hour').value = hour12;
+    document.getElementById('single-schedule-minute').value = String(minute).padStart(2, '0');
+    document.getElementById('single-schedule-ampm').value = ampm;
     
     document.getElementById('single-schedule-status').style.display = 'none';
     modal.hidden = false;
     
+    // ============================================================
+    // SCHEDULE BUTTON (Allows past dates)
+    // ============================================================
     document.getElementById('single-schedule-confirm').onclick = async function() {
         const date = document.getElementById('single-schedule-date').value;
         const hour = document.getElementById('single-schedule-hour').value;
@@ -4805,11 +4868,13 @@ function openSingleScheduleModal(url) {
         const scheduledDate = new Date(date);
         scheduledDate.setHours(hours, minutes, 0, 0);
         
-        if (scheduledDate < new Date()) {
-            status.textContent = '⚠️ This time is in the past. Please select a future time.';
-            status.className = 'status-message error';
-            status.style.display = 'block';
-            return;
+        // ✅ ALLOW PAST DATES - No validation!
+        // Just show a warning if it's in the past
+        const isPast = scheduledDate < new Date();
+        if (isPast) {
+            if (!confirm(`⚠️ This date/time (${scheduledDate.toLocaleString()}) is in the past.\n\nAre you sure you want to schedule a post for a past time?`)) {
+                return;
+            }
         }
         
         const pipelineId = document.getElementById('scheduler-pipeline-select').value;
@@ -4837,7 +4902,8 @@ function openSingleScheduleModal(url) {
             
             if (response.ok && data.status === 'success') {
                 const displayTime = format12HourTime(hours, minutes);
-                status.textContent = `✅ Post scheduled for ${date} at ${displayTime}!`;
+                const pastLabel = isPast ? ' (Past Date)' : '';
+                status.textContent = `✅ Post scheduled for ${date} at ${displayTime}${pastLabel}!`;
                 status.className = 'status-message success';
                 status.style.display = 'block';
                 
@@ -4857,6 +4923,62 @@ function openSingleScheduleModal(url) {
         } finally {
             this.disabled = false;
             this.textContent = '📅 Schedule';
+        }
+    };
+    
+    // ============================================================
+    // POST NOW BUTTON
+    // ============================================================
+    document.getElementById('single-schedule-now-btn').onclick = async function() {
+        const caption = document.getElementById('single-schedule-caption').value.trim();
+        const status = document.getElementById('single-schedule-status');
+        const pipelineId = document.getElementById('scheduler-pipeline-select').value;
+        
+        // Use current time
+        const scheduledDate = new Date();
+        
+        this.disabled = true;
+        this.textContent = '⏳ Posting...';
+        status.style.display = 'none';
+        
+        try {
+            const response = await fetch('/api/scheduler/manual', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    pipeline_id: pipelineId,
+                    schedules: [{
+                        reel_url: url,
+                        scheduled_time: scheduledDate.toISOString(),
+                        caption: caption
+                    }]
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok && data.status === 'success') {
+                status.textContent = `🚀 Post scheduled for NOW (${scheduledDate.toLocaleString()})!`;
+                status.className = 'status-message success';
+                status.style.display = 'block';
+                
+                setTimeout(() => {
+                    modal.hidden = true;
+                    loadUnpostedReels(pipelineId);
+                }, 1500);
+            } else {
+                status.textContent = `❌ ${data.error || 'Failed to post'}`;
+                status.className = 'status-message error';
+                status.style.display = 'block';
+            }
+        } catch (error) {
+            status.textContent = `❌ Error: ${error.message}`;
+            status.className = 'status-message error';
+            status.style.display = 'block';
+        } finally {
+            this.disabled = false;
+            this.textContent = '🚀 Post Now';
         }
     };
 }
@@ -4901,14 +5023,12 @@ async function unscheduleSingleReel(url) {
 // ==================== SETUP EVENT LISTENERS ====================
 
 function setupSchedulerEventListeners() {
-    // Pipeline selection
     document.getElementById('scheduler-pipeline-select')?.addEventListener('change', function() {
         if (this.value) {
             loadUnpostedReels(this.value);
         }
     });
     
-    // Load posts button
     document.getElementById('load-unposted-btn')?.addEventListener('click', function() {
         const pipelineId = document.getElementById('scheduler-pipeline-select').value;
         if (pipelineId) {
@@ -4918,7 +5038,6 @@ function setupSchedulerEventListeners() {
         }
     });
     
-    // Refresh button
     document.getElementById('refresh-unposted-btn')?.addEventListener('click', function() {
         const pipelineId = document.getElementById('scheduler-pipeline-select').value;
         if (pipelineId) {
@@ -4928,7 +5047,6 @@ function setupSchedulerEventListeners() {
         }
     });
     
-    // Pagination buttons
     document.getElementById('scheduler-prev-page')?.addEventListener('click', function() {
         if (schedulerCurrentPage > 1) {
             goToPage(schedulerCurrentPage - 1);
@@ -4942,19 +5060,16 @@ function setupSchedulerEventListeners() {
         }
     });
     
-    // Page limit change
     document.getElementById('scheduler-page-limit')?.addEventListener('change', function() {
         schedulerCurrentPage = 1;
         renderSchedulerReels(getPaginatedReels());
     });
     
-    // Search
     document.getElementById('scheduler-search')?.addEventListener('input', function() {
         schedulerCurrentPage = 1;
         renderSchedulerReels(getPaginatedReels());
     });
     
-    // Clear selection
     document.getElementById('clear-selection-btn')?.addEventListener('click', function() {
         document.querySelectorAll('.reel-select-checkbox:not(:disabled)').forEach(cb => {
             cb.checked = false;
@@ -4964,7 +5079,7 @@ function setupSchedulerEventListeners() {
     });
 }
 
-// ==================== BATCH SCHEDULING ====================
+// ==================== BATCH SCHEDULING (ALLOWS PAST DATES) ====================
 
 // Schedule selected reels sequentially
 document.getElementById('schedule-sequential-btn')?.addEventListener('click', async function() {
@@ -4996,9 +5111,11 @@ document.getElementById('schedule-sequential-btn')?.addEventListener('click', as
     const startTime = new Date(date);
     startTime.setHours(hours, minutes, 0, 0);
     
+    // ✅ Check if time is in the past - show warning but allow
     if (startTime < new Date()) {
-        showToast('⚠️ Start time is in the past. Please select a future time.', 'error');
-        return;
+        if (!confirm(`⚠️ The start time (${startTime.toLocaleString()}) is in the past.\n\nAre you sure you want to schedule posts for past times?`)) {
+            return;
+        }
     }
     
     const displayTime = format12HourTime(hours, minutes);
@@ -5084,6 +5201,14 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
     const startDisplay = format12HourTime(rangeStart, 0);
     const endDisplay = format12HourTime(rangeEnd, 0);
     
+    // ✅ Check if the date is in the past - show warning but allow
+    const selectedDate = new Date(date);
+    if (selectedDate < new Date()) {
+        if (!confirm(`⚠️ The selected date (${date}) is in the past.\n\nAre you sure you want to schedule posts for past dates?`)) {
+            return;
+        }
+    }
+    
     if (!confirm(`Randomly schedule ${checkboxes.length} reels between ${startDisplay} and ${endDisplay} on ${date}?`)) {
         return;
     }
@@ -5127,9 +5252,8 @@ document.getElementById('schedule-random-btn')?.addEventListener('click', async 
             scheduledTime.setMonth(baseDate.getMonth());
             scheduledTime.setDate(baseDate.getDate());
             
-            if (scheduledTime < new Date()) {
-                scheduledTime.setDate(scheduledTime.getDate() + 1);
-            }
+            // ✅ Allow past dates - no adjustment
+            // If time is in the past, still allow it (backfill)
             
             schedules.push({
                 reel_url: url,
@@ -5190,6 +5314,14 @@ document.getElementById('auto-schedule-all-btn')?.addEventListener('click', asyn
     const startDisplay = format12HourTime(rangeStart, 0);
     const endDisplay = format12HourTime(rangeEnd, 0);
     
+    // ✅ Check if date is in the past - show warning but allow
+    const selectedDate = new Date(date);
+    if (selectedDate < new Date()) {
+        if (!confirm(`⚠️ The selected date (${date}) is in the past.\n\nAre you sure you want to schedule ${availableReels.length} posts for past dates?`)) {
+            return;
+        }
+    }
+    
     if (!confirm(`Auto-schedule ${availableReels.length} reels between ${startDisplay} and ${endDisplay} on ${date}?`)) {
         return;
     }
@@ -5221,9 +5353,7 @@ document.getElementById('auto-schedule-all-btn')?.addEventListener('click', asyn
             scheduledTime.setMonth(baseDate.getMonth());
             scheduledTime.setDate(baseDate.getDate());
             
-            if (scheduledTime < new Date()) {
-                scheduledTime.setDate(scheduledTime.getDate() + 1);
-            }
+            // ✅ Allow past dates - no adjustment
             
             schedules.push({
                 reel_url: reel.url,
@@ -5293,7 +5423,6 @@ function showToast(message, type = 'info') {
 // ==================== INITIALIZE ====================
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Set initial collapsed state
     const body = document.getElementById('manual-scheduler-body');
     if (body) {
         body.style.display = 'none';
