@@ -6450,11 +6450,63 @@ def process_scheduled_posts():
         cur.close()
         conn.close()
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @app.route("/api/scheduler/daily", methods=["POST"])
 def daily_scheduler():
     """
     Daily scheduler - runs at midnight (12:00 AM).
-    Schedules posts for all active pipelines with random times throughout the day.
+    Schedules posts for all active pipelines with random times throughout the ENTIRE day (12 AM - 11 PM).
     Captions will be fetched during posting.
     """
     app.logger.info("🕐 Running daily scheduler at midnight...")
@@ -6553,9 +6605,10 @@ def daily_scheduler():
                 app.logger.info(f"📝 Scheduling {schedule_count} posts for pipeline: {pipeline_name}")
                 
                 # ============================================================
-                # STEP 3: Generate random times throughout the day (8 AM - 10 PM)
+                # STEP 3: Generate random times throughout the ENTIRE day (12 AM - 11 PM)
+                # WITH RANDOM MINUTES AND SECONDS
                 # ============================================================
-                times = generate_random_post_times(schedule_count, start_hour=8, end_hour=22)
+                times = generate_random_post_times(schedule_count, start_hour=0, end_hour=23)
                 
                 # ============================================================
                 # STEP 4: Create scheduled posts with random times
@@ -6569,15 +6622,17 @@ def daily_scheduler():
                         if i < len(times):
                             scheduled_time = times[i]
                         else:
-                            # Fallback: generate a random time
-                            random_hour = random.randint(8, 22)
+                            # Fallback: generate a random time (any hour, minute, second)
+                            random_hour = random.randint(0, 23)
                             random_minute = random.randint(0, 59)
+                            random_second = random.randint(0, 59)
                             scheduled_time = datetime.utcnow().replace(
                                 hour=random_hour,
                                 minute=random_minute,
-                                second=0,
+                                second=random_second,
                                 microsecond=0
                             )
+                            # Ensure future time (add a day if needed)
                             if scheduled_time < datetime.utcnow():
                                 scheduled_time += timedelta(days=1)
                         
@@ -6622,7 +6677,7 @@ def daily_scheduler():
                         
                         scheduled_count += 1
                         
-                        # Log the scheduled time in 12-hour format
+                        # Log the scheduled time in 12-hour format with minutes
                         time_str = scheduled_time.strftime('%I:%M %p')
                         app.logger.info(f"✅ Scheduled: {reel_url[:50]}... at {time_str}")
                         
@@ -6706,6 +6761,145 @@ def daily_scheduler():
             conn.close()
         except:
             pass
+
+
+# ============================================================
+# RANDOM TIME GENERATOR - FULL 24-HOUR DAY WITH RANDOM MINUTES
+# ============================================================
+
+def generate_random_post_times(num_posts, start_hour=0, end_hour=23):
+    """
+    Generate random post times spread throughout the ENTIRE day (12 AM - 11 PM).
+    Each post gets random minutes and seconds for natural distribution.
+    
+    Args:
+        num_posts: Number of posts to schedule
+        start_hour: Earliest hour to post (default: 0 = 12:00 AM)
+        end_hour: Latest hour to post (default: 23 = 11:00 PM)
+    
+    Returns:
+        List of random datetime objects (UTC) with random minutes and seconds
+    """
+    if num_posts == 0:
+        return []
+    
+    # If only 1 post, pick random time with random minutes and seconds
+    if num_posts == 1:
+        random_hour = random.randint(start_hour, end_hour)
+        random_minute = random.randint(0, 59)
+        random_second = random.randint(0, 59)
+        random_time = datetime.utcnow().replace(
+            hour=random_hour,
+            minute=random_minute,
+            second=random_second,
+            microsecond=0
+        )
+        # Ensure time is in the future (add a day if needed)
+        if random_time < datetime.utcnow():
+            random_time += timedelta(days=1)
+        return [random_time]
+    
+    # Multiple posts - distribute randomly across the entire 24-hour day
+    total_minutes = 24 * 60  # Full 24 hours
+    
+    # Generate random times ensuring minimum spacing (45 minutes)
+    min_spacing = 45
+    max_attempts = 100
+    
+    valid_times = []
+    for attempt in range(max_attempts):
+        # Generate random minutes with random offsets
+        minutes = sorted([random.randint(0, total_minutes - 1) for _ in range(num_posts)])
+        valid = True
+        for i in range(1, len(minutes)):
+            if minutes[i] - minutes[i-1] < min_spacing:
+                valid = False
+                break
+        if valid and num_posts > 1:
+            if minutes[-1] - minutes[0] < min_spacing * (num_posts - 1):
+                valid = False
+        if valid:
+            valid_times = minutes
+            break
+    
+    # If no valid times found, use even spacing with random offset
+    if not valid_times:
+        spacing = total_minutes // num_posts
+        valid_times = [i * spacing + random.randint(-spacing//3, spacing//3) for i in range(num_posts)]
+        valid_times = sorted([max(0, min(total_minutes - 1, t)) for t in valid_times])
+    
+    # Convert minutes to datetime objects with random seconds
+    times = []
+    base_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    for minute in valid_times:
+        hour = minute // 60
+        minute_of_hour = minute % 60
+        random_second = random.randint(0, 59)
+        
+        post_time = base_time.replace(
+            hour=hour,
+            minute=minute_of_hour,
+            second=random_second,
+            microsecond=0
+        )
+        
+        # Ensure time is in the future (add a day if needed)
+        while post_time < datetime.utcnow():
+            post_time += timedelta(days=1)
+        
+        times.append(post_time)
+    
+    # Sort times and return
+    return sorted(times)
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
 
 # ============== DEBUG ROUTES ==============
 
