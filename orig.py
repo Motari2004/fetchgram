@@ -788,6 +788,27 @@ def store_video_url_with_context(reel_url, video_url, pipeline_id=None, post_id=
 
 
 
+def get_direct_video_url(url, media_id=None):
+    """
+    Get direct video URL using the Instagram video URL getter service.
+    Falls back to cache if service fails.
+    """
+    # Try the service first
+    video_url = get_direct_video_url_from_service(url)
+    
+    if video_url:
+        cache_direct_url(url, video_url, '')
+        app.logger.info(f"✅ Video URL fetched from service: {video_url[:50]}...")
+        return video_url
+    
+    # Try cache as fallback
+    video_url = get_direct_url_from_cache_only(url)
+    if video_url:
+        app.logger.info(f"✅ Video URL found in cache: {video_url[:50]}...")
+        return video_url
+    
+    app.logger.error(f"❌ No video URL found for: {url[:50]}...")
+    return None
 
 
 def get_video_with_captions(reel_url, pipeline_id=None, post_id=None, profile_username=None):
@@ -1043,136 +1064,380 @@ def get_caption_service_url():
     """Get caption service URL from settings."""
     return get_setting('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption')
 
-
-
-
-def fetch_caption_from_service(reel_url, timeout=30, pipeline_id=None,
-                                profile_username=None, post_id=None):
+def wake_up_caption_service(max_retries=2, delay=3):
     """
-    Fetch a Reel caption synchronously from the caption service.
-
-    The caption service returns the caption in the HTTP response, so this
-    function waits for that response and never relies on a webhook or
-    background thread.
+    Wake up the caption service by sending a ping request.
+    This ensures the service is awake before sending the actual request.
     """
     caption_service_url = get_caption_service_url()
-    max_attempts = 4  # initial request + up to 3 retries
-    retry_delays = (3, 6, 12)
-
-    # Optional health check to wake a sleeping Render service.
-    try:
-        health_url = caption_service_url.replace('/api/caption', '/api/health')
-        app.logger.info("💤 Pinging caption service health...")
-        response = requests.get(
-            health_url,
-            timeout=10,
-            headers={"User-Agent": "FetchGram/1.0"}
-        )
-        app.logger.info(
-            f"✅ Caption service health check returned {response.status_code}"
-        )
-    except Exception as e:
-        app.logger.info(f"⚠️ Health check ignored: {e}")
-
-    last_error = None
-
-    for attempt in range(max_attempts):
-        attempt_no = attempt + 1
-
+    health_url = caption_service_url.replace('/api/caption', '/health')
+    
+    for attempt in range(max_retries):
         try:
-            app.logger.info(
-                f"📞 [Attempt {attempt_no}/{max_attempts}] Fetching caption "
-                f"(timeout={timeout}s) for: {reel_url[:50]}..."
+            app.logger.info(f"💤 [Wake-up Attempt {attempt + 1}/{max_retries}] Waking up caption service...")
+            
+            # Send a ping request with a short timeout
+            response = requests.get(
+                health_url,
+                timeout=2,
+                headers={"User-Agent": "FetchGram-WakeUp/1.0"}
             )
+            
+            if response.status_code == 200:
+                app.logger.info(f"✅ [Wake-up] Caption service is awake (attempt {attempt + 1})")
+                return True
+                
+        except requests.exceptions.Timeout:
+            app.logger.info(f"⏰ [Wake-up] Attempt {attempt + 1} timed out (expected if service is waking up)")
+        except requests.exceptions.ConnectionError:
+            app.logger.info(f"🔌 [Wake-up] Attempt {attempt + 1} connection error")
+        except Exception as e:
+            app.logger.info(f"⚠️ [Wake-up] Attempt {attempt + 1} error: {e}")
+        
+        # Wait before retry
+        if attempt < max_retries - 1:
+            wait_time = delay * (attempt + 1)  # 3s, 6s
+            app.logger.info(f"⏳ Waiting {wait_time}s before next wake-up attempt...")
+            time.sleep(wait_time)
+    
+    app.logger.info(f"⚠️ [Wake-up] Could not wake up caption service after {max_retries} attempts")
+    return False
 
-            # IMPORTANT: synchronous request. No async/webhook fields.
+def fetch_caption_from_service_with_retry(reel_url, timeout=5, async_mode=True, webhook_url=None, 
+                                          pipeline_id=None, profile_username=None, post_id=None,
+                                          max_retries=3, wake_up=True):
+    """
+    Fetch caption from the caption service with retry and wake-up mechanism.
+    """
+    caption_service_url = get_caption_service_url()
+    
+    # ============================================================
+    # STEP 1: Wake up the service if needed
+    # ============================================================
+    if wake_up:
+        app.logger.info(f"💤 Sending wake-up ping to caption service...")
+        wake_up_caption_service(max_retries=2, delay=3)
+        
+        # Give the service a moment to fully initialize after wake-up
+        time.sleep(1)
+    
+    # ============================================================
+    # STEP 2: Send the actual request with retries
+    # ============================================================
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            # Build payload
             payload = {"url": reel_url}
-
+            
+            if async_mode and webhook_url:
+                payload["webhook_url"] = webhook_url
+                payload["async"] = True
+                payload["pipeline_id"] = pipeline_id
+                payload["profile_username"] = profile_username
+                payload["post_id"] = post_id
+            
+            # Use longer timeout for first attempt (cold start)
+            actual_timeout = timeout * (2 if attempt == 0 and wake_up else 1)
+            
+            app.logger.info(f"📞 [Attempt {attempt + 1}/{max_retries}] Fetching caption for: {reel_url[:50]}... (timeout: {actual_timeout}s, async={async_mode})")
+            
             response = requests.post(
                 caption_service_url,
                 json=payload,
-                timeout=timeout,
+                timeout=actual_timeout,
                 headers={"Content-Type": "application/json"}
             )
+            
+            # ============================================================
+            # STEP 3: Handle response
+            # ============================================================
+            
+            # Success
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success'):
+                    if async_mode:
+                        app.logger.info(f"✅ [Attempt {attempt + 1}] Async caption fetch triggered for: {reel_url[:50]}...")
+                        return None
+                    else:
+                        caption = data.get('caption', '')
+                        app.logger.info(f"✅ [Attempt {attempt + 1}] Caption fetched: {caption[:50] if caption else 'Empty'}...")
+                        return caption
+                else:
+                    error_msg = data.get('error', 'Unknown error')
+                    app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Service returned error: {error_msg}")
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt * 2  # 2s, 4s, 8s
+                        app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    return None
+            
+            # Accepted (async mode)
+            elif response.status_code in [202, 204]:
+                app.logger.info(f"✅ [Attempt {attempt + 1}] Async request accepted for: {reel_url[:50]}...")
+                return None
+            
+            # Gateway errors - service might be waking up
+            elif response.status_code in [502, 503, 504]:
+                app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Gateway error: {response.status_code}")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 3 + 2  # 4s, 8s, 14s
+                    app.logger.info(f"⏳ Retrying in {wait_time}s (gateway error)...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts failed - gateway errors")
+                    return None
+            
+            # Other errors
+            else:
+                app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Service returned {response.status_code}")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 2
+                    app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                return None
+                
+        except requests.exceptions.Timeout:
+            # Timeout handling
+            if attempt == 0 and wake_up:
+                # First attempt timed out - service might be cold starting
+                app.logger.info(f"⏰ [Attempt {attempt + 1}] Timeout (service may be waking up)")
+                if attempt < max_retries - 1:
+                    wait_time = 5  # Wait 5 seconds for service to fully start
+                    app.logger.info(f"⏳ Waiting {wait_time}s for service to start...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts timed out")
+                    raise TimeoutError(f"Caption service timeout after {max_retries} attempts")
+            else:
+                app.logger.warning(f"⏰ [Attempt {attempt + 1}] Timeout")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 3
+                    app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts timed out")
+                    raise TimeoutError(f"Caption service timeout after {max_retries} attempts")
+                
+        except requests.exceptions.ConnectionError as e:
+            app.logger.warning(f"🔌 [Attempt {attempt + 1}] Connection error: {e}")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt * 3
+                app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                app.logger.error(f"❌ All attempts failed - connection errors")
+                return None
+                
+        except Exception as e:
+            app.logger.error(f"❌ [Attempt {attempt + 1}] Service error: {e}")
+            last_error = e
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt * 2
+                app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            return None
+    
+    app.logger.error(f"❌ All {max_retries} attempts failed for: {reel_url[:50]}...")
+    return None
 
-            if response.status_code == 404:
+
+def fetch_caption_from_service(reel_url, timeout=30, pipeline_id=None, 
+                                profile_username=None, post_id=None):
+    """
+    Fetch caption from the caption service SYNCHRONOUSLY.
+    
+    This version:
+    1. Wakes up the caption service (health check)
+    2. Sends the caption request
+    3. WAITS for the response (which contains the caption)
+    4. Returns the caption text
+    
+    The caption service (Copytext Caption Automation) returns the caption
+    in the HTTP response body, so we don't need webhooks.
+    
+    Args:
+        reel_url: The Instagram reel URL
+        timeout: Timeout for the request in seconds (default 30, up to 90 for cold start)
+        pipeline_id: Pipeline ID (for logging/tracking)
+        profile_username: Instagram username (for logging/tracking)
+        post_id: Scheduled post ID (for logging/tracking)
+    
+    Returns:
+        str: The caption text if successful, or None if failed
+    """
+    caption_service_url = get_caption_service_url()
+    
+    # ============================================================
+    # STEP 1: Wake up the service (Render cold start can take 30-60s)
+    # ============================================================
+    try:
+        health_url = caption_service_url.replace('/api/caption', '/api/health')
+        app.logger.info(f"💤 Pinging caption service health...")
+        
+        requests.get(
+            health_url,
+            timeout=10,  # Give it 10s to respond to health check
+            headers={"User-Agent": "FetchGram/1.0"}
+        )
+        app.logger.info(f"✅ Caption service is awake")
+    except requests.exceptions.Timeout:
+        app.logger.info(f"⏰ Health check timed out (expected during cold start)")
+    except requests.exceptions.ConnectionError:
+        app.logger.info(f"🔌 Health check connection error (expected)")
+    except Exception as e:
+        app.logger.info(f"⚠️ Health check error (ignoring): {e}")
+    
+    # ============================================================
+    # STEP 2: Send the actual caption request (with retries)
+    # ============================================================
+    max_retries = 3
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            app.logger.info(
+                f"📞 [Attempt {attempt + 1}/{max_retries}] Fetching caption "
+                f"(timeout={timeout}s) for: {reel_url[:50]}..."
+            )
+            
+            # Build payload - include all context for logging/tracking
+            payload = {"url": reel_url}
+            if pipeline_id:
+                payload["pipeline_id"] = pipeline_id
+            if profile_username:
+                payload["profile_username"] = profile_username
+            if post_id:
+                payload["post_id"] = post_id
+            
+            # ⭐ KEY FIX: Send request and WAIT for the response
+            response = requests.post(
+                caption_service_url,
+                json=payload,
+                timeout=timeout,  # ← WAIT up to 30-90s for the caption
+                headers={"Content-Type": "application/json"}
+            )
+            
+            # ============================================================
+            # STEP 3: Parse the response for the caption
+            # ============================================================
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('success'):
+                    caption = data.get('caption', '')
+                    source = data.get('source', 'unknown')  # 'database' or 'scraped'
+                    
+                    if caption and caption.strip():
+                        app.logger.info(
+                            f"✅ [Attempt {attempt + 1}] Got caption "
+                            f"({len(caption)} chars, source: {source})"
+                        )
+                        return caption
+                    else:
+                        app.logger.warning(
+                            f"⚠️ [Attempt {attempt + 1}] Service returned empty caption"
+                        )
+                        return None
+                else:
+                    # Service returned success=false
+                    error_msg = data.get('error', 'Unknown error')
+                    app.logger.warning(
+                        f"⚠️ [Attempt {attempt + 1}] Service error: {error_msg}"
+                    )
+                    
+                    # If the error is "not found" or "private", don't retry
+                    error_lower = error_msg.lower()
+                    if 'not found' in error_lower or 'private' in error_lower:
+                        app.logger.info(f"⏭️ Skipping retry - caption not available")
+                        return None
+                    
+                    last_error = error_msg
+            
+            elif response.status_code == 404:
+                # Caption not found
                 app.logger.warning(
-                    f"⚠️ [Attempt {attempt_no}] Caption service returned 404; "
-                    "not retrying."
+                    f"⚠️ [Attempt {attempt + 1}] Caption not found (404)"
                 )
                 return None
-
-            if response.status_code in (502, 503, 504):
-                last_error = f"HTTP {response.status_code}"
+            
+            elif response.status_code in [502, 503, 504]:
+                # Gateway errors - service might be waking up
                 app.logger.warning(
-                    f"⚠️ [Attempt {attempt_no}] Gateway error: "
-                    f"{response.status_code}"
+                    f"⚠️ [Attempt {attempt + 1}] Gateway error {response.status_code}"
                 )
-            elif response.status_code != 200:
                 last_error = f"HTTP {response.status_code}"
-                app.logger.warning(
-                    f"⚠️ [Attempt {attempt_no}] Service returned "
-                    f"{response.status_code}: {response.text[:200]}"
-                )
+                
+                # Wait longer for gateway errors (service is cold starting)
+                if attempt < max_retries - 1:
+                    wait_time = 10 * (attempt + 1)  # 10s, 20s
+                    app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                    continue
+            
             else:
-                try:
-                    data = response.json()
-                except ValueError as e:
-                    last_error = f"Invalid JSON response: {e}"
-                    app.logger.warning(
-                        f"⚠️ [Attempt {attempt_no}] Invalid JSON from caption service"
-                    )
-                else:
-                    if data.get("success") is False:
-                        error_msg = str(data.get("error", "Unknown error"))
-                        last_error = error_msg
-                        app.logger.warning(
-                            f"⚠️ [Attempt {attempt_no}] Caption service error: "
-                            f"{error_msg}"
-                        )
-                    else:
-                        caption = data.get("caption")
-                        if isinstance(caption, str) and caption.strip():
-                            source = data.get("source", "unknown")
-                            app.logger.info(
-                                f"✅ [Attempt {attempt_no}] Got caption "
-                                f"({len(caption)} chars, source: {source})"
-                            )
-                            return caption.strip()
-
-                        last_error = "Caption was empty"
-                        app.logger.warning(
-                            f"⚠️ [Attempt {attempt_no}] Service returned empty caption"
-                        )
-
+                app.logger.warning(
+                    f"⚠️ [Attempt {attempt + 1}] Unexpected status {response.status_code}"
+                )
+                last_error = f"HTTP {response.status_code}"
+            
+            # ============================================================
+            # STEP 4: Retry with exponential backoff
+            # ============================================================
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt * 3  # 3s, 6s, 12s
+                app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+        
         except requests.exceptions.Timeout:
+            app.logger.warning(
+                f"⏰ [Attempt {attempt + 1}/{max_retries}] Timeout after {timeout}s"
+            )
             last_error = f"Timeout after {timeout}s"
-            app.logger.warning(
-                f"⏰ [Attempt {attempt_no}/{max_attempts}] "
-                f"Caption service timed out after {timeout}s"
-            )
+            
+            if attempt < max_retries - 1:
+                # First timeout might be cold start - wait longer
+                wait_time = 15 if attempt == 0 else 5
+                app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+        
         except requests.exceptions.ConnectionError as e:
-            last_error = f"Connection error: {e}"
             app.logger.warning(
-                f"🔌 [Attempt {attempt_no}/{max_attempts}] "
-                f"Caption service connection error: {e}"
+                f"🔌 [Attempt {attempt + 1}/{max_retries}] Connection error: {e}"
             )
+            last_error = f"Connection error: {e}"
+            
+            if attempt < max_retries - 1:
+                wait_time = 5 * (attempt + 1)
+                app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+        
         except Exception as e:
-            last_error = str(e)
             app.logger.error(
-                f"❌ [Attempt {attempt_no}/{max_attempts}] "
-                f"Caption service error: {e}"
+                f"❌ [Attempt {attempt + 1}/{max_retries}] Error: {e}"
             )
-
-        if attempt < max_attempts - 1:
-            wait_time = retry_delays[attempt]
-            app.logger.info(
-                f"⏳ Waiting {wait_time}s before caption retry..."
-            )
-            time.sleep(wait_time)
-
+            last_error = str(e)
+            
+            if attempt < max_retries - 1:
+                wait_time = 3 * (attempt + 1)
+                app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+    
+    # ============================================================
+    # All retries exhausted
+    # ============================================================
     app.logger.error(
-        f"❌ Caption fetch failed after {max_attempts} attempts. "
+        f"❌ Failed to fetch caption after {max_retries} attempts. "
         f"Last error: {last_error}"
     )
     return None
@@ -1317,8 +1582,142 @@ CAPTION_FETCH_STATUS = {}
 
 # ============== CAPTION SERVICE WITH WAKE-UP MECHANISM ==============
 
+def get_caption_service_url():
+    """Get caption service URL from settings."""
+    return get_setting('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption')
 
+def wake_up_caption_service(max_retries=3, delay=5):
+    """
+    Wake up the caption service by sending a ping request.
+    This ensures the service is awake before sending the actual request.
+    """
+    caption_service_url = get_caption_service_url()
+    
+    for attempt in range(max_retries):
+        try:
+            app.logger.info(f"💤 [Wake-up Attempt {attempt + 1}] Waking up caption service...")
+            
+            # Send a ping request with a short timeout
+            response = requests.get(
+                f"{caption_service_url.replace('/api/caption', '/health')}",
+                timeout=2,
+                headers={"User-Agent": "FetchGram-WakeUp/1.0"}
+            )
+            
+            if response.status_code == 200:
+                app.logger.info(f"✅ [Wake-up] Caption service is awake (attempt {attempt + 1})")
+                return True
+                
+        except requests.exceptions.Timeout:
+            app.logger.info(f"⏰ [Wake-up] Attempt {attempt + 1} timed out (expected)")
+        except requests.exceptions.ConnectionError:
+            app.logger.info(f"🔌 [Wake-up] Attempt {attempt + 1} connection error")
+        except Exception as e:
+            app.logger.info(f"⚠️ [Wake-up] Attempt {attempt + 1} error: {e}")
+        
+        # Wait before retry
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    
+    app.logger.info(f"⚠️ [Wake-up] Could not wake up caption service after {max_retries} attempts")
+    return False
 
+def fetch_caption_from_service_with_retry(reel_url, timeout=5, async_mode=True, webhook_url=None, 
+                                          pipeline_id=None, profile_username=None, post_id=None,
+                                          max_retries=3, wake_up=True):
+    """
+    Fetch caption from the caption service with retry and wake-up mechanism.
+    """
+    # First, wake up the service if needed
+    if wake_up:
+        wake_up_caption_service(max_retries=2, delay=3)
+    
+    # Try sending the actual request with retries
+    for attempt in range(max_retries):
+        try:
+            caption_service_url = get_caption_service_url()
+            
+            payload = {"url": reel_url}
+            
+            if async_mode and webhook_url:
+                payload["webhook_url"] = webhook_url
+                payload["async"] = True
+                payload["pipeline_id"] = pipeline_id
+                payload["profile_username"] = profile_username
+                payload["post_id"] = post_id
+            
+            # Use a longer timeout for the first attempt to allow for cold start
+            actual_timeout = timeout * (2 if attempt == 0 and wake_up else 1)
+            
+            app.logger.info(f"📞 [Attempt {attempt + 1}] Fetching caption for: {reel_url[:50]}... (timeout: {actual_timeout}s)")
+            
+            response = requests.post(
+                caption_service_url,
+                json=payload,
+                timeout=actual_timeout,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success'):
+                    if async_mode:
+                        app.logger.info(f"✅ Async caption fetch triggered for: {reel_url[:50]}...")
+                        return None
+                    else:
+                        caption = data.get('caption', '')
+                        app.logger.info(f"✅ Caption fetched: {caption[:50] if caption else 'Empty'}...")
+                        return caption
+            elif response.status_code in [202, 204]:
+                app.logger.info(f"✅ Async request accepted for: {reel_url[:50]}...")
+                return None
+            elif response.status_code in [502, 503, 504]:
+                # Gateway errors - service might be waking up
+                app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Gateway error: {response.status_code}")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 5  # 5, 10, 20 seconds
+                    app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts failed - gateway errors")
+                    return None
+            else:
+                app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Service returned {response.status_code}")
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                return None
+                
+        except requests.exceptions.Timeout:
+            if attempt == 0 and wake_up:
+                # First attempt timed out - service might be cold starting
+                app.logger.info(f"⏰ [Attempt {attempt + 1}] Timeout (expected during wake-up)")
+                if attempt < max_retries - 1:
+                    wait_time = 10  # Wait 10 seconds for service to fully start
+                    app.logger.info(f"⏳ Waiting {wait_time}s for service to start...")
+                    time.sleep(wait_time)
+                    continue
+            else:
+                app.logger.warning(f"⏰ [Attempt {attempt + 1}] Timeout")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt * 3
+                    app.logger.info(f"⏳ Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    app.logger.error(f"❌ All attempts timed out")
+                    return None
+                
+        except Exception as e:
+            app.logger.error(f"❌ [Attempt {attempt + 1}] Service error: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(5)
+                continue
+            return None
+    
+    app.logger.error(f"❌ All {max_retries} attempts failed for: {reel_url[:50]}...")
+    return None
 
 def get_zernio_base_url():
     """Get Zernio base URL from settings."""
@@ -2252,8 +2651,286 @@ def publish_video_to_all_accounts(video_url, text, publish_now=True, scheduled_t
 
 # ============== DUAL REQUEST CAPTION FETCH ==============
 
+def trigger_caption_fetch_with_dual_requests(reel_url, pipeline_id, profile_username):
+    import threading
+    import uuid
+    from datetime import datetime
+    import time
+    
+    job_id = str(uuid.uuid4())
+    app.logger.info(f"📤 [Job {job_id}] Triggering dual caption fetch for: {reel_url[:50]}...")
+    
+    CAPTION_FETCH_STATUS[reel_url] = {
+        'status': 'pending',
+        'job_id': job_id,
+        'pipeline_id': pipeline_id,
+        'profile_username': profile_username,
+        'message': 'Dual request queued (wake-up + real fetch)',
+        'timestamp': datetime.utcnow().isoformat(),
+        'request_1_sent': False,
+        'request_2_sent': False,
+        'request_1_status': None,
+        'request_2_status': None,
+        'retry_count': 0
+    }
+    
+    def send_request_1():
+        try:
+            caption_service_url = get_caption_service_url()
+            app.logger.info(f"📞 [Job {job_id}] Request 1 (WAKE-UP) sent...")
+            response = requests.post(
+                caption_service_url,
+                json={
+                    "url": reel_url,
+                    "job_id": job_id,
+                    "pipeline_id": pipeline_id,
+                    "profile_username": profile_username,
+                    "webhook_url": f"https://fetchgram-one.vercel.app/api/webhook/caption",
+                    "request_type": "wakeup"
+                },
+                timeout=3,
+                headers={"Content-Type": "application/json"}
+            )
+            app.logger.info(f"⏰ [Job {job_id}] Request 1 completed: {response.status_code}")
+            CAPTION_FETCH_STATUS[reel_url]['request_1_sent'] = True
+            CAPTION_FETCH_STATUS[reel_url]['request_1_status'] = response.status_code
+        except requests.exceptions.Timeout:
+            app.logger.info(f"⏰ [Job {job_id}] Request 1 timed out (expected)")
+            CAPTION_FETCH_STATUS[reel_url]['request_1_sent'] = True
+            CAPTION_FETCH_STATUS[reel_url]['request_1_status'] = 'timeout'
+        except Exception as e:
+            app.logger.error(f"❌ [Job {job_id}] Request 1 error: {e}")
+            CAPTION_FETCH_STATUS[reel_url]['request_1_sent'] = True
+            CAPTION_FETCH_STATUS[reel_url]['request_1_status'] = str(e)
+    
+    def send_request_2():
+        try:
+            caption_service_url = get_caption_service_url()
+            app.logger.info(f"⏳ [Job {job_id}] Waiting 60 seconds before request 2...")
+            time.sleep(60)
+            app.logger.info(f"📞 [Job {job_id}] Request 2 (REAL FETCH) sent...")
+            response = requests.post(
+                caption_service_url,
+                json={
+                    "url": reel_url,
+                    "job_id": job_id,
+                    "pipeline_id": pipeline_id,
+                    "profile_username": profile_username,
+                    "webhook_url": f"https://fetchgram-one.vercel.app/api/webhook/caption",
+                    "request_type": "real_fetch"
+                },
+                timeout=60,
+                headers={"Content-Type": "application/json"}
+            )
+            if response.status_code == 200:
+                app.logger.info(f"✅ [Job {job_id}] Request 2 completed successfully!")
+                CAPTION_FETCH_STATUS[reel_url]['request_2_sent'] = True
+                CAPTION_FETCH_STATUS[reel_url]['request_2_status'] = response.status_code
+                CAPTION_FETCH_STATUS[reel_url]['status'] = 'processing'
+                CAPTION_FETCH_STATUS[reel_url]['message'] = 'Caption service processing (request 2)'
+            else:
+                app.logger.error(f"❌ [Job {job_id}] Request 2 failed: {response.status_code}")
+                CAPTION_FETCH_STATUS[reel_url]['request_2_sent'] = True
+                CAPTION_FETCH_STATUS[reel_url]['request_2_status'] = response.status_code
+                CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+                CAPTION_FETCH_STATUS[reel_url]['message'] = f'Request 2 failed: {response.status_code}'
+        except requests.exceptions.Timeout:
+            app.logger.error(f"❌ [Job {job_id}] Request 2 timed out")
+            CAPTION_FETCH_STATUS[reel_url]['request_2_sent'] = True
+            CAPTION_FETCH_STATUS[reel_url]['request_2_status'] = 'timeout'
+            CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+            CAPTION_FETCH_STATUS[reel_url]['message'] = 'Request 2 timed out'
+        except Exception as e:
+            app.logger.error(f"❌ [Job {job_id}] Request 2 error: {e}")
+            CAPTION_FETCH_STATUS[reel_url]['request_2_sent'] = True
+            CAPTION_FETCH_STATUS[reel_url]['request_2_status'] = str(e)
+            CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+            CAPTION_FETCH_STATUS[reel_url]['message'] = f'Request 2 error: {str(e)}'
+    
+    thread1 = threading.Thread(target=send_request_1)
+    thread1.daemon = True
+    thread1.start()
+    thread2 = threading.Thread(target=send_request_2)
+    thread2.daemon = True
+    thread2.start()
+    
+    return {
+        'status': 'accepted',
+        'job_id': job_id,
+        'message': 'Dual requests sent (wake-up + real fetch in 60s)',
+        'details': {
+            'request_1': 'Wake-up request sent (timeout: 3s)',
+            'request_2': 'Real fetch scheduled in 60s (timeout: 60s)'
+        }
+    }
 
+def trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, profile_username, max_retries=3):
+    import threading
+    import uuid
+    from datetime import datetime
+    import time
+    
+    job_id = str(uuid.uuid4())
+    app.logger.info(f"📤 [Job {job_id}] Starting DUAL+RETRY caption fetch for: {reel_url[:50]}...")
+    
+    CAPTION_FETCH_STATUS[reel_url] = {
+        'status': 'pending',
+        'job_id': job_id,
+        'pipeline_id': pipeline_id,
+        'profile_username': profile_username,
+        'message': 'Dual+Retry request queued',
+        'timestamp': datetime.utcnow().isoformat(),
+        'wake_up_sent': False,
+        'real_fetch_attempts': 0,
+        'real_fetch_status': None,
+        'webhook_received': False,
+        'retry_count': 0
+    }
+    
+    def send_wakeup():
+        try:
+            caption_service_url = get_caption_service_url()
+            app.logger.info(f"💤 [Job {job_id}] Sending wake-up request...")
+            requests.post(
+                caption_service_url,
+                json={
+                    "url": reel_url,
+                    "job_id": job_id,
+                    "pipeline_id": pipeline_id,
+                    "profile_username": profile_username,
+                    "webhook_url": f"https://fetchgram-one.vercel.app/api/webhook/caption",
+                    "request_type": "wakeup"
+                },
+                timeout=2,
+                headers={"Content-Type": "application/json"}
+            )
+            app.logger.info(f"✅ [Job {job_id}] Wake-up request sent")
+            CAPTION_FETCH_STATUS[reel_url]['wake_up_sent'] = True
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE pending_posts SET wakeup_sent = TRUE 
+                    WHERE reel_url = %s AND status IN ('pending', 'processing')
+                """, (reel_url,))
+                conn.commit()
+                cur.close()
+                conn.close()
+        except Exception as e:
+            app.logger.info(f"⏰ [Job {job_id}] Wake-up request timed out (expected)")
+            CAPTION_FETCH_STATUS[reel_url]['wake_up_sent'] = True
+    
+    def send_real_fetch_with_retry():
+        caption_service_url = get_caption_service_url()
+        app.logger.info(f"⏳ [Job {job_id}] Waiting 60 seconds for Render to wake up...")
+        time.sleep(60)
+        max_attempts = max_retries
+        base_delay = 5
+        
+        for attempt in range(max_attempts):
+            try:
+                app.logger.info(f"📞 [Job {job_id}] Real fetch attempt {attempt + 1}/{max_attempts}...")
+                CAPTION_FETCH_STATUS[reel_url]['real_fetch_attempts'] = attempt + 1
+                CAPTION_FETCH_STATUS[reel_url]['message'] = f'Real fetch attempt {attempt + 1}'
+                response = requests.post(
+                    caption_service_url,
+                    json={
+                        "url": reel_url,
+                        "job_id": job_id,
+                        "pipeline_id": pipeline_id,
+                        "profile_username": profile_username,
+                        "webhook_url": f"https://fetchgram-one.vercel.app/api/webhook/caption",
+                        "request_type": "real_fetch",
+                        "attempt": attempt + 1
+                    },
+                    timeout=45,
+                    headers={"Content-Type": "application/json"}
+                )
+                if response.status_code == 200:
+                    app.logger.info(f"✅ [Job {job_id}] Real fetch successful! (attempt {attempt + 1})")
+                    CAPTION_FETCH_STATUS[reel_url]['real_fetch_status'] = 'success'
+                    CAPTION_FETCH_STATUS[reel_url]['status'] = 'processing'
+                    CAPTION_FETCH_STATUS[reel_url]['message'] = 'Caption service processing'
+                    conn = get_db_connection()
+                    if conn:
+                        cur = conn.cursor()
+                        cur.execute("""
+                            UPDATE pending_posts SET real_fetch_attempts = %s
+                            WHERE reel_url = %s AND status IN ('pending', 'processing')
+                        """, (attempt + 1, reel_url))
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+                    return
+                elif response.status_code in [502, 503, 504]:
+                    app.logger.warning(f"⚠️ [Job {job_id}] Gateway error (attempt {attempt + 1})")
+                    if attempt < max_attempts - 1:
+                        delay = base_delay * (2 ** attempt)
+                        app.logger.info(f"⏳ [Job {job_id}] Retrying in {delay}s...")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        app.logger.error(f"❌ [Job {job_id}] All attempts failed (gateway errors)")
+                        CAPTION_FETCH_STATUS[reel_url]['real_fetch_status'] = 'failed'
+                        CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+                        CAPTION_FETCH_STATUS[reel_url]['message'] = 'Gateway errors after all attempts'
+                        return
+                else:
+                    app.logger.error(f"❌ [Job {job_id}] Real fetch failed: {response.status_code}")
+                    CAPTION_FETCH_STATUS[reel_url]['real_fetch_status'] = 'failed'
+                    CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+                    CAPTION_FETCH_STATUS[reel_url]['message'] = f'Error {response.status_code}'
+                    return
+            except requests.exceptions.Timeout:
+                app.logger.warning(f"⚠️ [Job {job_id}] Timeout (attempt {attempt + 1})")
+                if attempt < max_attempts - 1:
+                    delay = base_delay * (2 ** attempt)
+                    app.logger.info(f"⏳ [Job {job_id}] Retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    app.logger.error(f"❌ [Job {job_id}] All attempts failed (timeouts)")
+                    CAPTION_FETCH_STATUS[reel_url]['real_fetch_status'] = 'failed'
+                    CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+                    CAPTION_FETCH_STATUS[reel_url]['message'] = 'Timeout after all attempts'
+                    return
+            except Exception as e:
+                app.logger.error(f"❌ [Job {job_id}] Real fetch error: {e}")
+                if attempt < max_attempts - 1:
+                    delay = base_delay * (2 ** attempt)
+                    app.logger.info(f"⏳ [Job {job_id}] Retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    CAPTION_FETCH_STATUS[reel_url]['real_fetch_status'] = 'failed'
+                    CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+                    CAPTION_FETCH_STATUS[reel_url]['message'] = str(e)
+                    return
+        
+        if CAPTION_FETCH_STATUS[reel_url]['status'] != 'processing':
+            CAPTION_FETCH_STATUS[reel_url]['status'] = 'failed'
+            CAPTION_FETCH_STATUS[reel_url]['message'] = 'All retry attempts exhausted'
+    
+    thread_wakeup = threading.Thread(target=send_wakeup)
+    thread_wakeup.daemon = True
+    thread_wakeup.start()
+    thread_real = threading.Thread(target=send_real_fetch_with_retry)
+    thread_real.daemon = True
+    thread_real.start()
+    
+    return {
+        'status': 'accepted',
+        'job_id': job_id,
+        'message': 'Dual+Retry caption fetch started',
+        'timeline': {
+            'request_1': 'Wake-up sent immediately',
+            'request_2': 'Real fetch after 60s (with retries)',
+            'max_retries': max_retries
+        }
+    }
 
+def trigger_caption_fetch_async(reel_url, pipeline_id, profile_username):
+    return trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, profile_username)
 
 def get_caption_fetch_status(reel_url):
     status = CAPTION_FETCH_STATUS.get(reel_url)
@@ -2431,179 +3108,229 @@ def process_pending_post(post):
     
 def get_caption_for_reel(reel_url, profile_username, pipeline_id, max_retries=3):
     """
-    Get a Reel caption.
-
-    Order:
-      1. scraped_reels
-      2. posted_reels
-      3. reel_cache
-      4. synchronous caption service
-
-    Database connections are closed before the network request so a slow
-    caption service cannot hold a database connection open.
+    Get caption with simple retry.
+    NO Browserless refresh - just retry the caption service.
     """
-    # 1. Check scraped_reels.
     conn = get_db_connection()
-    if conn:
-        cur = None
-        try:
-            cur = conn.cursor()
+    if not conn:
+        return None
+    
+    try:
+        cur = conn.cursor()
+        
+        # ========== FIRST: Check all database sources ==========
+        
+        # 1. Check scraped_reels
+        cur.execute("""
+            SELECT results FROM scraped_reels 
+            WHERE EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS elem
+                WHERE elem->>'username' = %s
+            )
+            ORDER BY created_at DESC LIMIT 1
+        """, (profile_username,))
+        result = cur.fetchone()
+        if result:
+            results = result[0]
+            if isinstance(results, str):
+                results = json.loads(results)
+            for profile in results:
+                if profile.get('username') == profile_username:
+                    for reel in profile.get('reels', []):
+                        if isinstance(reel, dict) and reel.get('url') == reel_url:
+                            caption = reel.get('caption', '')
+                            if caption and caption.strip():
+                                app.logger.info(f"✅ Found caption in scraped_reels")
+                                return caption
+        
+        # 2. Check posted_reels
+        cur.execute("SELECT caption FROM posted_reels WHERE pipeline_id = %s AND reel_url = %s", (pipeline_id, reel_url))
+        result = cur.fetchone()
+        if result and result[0] and result[0].strip():
+            app.logger.info(f"✅ Found caption in posted_reels")
+            return result[0]
+        
+        # 3. Check reel_cache
+        cur.execute("SELECT caption FROM reel_cache WHERE reel_url = %s", (reel_url,))
+        result = cur.fetchone()
+        if result and result[0] and result[0].strip():
+            app.logger.info(f"✅ Found caption in reel_cache")
+            return result[0]
+        
+        cur.close()
+        conn.close()
+        
+        # ========== SECOND: Try caption service with simple retry ==========
+        app.logger.info(f"🔥 Caption not in database, fetching from service...")
+        
+        for attempt in range(max_retries):
+            try:
+                # ✅ Simple retry with exponential backoff - NO Browserless refresh
+                if attempt > 0:
+                    wait_time = 2 ** attempt * 3  # 3, 6, 12 seconds
+                    app.logger.info(f"⏳ Attempt {attempt+1}/{max_retries} - Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                
+                app.logger.info(f"📞 Attempt {attempt+1}/{max_retries} calling caption service...")
+                caption = fetch_caption_from_service(reel_url)
+                
+                if caption and caption.strip():
+                    # Store in database for future use
+                    store_caption_in_database(reel_url, caption, profile_username)
+                    app.logger.info(f"✅ Caption fetched on attempt {attempt+1}")
+                    return caption
+                else:
+                    app.logger.warning(f"⚠️ Attempt {attempt+1} returned no caption")
+                    
+            except requests.exceptions.Timeout:
+                app.logger.warning(f"⏰ Attempt {attempt+1} timed out")
+                if attempt == max_retries - 1:
+                    app.logger.error(f"❌ All {max_retries} attempts timed out")
+                continue
+                
+            except Exception as e:
+                app.logger.warning(f"⚠️ Attempt {attempt+1} error: {e}")
+                if attempt == max_retries - 1:
+                    app.logger.error(f"❌ All {max_retries} attempts failed")
+                continue
+        
+        # All retries failed
+        app.logger.warning(f"❌ No caption after {max_retries} retries for: {reel_url[:50]}...")
+        return None
+        
+    except Exception as e:
+        app.logger.error(f"Error getting caption: {e}")
+        return None
+    finally:
+        if not conn.closed:
+            cur.close()
+            conn.close()
+
+
+def fetch_caption_from_service(reel_url, timeout=5, async_mode=True, webhook_url=None, 
+                                pipeline_id=None, profile_username=None, post_id=None):
+    """
+    Fetch caption from the caption service.
+    
+    Args:
+        reel_url: The Instagram reel URL
+        timeout: Timeout for the request (short for async mode)
+        async_mode: If True, uses webhook callback instead of waiting
+        webhook_url: URL to receive the caption via webhook
+        pipeline_id: Pipeline ID for the post
+        profile_username: Instagram username
+        post_id: Scheduled post ID
+    
+    Returns:
+        caption: The caption if fetched synchronously, or None if async
+    """
+    try:
+        caption_service_url = get_caption_service_url()
+        
+        # Build payload
+        payload = {"url": reel_url}
+        
+        # Add webhook info if async mode
+        if async_mode and webhook_url:
+            payload["webhook_url"] = webhook_url
+            payload["async"] = True
+            payload["pipeline_id"] = pipeline_id
+            payload["profile_username"] = profile_username
+            payload["post_id"] = post_id
+        
+        app.logger.info(f"📞 Fetching caption for: {reel_url[:50]}... (async={async_mode})")
+        
+        response = requests.post(
+            caption_service_url,
+            json=payload,
+            timeout=timeout,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                # If async mode, we don't wait for the caption
+                if async_mode:
+                    app.logger.info(f"✅ Async caption fetch triggered for: {reel_url[:50]}...")
+                    return None
+                else:
+                    caption = data.get('caption', '')
+                    app.logger.info(f"✅ Caption fetched: {caption[:50] if caption else 'Empty'}...")
+                    return caption
+        elif response.status_code in [202, 204]:
+            # Accepted but no content (async mode)
+            app.logger.info(f"✅ Async request accepted for: {reel_url[:50]}...")
+            return None
+        
+        return None
+        
+    except requests.exceptions.Timeout:
+        # In async mode, timeout is expected (we just want to send the request)
+        if async_mode:
+            app.logger.info(f"⏰ Async request sent (timeout expected) for: {reel_url[:50]}...")
+            return None
+        else:
+            app.logger.error(f"⏰ Timeout fetching caption for {reel_url[:50]}...")
+            raise  # Re-raise timeout to be handled by retry logic
+    except Exception as e:
+        app.logger.error(f"Service error: {e}")
+        return None
+
+
+
+def store_caption_in_database(reel_url, caption, profile_username):
+    """Store caption in database for future use."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    try:
+        cur = conn.cursor()
+        
+        # Store in reel_cache
+        cur.execute("""
+            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+            VALUES (%s, '', %s, NOW())
+            ON CONFLICT (reel_url) DO UPDATE SET 
+                caption = EXCLUDED.caption,
+                created_at = NOW()
+        """, (reel_url, caption))
+        conn.commit()
+        
+        # Update scraped_reels if possible
+        if profile_username:
             cur.execute("""
-                SELECT results
-                FROM scraped_reels
+                SELECT id, results FROM scraped_reels 
                 WHERE EXISTS (
-                    SELECT 1
-                    FROM jsonb_array_elements(results) AS elem
+                    SELECT 1 FROM jsonb_array_elements(results) AS elem
                     WHERE elem->>'username' = %s
                 )
-                ORDER BY created_at DESC
-                LIMIT 1
+                ORDER BY created_at DESC LIMIT 1
             """, (profile_username,))
-
             result = cur.fetchone()
             if result:
-                results = result[0]
+                results = result[1]
                 if isinstance(results, str):
                     results = json.loads(results)
-
-                if isinstance(results, list):
-                    for profile in results:
-                        if not isinstance(profile, dict):
-                            continue
-                        if profile.get('username') != profile_username:
-                            continue
-
-                        for reel in profile.get('reels', []):
-                            if (
-                                isinstance(reel, dict)
-                                and reel.get('url') == reel_url
-                            ):
-                                caption = reel.get('caption', '')
-                                if isinstance(caption, str) and caption.strip():
-                                    app.logger.info(
-                                        "✅ Found caption in scraped_reels"
-                                    )
-                                    return caption.strip()
+                for profile_idx, profile in enumerate(results):
+                    if profile.get('username') == profile_username:
+                        for reel_idx, reel in enumerate(profile.get('reels', [])):
+                            if isinstance(reel, dict) and reel.get('url') == reel_url:
+                                results[profile_idx]['reels'][reel_idx]['caption'] = caption
                                 break
                         break
-        except Exception as e:
-            app.logger.warning(
-                f"⚠️ scraped_reels caption lookup failed: {e}"
-            )
-        finally:
-            if cur is not None:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    # 2. Check posted_reels.
-    conn = get_db_connection()
-    if conn:
-        cur = None
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT caption
-                FROM posted_reels
-                WHERE pipeline_id = %s AND reel_url = %s
-                LIMIT 1
-                """,
-                (pipeline_id, reel_url)
-            )
-            result = cur.fetchone()
-            if result and isinstance(result[0], str) and result[0].strip():
-                app.logger.info("✅ Found caption in posted_reels")
-                return result[0].strip()
-        except Exception as e:
-            app.logger.warning(
-                f"⚠️ posted_reels caption lookup failed: {e}"
-            )
-        finally:
-            if cur is not None:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    # 3. Check reel_cache.
-    conn = get_db_connection()
-    if conn:
-        cur = None
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT caption
-                FROM reel_cache
-                WHERE reel_url = %s
-                LIMIT 1
-                """,
-                (reel_url,)
-            )
-            result = cur.fetchone()
-            if result and isinstance(result[0], str) and result[0].strip():
-                app.logger.info("✅ Found caption in reel_cache")
-                return result[0].strip()
-        except Exception as e:
-            app.logger.warning(
-                f"⚠️ reel_cache caption lookup failed: {e}"
-            )
-        finally:
-            if cur is not None:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    # 4. Database has no caption. The database connections above are already
-    # closed before making the network request.
-    app.logger.info(
-        "🔥 Caption not in DB - fetching from caption service..."
-    )
-
-    caption = fetch_caption_from_service(
-        reel_url=reel_url,
-        timeout=60,
-        pipeline_id=pipeline_id,
-        profile_username=profile_username
-    )
-
-    if caption and caption.strip():
-        store_caption_in_database(
-            reel_url,
-            caption.strip(),
-            profile_username
-        )
-        app.logger.info(
-            f"✅ Caption fetched from service and stored "
-            f"({len(caption.strip())} chars)"
-        )
-        return caption.strip()
-
-    app.logger.warning(
-        f"❌ No caption returned by caption service for: "
-        f"{reel_url[:50]}..."
-    )
-    return None
-
-
-
-
-
+                cur.execute("""
+                    UPDATE scraped_reels SET results = %s, updated_at = NOW()
+                    WHERE id = %s
+                """, (json.dumps(results), result[0]))
+                conn.commit()
+        
+        cur.close()
+        conn.close()
+        app.logger.info(f"💾 Caption stored for: {reel_url[:50]}...")
+    except Exception as e:
+        app.logger.error(f"Error storing caption: {e}")
 
 # ============== PIPELINE FUNCTIONS ==============
 
@@ -2750,7 +3477,48 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
         cur.close()
         conn.close()
 
+def cache_direct_url(reel_url, direct_url, caption=''):
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO reel_cache (reel_url, direct_url, caption, created_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (reel_url) DO UPDATE SET 
+                direct_url = EXCLUDED.direct_url,
+                caption = EXCLUDED.caption,
+                created_at = NOW()
+        """, (reel_url, direct_url, caption))
+        conn.commit()
+        app.logger.info(f"✅ Cached CDN URL for: {reel_url[:50]}...")
+        return True
+    except Exception as e:
+        app.logger.error(f"Cache error: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
 
+def get_direct_url_from_cache_only(reel_url):
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT direct_url FROM reel_cache WHERE reel_url = %s AND created_at > NOW() - INTERVAL '30 days'", (reel_url,))
+        result = cur.fetchone()
+        if result and result[0]:
+            app.logger.info(f"✅ Cache hit for: {reel_url[:50]}...")
+            return result[0]
+        return None
+    except Exception as e:
+        app.logger.error(f"Cache lookup error: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
 
 # ============== UPDATED RUN_PIPELINE - PURE SCHEDULING ==============
 
@@ -2810,433 +3578,373 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
 
 def run_pipeline(pipeline_id):
     """
-    Process due posts for one pipeline synchronously.
-
-    For each due post:
-      1. Get the direct video URL.
-      2. Get the caption synchronously.
-      3. Publish to Facebook.
-      4. Mark the scheduled post as posted/failed.
-
-    No daemon threads, delayed caption requests, or caption webhooks are used
-    in this pipeline flow.
+    Process DUE posts for a specific pipeline only.
+    Pipeline triggers the video URL service THEN caption service twice:
+    1. Immediate wake-up (2s timeout)
+    2. Real fetch after 20 seconds (30s timeout)
     """
-    # Load and validate the pipeline first.
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
-
-    cur = None
+    
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            "SELECT * FROM pipelines WHERE id = %s",
-            (pipeline_id,)
-        )
+        
+        # Verify pipeline exists and is active
+        cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
         pipeline = cur.fetchone()
-    except Exception as e:
-        app.logger.error(f"❌ Failed to load pipeline {pipeline_id}: {e}")
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return {"error": str(e)}
-    finally:
-        if cur is not None:
-            try:
-                cur.close()
-            except Exception:
-                pass
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    if not pipeline:
-        return {"error": "Pipeline not found"}
-
-    if not pipeline['is_active']:
-        return {"error": "Pipeline is inactive"}
-
-    # Get due posts using a short-lived connection.
-    conn = get_db_connection()
-    if not conn:
-        return {"error": "Database connection failed"}
-
-    cur = None
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        if not pipeline:
+            return {"error": "Pipeline not found"}
+        if not pipeline['is_active']:
+            return {"error": "Pipeline is inactive"}
+        
+        # 🔥 Find ONLY DUE posts for this pipeline
         cur.execute("""
-            SELECT *
-            FROM scheduled_posts
-            WHERE pipeline_id = %s
-              AND status = 'pending'
-              AND scheduled_time <= NOW()
+            SELECT * FROM scheduled_posts 
+            WHERE pipeline_id = %s 
+            AND status = 'pending' 
+            AND scheduled_time <= NOW()
             ORDER BY scheduled_time ASC
             LIMIT 5
         """, (pipeline_id,))
+        
         due_posts = cur.fetchall()
-    except Exception as e:
-        app.logger.error(f"❌ Failed to load due posts: {e}")
-        return {"error": str(e)}
-    finally:
-        if cur is not None:
+        
+        if not due_posts:
+            log_pipeline_run(pipeline['id'], 0, 0, 'completed', 'No due posts found')
+            return {"message": "No due posts to process", "posted": 0}
+        
+        posted_count = 0
+        failed_count = 0
+        webhook_triggered = 0
+        
+        for post in due_posts:
+            scheduled_post_id = post['id']
+            
             try:
-                cur.close()
-            except Exception:
-                pass
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    if not due_posts:
-        log_pipeline_run(
-            pipeline_id,
-            0,
-            0,
-            'completed',
-            'No due posts found'
-        )
-        return {
-            "message": "No due posts to process",
-            "posted": 0,
-            "failed": 0,
-            "total": 0
-        }
-
-    posted_count = 0
-    failed_count = 0
-
-    def update_scheduled_post(post_id, status, error_message=None):
-        update_conn = get_db_connection()
-        if not update_conn:
-            app.logger.error(
-                f"❌ Could not update scheduled post {post_id}: "
-                "database connection failed"
-            )
-            return False
-
-        update_cur = None
-        try:
-            update_cur = update_conn.cursor()
-            if status == 'posted':
-                update_cur.execute("""
-                    UPDATE scheduled_posts
-                    SET status = 'posted',
-                        posted_at = NOW(),
-                        updated_at = NOW(),
-                        error_message = NULL
-                    WHERE id = %s
-                """, (post_id,))
-            else:
-                update_cur.execute("""
-                    UPDATE scheduled_posts
-                    SET status = %s,
-                        error_message = %s,
-                        updated_at = NOW()
-                    WHERE id = %s
-                """, (status, error_message, post_id))
-
-            update_conn.commit()
-            return True
-        except Exception as e:
-            update_conn.rollback()
-            app.logger.error(
-                f"❌ Failed updating scheduled post {post_id}: {e}"
-            )
-            return False
-        finally:
-            if update_cur is not None:
+                app.logger.info(f"📤 Processing due post: {post['reel_url'][:50]}...")
+                app.logger.info(f"   Pipeline ID: {pipeline_id}")
+                app.logger.info(f"   Post ID: {scheduled_post_id}")
+                app.logger.info(f"   Profile: {pipeline['profile_username']}")
+                
+                # ============================================================
+                # STEP 1: GET VIDEO URL - CALL SERVICE WITH ALL IDENTIFIERS
+                # ============================================================
+                app.logger.info(f"📥 [Video Fetch] Calling video URL service for: {post['reel_url'][:50]}...")
+                
+                direct_video_url = None
+                
                 try:
-                    update_cur.close()
-                except Exception:
-                    pass
-            try:
-                update_conn.close()
-            except Exception:
-                pass
-
-    for post in due_posts:
-        scheduled_post_id = post['id']
-        reel_url = post['reel_url']
-
-        try:
-            app.logger.info(
-                f"📤 Processing due post: {reel_url[:50]}..."
-            )
-            app.logger.info(f"   Pipeline ID: {pipeline_id}")
-            app.logger.info(f"   Post ID: {scheduled_post_id}")
-            app.logger.info(
-                f"   Profile: {pipeline['profile_username']}"
-            )
-
-            # ============================================================
-            # STEP 1: Get the direct video URL.
-            # ============================================================
-            direct_video_url = post.get('direct_video_url') or ''
-
-            if not direct_video_url:
-                app.logger.info(
-                    f"📥 [Video Fetch] Fetching video URL for: "
-                    f"{reel_url[:50]}..."
-                )
-
-                direct_video_url = get_direct_video_url(
-                    reel_url,
-                    pipeline_id=pipeline_id,
-                    post_id=scheduled_post_id,
-                    profile_username=pipeline['profile_username']
-                )
-
-                if direct_video_url:
-                    cache_direct_url(
-                        reel_url,
-                        direct_video_url,
-                        post.get('caption') or ''
+                    # ✅ PASS ALL IDENTIFIERS for autonomy
+                    direct_video_url = get_direct_video_url_from_service(
+                        post['reel_url'],
+                        pipeline_id=pipeline_id,                    # ← PASS PIPELINE ID
+                        post_id=scheduled_post_id,                  # ← PASS POST ID
+                        profile_username=pipeline['profile_username']  # ← PASS PROFILE
                     )
-
-                    update_conn = get_db_connection()
-                    if update_conn:
-                        update_cur = None
-                        try:
-                            update_cur = update_conn.cursor()
-                            update_cur.execute("""
-                                UPDATE scheduled_posts
-                                SET direct_video_url = %s,
+                    
+                    if direct_video_url:
+                        app.logger.info(f"✅ [Video Fetch] SUCCESS - Got video URL: {direct_video_url[:50]}...")
+                        
+                        # Cache it for future use
+                        cache_direct_url(post['reel_url'], direct_video_url, '')
+                        
+                        # Update the scheduled post with the URL
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET direct_video_url = %s, updated_at = NOW()
+                            WHERE id = %s
+                        """, (direct_video_url, scheduled_post_id))
+                        conn.commit()
+                        app.logger.info(f"✅ [Video Fetch] Updated scheduled_post with video URL")
+                    else:
+                        app.logger.warning(f"⚠️ [Video Fetch] Service returned no URL")
+                        
+                except Exception as e:
+                    app.logger.error(f"❌ [Video Fetch] Error calling video service: {e}")
+                    import traceback
+                    app.logger.error(traceback.format_exc())
+                    direct_video_url = None
+                
+                # If service failed, try cache as fallback
+                if not direct_video_url:
+                    app.logger.info(f"📥 [Video Fetch] Service failed, checking cache...")
+                    direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
+                    if direct_video_url:
+                        app.logger.info(f"✅ [Video Fetch] Found video URL in cache: {direct_video_url[:50]}...")
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET direct_video_url = %s, updated_at = NOW()
+                            WHERE id = %s
+                        """, (direct_video_url, scheduled_post_id))
+                        conn.commit()
+                
+                # If still no URL, skip this post (will retry next run)
+                if not direct_video_url:
+                    app.logger.warning(f"⚠️ [Video Fetch] No video URL found for: {post['reel_url'][:50]}... - will retry later")
+                    continue
+                
+                # ============================================================
+                # STEP 2: CHECK IF CAPTION EXISTS
+                # ============================================================
+                caption = post.get('caption', '')
+                
+                if caption and caption.strip():
+                    app.logger.info(f"✅ Caption already in database, triggering webhook to publish...")
+                    
+                    # Mark as processing
+                    cur.execute("""
+                        UPDATE scheduled_posts 
+                        SET status = 'processing', updated_at = NOW()
+                        WHERE id = %s
+                    """, (scheduled_post_id,))
+                    conn.commit()
+                    
+                    # Send to webhook immediately with the caption AND video URL
+                    webhook_url = f"https://fetchgram-one.vercel.app/api/webhook/caption"
+                    
+                    try:
+                        app.logger.info(f"📤 Sending webhook with caption and video URL...")
+                        response = requests.post(
+                            webhook_url,
+                            json={
+                                "reel_url": post['reel_url'],
+                                "caption": caption,
+                                "video_url": direct_video_url,  # ← PASS VIDEO URL
+                                "job_id": f"pipeline_{scheduled_post_id}",
+                                "status": "completed",
+                                "profile_username": pipeline['profile_username'],
+                                "pipeline_id": pipeline_id,      # ← PASS PIPELINE ID
+                                "post_id": scheduled_post_id      # ← PASS POST ID
+                            },
+                            timeout=30,
+                            headers={"Content-Type": "application/json"}
+                        )
+                        
+                        if response.status_code == 200:
+                            app.logger.info(f"✅ Webhook triggered for caption (immediate publish)")
+                            webhook_triggered += 1
+                            posted_count += 1
+                        else:
+                            app.logger.error(f"❌ Webhook failed: {response.status_code}")
+                            cur.execute("""
+                                UPDATE scheduled_posts 
+                                SET status = 'failed', 
+                                    error_message = 'Webhook failed',
                                     updated_at = NOW()
                                 WHERE id = %s
-                            """, (direct_video_url, scheduled_post_id))
-                            update_conn.commit()
-                        except Exception as e:
-                            update_conn.rollback()
-                            app.logger.warning(
-                                f"⚠️ Failed saving video URL: {e}"
-                            )
-                        finally:
-                            if update_cur is not None:
-                                try:
-                                    update_cur.close()
-                                except Exception:
-                                    pass
-                            update_conn.close()
-
-                    app.logger.info(
-                        f"✅ [Video Fetch] Got video URL: "
-                        f"{direct_video_url[:50]}..."
-                    )
-
-            if not direct_video_url:
-                direct_video_url = get_direct_url_from_cache_only(reel_url)
-
-                if direct_video_url:
-                    app.logger.info(
-                        f"✅ [Video Fetch] Found video URL in cache: "
-                        f"{direct_video_url[:50]}..."
-                    )
-
-                    update_conn = get_db_connection()
-                    if update_conn:
-                        update_cur = None
-                        try:
-                            update_cur = update_conn.cursor()
-                            update_cur.execute("""
-                                UPDATE scheduled_posts
-                                SET direct_video_url = %s,
-                                    updated_at = NOW()
-                                WHERE id = %s
-                            """, (direct_video_url, scheduled_post_id))
-                            update_conn.commit()
-                        except Exception as e:
-                            update_conn.rollback()
-                            app.logger.warning(
-                                f"⚠️ Failed saving cached video URL: {e}"
-                            )
-                        finally:
-                            if update_cur is not None:
-                                try:
-                                    update_cur.close()
-                                except Exception:
-                                    pass
-                            update_conn.close()
-
-            if not direct_video_url:
-                # Keep pending so the next pipeline run can try again.
-                app.logger.warning(
-                    f"⚠️ No video URL for {reel_url[:50]}... "
-                    "— leaving post pending for retry"
-                )
-                continue
-
-            # ============================================================
-            # STEP 2: Get caption synchronously.
-            # ============================================================
-            caption = post.get('caption') or ''
-
-            if not caption.strip():
-                caption = get_caption_for_reel(
-                    reel_url=reel_url,
-                    profile_username=pipeline['profile_username'],
-                    pipeline_id=pipeline_id
-                )
-
-            if not caption or not caption.strip():
-                # Do NOT mark this as failed. The caption service may be
-                # temporarily unavailable; a later run can retry it.
-                app.logger.warning(
-                    f"⚠️ No caption for {reel_url[:50]}... "
-                    "— leaving post pending for retry"
-                )
-                continue
-
-            caption = caption.strip()
-
-            # Save caption to scheduled_posts before publishing.
-            caption_conn = get_db_connection()
-            if caption_conn:
-                caption_cur = None
+                            """, (scheduled_post_id,))
+                            conn.commit()
+                            failed_count += 1
+                            
+                    except Exception as e:
+                        app.logger.error(f"❌ Webhook error: {e}")
+                        cur.execute("""
+                            UPDATE scheduled_posts 
+                            SET status = 'failed', 
+                                error_message = %s,
+                                updated_at = NOW()
+                            WHERE id = %s
+                        """, (str(e), scheduled_post_id))
+                        conn.commit()
+                        failed_count += 1
+                    
+                    continue
+                
+                # ============================================================
+                # STEP 3: NO CAPTION - TRIGGER CAPTION SERVICE TWICE
+                # ============================================================
+                app.logger.info(f"📝 No caption in DB - triggering TWO caption fetch calls:")
+                app.logger.info(f"   🔹 Call 1: Immediate (wake-up, 2s timeout)")
+                app.logger.info(f"   🔹 Call 2: After 20 seconds (real fetch, 30s timeout)")
+                
+                # Mark post as "processing" (waiting for caption)
+                cur.execute("""
+                    UPDATE scheduled_posts 
+                    SET status = 'processing', updated_at = NOW()
+                    WHERE id = %s
+                """, (scheduled_post_id,))
+                conn.commit()
+                
+                # ============================================================
+                # CALL 1: IMMEDIATE WAKE-UP (2 second timeout)
+                # ============================================================
+                caption_service_url = get_caption_service_url()
+                webhook_url = f"https://fetchgram-one.vercel.app/api/webhook/caption"
+                job_id = str(uuid.uuid4())
+                
                 try:
-                    caption_cur = caption_conn.cursor()
-                    caption_cur.execute("""
-                        UPDATE scheduled_posts
-                        SET caption = %s,
-                            direct_video_url = %s,
-                            status = 'processing',
+                    app.logger.info(f"💤 [CALL 1] Sending WAKE-UP caption request (timeout: 2s)...")
+                    
+                    # Build payload with all identifiers
+                    payload = {
+                        "url": post['reel_url'],
+                        "video_url": direct_video_url,  # ← PASS VIDEO URL
+                        "webhook_url": webhook_url,
+                        "pipeline_id": pipeline_id,      # ← PASS PIPELINE ID
+                        "profile_username": pipeline['profile_username'],
+                        "post_id": scheduled_post_id,    # ← PASS POST ID
+                        "job_id": job_id,
+                        "async": True,
+                        "call_type": "wakeup",
+                        "call_number": 1
+                    }
+                    
+                    # Send with SHORT timeout - just to wake up the service
+                    response = requests.post(
+                        caption_service_url,
+                        json=payload,
+                        timeout=2,  # ← VERY SHORT TIMEOUT (2 seconds)
+                        headers={"Content-Type": "application/json"}
+                    )
+                    
+                    if response.status_code in [200, 202]:
+                        app.logger.info(f"✅ [CALL 1] Wake-up request accepted: {response.status_code}")
+                    else:
+                        app.logger.info(f"ℹ️ [CALL 1] Wake-up returned: {response.status_code}")
+                    webhook_triggered += 1
+                    
+                except requests.exceptions.Timeout:
+                    app.logger.info(f"⏰ [CALL 1] Wake-up request timed out (expected - service is cold starting)")
+                    webhook_triggered += 1
+                except requests.exceptions.ConnectionError:
+                    app.logger.info(f"🔌 [CALL 1] Wake-up connection error (expected during cold start)")
+                    webhook_triggered += 1
+                except Exception as e:
+                    app.logger.warning(f"⚠️ [CALL 1] Wake-up error: {e}")
+                    # Even if wake-up fails, we'll still try the second call
+                
+                # ============================================================
+                # CALL 2: REAL FETCH AFTER 20 SECONDS
+                # ============================================================
+                import threading
+                import time
+                
+                def send_real_caption_fetch():
+                    """Send the real caption fetch after 20 seconds with retries"""
+                    with app.app_context():
+                        try:
+                            # Wait 20 seconds before sending the real request
+                            app.logger.info(f"⏳ [CALL 2] Waiting 20 seconds before REAL fetch...")
+                            time.sleep(20)  # ← WAIT 20 SECONDS
+                            
+                            app.logger.info(f"📞 [CALL 2] Sending REAL caption fetch request (timeout: 30s)...")
+                            app.logger.info(f"   Pipeline ID: {pipeline_id}")
+                            app.logger.info(f"   Post ID: {scheduled_post_id}")
+                            app.logger.info(f"   Profile: {pipeline['profile_username']}")
+                            
+                            # Build payload for real fetch
+                            payload_2 = {
+                                "url": post['reel_url'],
+                                "video_url": direct_video_url,  # ← PASS VIDEO URL
+                                "webhook_url": webhook_url,
+                                "pipeline_id": pipeline_id,      # ← PASS PIPELINE ID
+                                "profile_username": pipeline['profile_username'],
+                                "post_id": scheduled_post_id,    # ← PASS POST ID
+                                "job_id": job_id,
+                                "async": True,
+                                "call_type": "real_fetch",
+                                "call_number": 2,
+                                "attempt": 1
+                            }
+                            
+                            # Send with LONGER timeout for the real fetch
+                            response = requests.post(
+                                caption_service_url,
+                                json=payload_2,
+                                timeout=30,  # ← LONGER TIMEOUT (30 seconds)
+                                headers={"Content-Type": "application/json"}
+                            )
+                            
+                            if response.status_code in [200, 202]:
+                                app.logger.info(f"✅ [CALL 2] Real fetch request accepted: {response.status_code}")
+                                webhook_triggered += 1
+                            else:
+                                app.logger.warning(f"⚠️ [CALL 2] Real fetch returned: {response.status_code}")
+                                
+                        except requests.exceptions.Timeout:
+                            app.logger.error(f"❌ [CALL 2] Real fetch timed out after 30s")
+                            # Try one more time with retry
+                            try:
+                                time.sleep(5)
+                                app.logger.info(f"🔄 [CALL 2] Retrying real fetch...")
+                                response = requests.post(
+                                    caption_service_url,
+                                    json={
+                                        "url": post['reel_url'],
+                                        "video_url": direct_video_url,
+                                        "webhook_url": webhook_url,
+                                        "pipeline_id": pipeline_id,
+                                        "profile_username": pipeline['profile_username'],
+                                        "post_id": scheduled_post_id,
+                                        "job_id": job_id,
+                                        "async": True,
+                                        "call_type": "real_fetch_retry",
+                                        "call_number": 2,
+                                        "attempt": 2
+                                    },
+                                    timeout=30,
+                                    headers={"Content-Type": "application/json"}
+                                )
+                                if response.status_code in [200, 202]:
+                                    app.logger.info(f"✅ [CALL 2] Retry successful!")
+                            except Exception as retry_e:
+                                app.logger.error(f"❌ [CALL 2] Retry failed: {retry_e}")
+                        except Exception as e:
+                            app.logger.error(f"❌ [CALL 2] Real fetch error: {e}")
+                
+                # Start the second call in background
+                thread = threading.Thread(target=send_real_caption_fetch)
+                thread.daemon = True
+                thread.start()
+                
+                app.logger.info(f"✅ [CALL 1] Wake-up sent, [CALL 2] will follow in 20 seconds")
+                    
+            except Exception as e:
+                app.logger.error(f"❌ Error processing post: {e}")
+                import traceback
+                app.logger.error(traceback.format_exc())
+                
+                try:
+                    cur.execute("""
+                        UPDATE scheduled_posts 
+                        SET status = 'failed', 
+                            error_message = %s, 
                             updated_at = NOW()
                         WHERE id = %s
-                    """, (
-                        caption,
-                        direct_video_url,
-                        scheduled_post_id
-                    ))
-                    caption_conn.commit()
-                except Exception as e:
-                    caption_conn.rollback()
-                    app.logger.warning(
-                        f"⚠️ Failed saving caption before publish: {e}"
-                    )
-                finally:
-                    if caption_cur is not None:
-                        try:
-                            caption_cur.close()
-                        except Exception:
-                            pass
-                    caption_conn.close()
-
-            # ============================================================
-            # STEP 3: Publish to Facebook.
-            # ============================================================
-            app.logger.info(
-                f"📤 Publishing to Facebook for post "
-                f"{scheduled_post_id}..."
-            )
-
-            result = publish_to_facebook(
-                video_url=direct_video_url,
-                text=caption,
-                account_id=pipeline['facebook_account_id'],
-                publish_now=True,
-                key_id=pipeline.get('zernio_key_id')
-            )
-
-            if result and not result.get('error'):
-                post_result_id = (
-                    result.get('post', {}).get('_id')
-                    or result.get('post_id')
-                )
-
-                post_url = None
-                platforms = result.get('post', {}).get('platforms', [])
-                for platform in platforms:
-                    if platform.get('platform') == 'facebook':
-                        post_url = platform.get('publishedUrl')
-                        break
-
-                mark_reel_as_posted(
-                    pipeline_id=pipeline_id,
-                    reel_url=reel_url,
-                    direct_video_url=direct_video_url,
-                    caption=caption,
-                    facebook_post_id=post_result_id,
-                    facebook_post_url=post_url,
-                    status='success'
-                )
-
-                update_scheduled_post(
-                    scheduled_post_id,
-                    'posted'
-                )
-
-                posted_count += 1
-                app.logger.info(
-                    f"✅ Post published successfully! "
-                    f"Scheduled post: {scheduled_post_id}"
-                )
-            else:
-                error_msg = (
-                    result.get('error', 'Unknown error')
-                    if result
-                    else 'Unknown error'
-                )
-
-                app.logger.error(
-                    f"❌ Facebook publish failed: {error_msg}"
-                )
-
-                mark_reel_as_posted(
-                    pipeline_id=pipeline_id,
-                    reel_url=reel_url,
-                    direct_video_url=direct_video_url,
-                    caption=caption,
-                    status='failed',
-                    error_message=str(error_msg)
-                )
-
-                update_scheduled_post(
-                    scheduled_post_id,
-                    'failed',
-                    str(error_msg)
-                )
-
+                    """, (str(e), scheduled_post_id))
+                    conn.commit()
+                except:
+                    pass
                 failed_count += 1
-
-        except Exception as e:
-            app.logger.error(
-                f"❌ Error processing scheduled post "
-                f"{scheduled_post_id}: {e}"
-            )
-            app.logger.error(traceback.format_exc())
-
-            update_scheduled_post(
-                scheduled_post_id,
-                'failed',
-                str(e)
-            )
-            failed_count += 1
-
-    # Sync aggregate pipeline statistics after the synchronous run.
-    try:
-        update_pipeline_stats(pipeline_id, 0, 0)
-    except Exception as e:
-        app.logger.warning(
-            f"⚠️ Failed to update pipeline stats: {e}"
+        
+        # Update pipeline stats
+        if posted_count > 0 or failed_count > 0:
+            update_pipeline_stats(pipeline['id'], posted_count, failed_count)
+        
+        log_pipeline_run(
+            pipeline['id'], 
+            posted_count, 
+            failed_count, 
+            'completed' if failed_count == 0 else 'partial'
         )
-
-    run_status = 'completed' if failed_count == 0 else 'partial'
-
-    log_pipeline_run(
-        pipeline_id,
-        posted_count,
-        failed_count,
-        run_status
-    )
-
-    return {
-        "message": "Pipeline completed synchronously",
-        "posted": posted_count,
-        "failed": failed_count,
-        "total": len(due_posts)
-    }
+        
+        return {
+            "message": f"Caption fetch triggered: Wake-up (immediate) + Real fetch (after 20s). Webhooks: {webhook_triggered}",
+            "posted": posted_count,
+            "failed": failed_count,
+            "webhooks_triggered": webhook_triggered,
+            "total": len(due_posts)
+        }
+        
+    except Exception as e:
+        app.logger.error(f"Pipeline error: {e}")
+        log_pipeline_run(pipeline_id, 0, 0, 'error', str(e))
+        return {"error": str(e)}
+    finally:
+        cur.close()
+        conn.close()
 
 
 
@@ -3328,6 +4036,47 @@ def run_all_active_pipelines():
     finally:
         conn.close()
 
+def ensure_caption_for_reel(reel_url, profile_username, pipeline_id):
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT results FROM scraped_reels 
+            WHERE EXISTS (
+                SELECT 1 FROM jsonb_array_elements(results) AS elem
+                WHERE elem->>'username' = %s
+            )
+            ORDER BY created_at DESC LIMIT 1
+        """, (profile_username,))
+        result = cur.fetchone()
+        if result:
+            results = result[0]
+            for profile in results:
+                if profile.get('username') == profile_username:
+                    reels = profile.get('reels', [])
+                    for reel in reels:
+                        if isinstance(reel, dict):
+                            if reel.get('url') == reel_url:
+                                caption = reel.get('caption', '')
+                                if caption and caption.strip():
+                                    app.logger.info(f"📝 Found caption in scraped_reels")
+                                    return caption
+        cur.execute("SELECT caption FROM posted_reels WHERE pipeline_id = %s AND reel_url = %s", (pipeline_id, reel_url))
+        result = cur.fetchone()
+        if result and result[0] and result[0].strip():
+            app.logger.info(f"📝 Found caption in posted_reels")
+            return result[0]
+        app.logger.info(f"🔥 Caption not found, triggering dual fetch for: {reel_url[:50]}...")
+        trigger_caption_fetch_with_dual_requests_and_retry(reel_url, pipeline_id, profile_username)
+        return None
+    except Exception as e:
+        app.logger.error(f"Error ensuring caption: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
 
 # ============== ROUTES ==============
 
