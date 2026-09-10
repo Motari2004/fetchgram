@@ -637,35 +637,33 @@ def get_direct_video_url_from_service(instagram_url, pipeline_id=None, post_id=N
 
 
 
-
 def get_direct_video_url(url, media_id=None, pipeline_id=None, post_id=None, profile_username=None):
     """
-    Get direct video URL using the Instagram video URL getter service.
-    Falls back to cache if service fails.
-    Now supports autonomous pipeline and post tracking.
+    Get a FRESH direct video URL from the video service.
+
+    No cache. Every call hits the video service and returns the URL it
+    provides. fdown.vn signed URLs expire within hours, so the only safe
+    source is a fresh call.
+
+    Returns None if the service could not produce a URL. The caller is
+    expected to retry on the next run rather than publish a dead link.
     """
-    # Try the service first with pipeline context
     video_url = get_direct_video_url_from_service(
-        url, 
-        pipeline_id=pipeline_id, 
+        url,
+        pipeline_id=pipeline_id,
         post_id=post_id,
         profile_username=profile_username
     )
-    
-    if video_url:
-        cache_direct_url(url, video_url, '')
-        app.logger.info(f"✅ Video URL fetched from service: {video_url[:50]}...")
-        return video_url
-    
-    # Try cache as fallback
-    video_url = get_direct_url_from_cache_only(url)
-    if video_url:
-        app.logger.info(f"✅ Video URL found in cache: {video_url[:50]}...")
-        return video_url
-    
-    app.logger.error(f"❌ No video URL found for: {url[:50]}...")
-    return None
 
+    if video_url:
+        app.logger.info(f"✅ Fresh video URL from service: {video_url[:50]}...")
+        return video_url
+
+    app.logger.error(
+        f"❌ Video service did not return a URL for: {url[:50]}... "
+        f"(no cache fallback configured)"
+    )
+    return None
 
 
 
@@ -2903,9 +2901,6 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
 
 
 
-
-
-
 # ============== UPDATED RUN_PIPELINE - WITH PIPELINE & POST TRACKING ==============
 
 def run_pipeline(pipeline_id):
@@ -2975,40 +2970,34 @@ def run_pipeline(pipeline_id):
 
         try:
             # ============================================================
-            # STEP 1: VIDEO FIRST. Nothing below runs until video exists.
+            # STEP 1: VIDEO FIRST — ALWAYS FRESH, NO CACHE.
+            # Nothing below runs until we have a live URL from the service.
             # ============================================================
             app.logger.info(
                 f"\n{'=' * 70}\n"
                 f"🎬 PIPELINE {pipeline_id} | POST {scheduled_post_id}\n"
-                f"1️⃣ VIDEO FIRST: {reel_url[:70]}\n"
+                f"1️⃣ VIDEO FIRST (fresh, no cache): {reel_url[:70]}\n"
                 f"{'=' * 70}"
             )
 
-            direct_video_url = post.get('direct_video_url')
-            if direct_video_url:
-                app.logger.info("✅ Existing direct video URL found on scheduled post")
-            else:
-                # Synchronous call. It wakes Render and retries cold-start failures.
-                direct_video_url = get_direct_video_url(
-                    reel_url,
-                    pipeline_id=pipeline_id,
-                    post_id=scheduled_post_id,
-                    profile_username=pipeline.get('profile_username')
-                )
-
-            if not direct_video_url:
-                # Video-only fallback. Caption service is still NOT contacted.
-                direct_video_url = get_direct_url_from_cache_only(reel_url)
-                if direct_video_url:
-                    app.logger.info("✅ Video URL recovered from cache")
+            # Always call the service. The URL stored on the scheduled post
+            # (or in reel_cache) may be an expired fdown.vn signed link.
+            direct_video_url = get_direct_video_url(
+                reel_url,
+                pipeline_id=pipeline_id,
+                post_id=scheduled_post_id,
+                profile_username=pipeline.get('profile_username')
+            )
 
             if not direct_video_url:
                 app.logger.warning(
-                    f"🛑 VIDEO NOT READY for {reel_url[:60]} — caption step will NOT run; leaving post pending."
+                    f"🛑 VIDEO NOT READY for {reel_url[:60]} — "
+                    f"caption step will NOT run; leaving post pending."
                 )
                 continue
 
-            # Save video before contacting caption service.
+            # Save the fresh URL on the scheduled post (audit trail only —
+            # nothing reads it back as a source of truth).
             update_conn = get_db_connection()
             if update_conn:
                 update_cur = None
@@ -3029,7 +3018,9 @@ def run_pipeline(pipeline_id):
                         except Exception: pass
                     update_conn.close()
 
-            app.logger.info(f"🎬✅ VIDEO READY — now moving to caption: {direct_video_url[:70]}...")
+            app.logger.info(
+                f"🎬✅ VIDEO READY — now moving to caption: {direct_video_url[:70]}..."
+            )
 
             # ============================================================
             # STEP 2: CAPTION SECOND. Only now can caption retrieval start.
@@ -3158,9 +3149,6 @@ def run_pipeline(pipeline_id):
         "failed": failed_count,
         "total": len(due_posts)
     }
-
-
-
 
 
 
