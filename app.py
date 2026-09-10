@@ -3826,8 +3826,6 @@ def send_download_webhook(job_id, instagram_url, video_url, media_id, action, er
 
 
 
-
-
 @app.route("/api/commands/download", methods=["POST"])
 def api_download():
     data = request.get_json(silent=True) or {}
@@ -3835,82 +3833,40 @@ def api_download():
     media_id = data.get("media_id", "").strip()
     action = data.get("action", "url_only")
     webhook_url = data.get("webhook_url")  # Optional webhook for async response
-    
+
     if not url:
         return jsonify({"error": "Missing 'url' parameter"}), 400
     if not is_valid_instagram_url(url):
         return jsonify({"error": "Invalid Instagram URL"}), 400
-    
+
     # ============================================================
-    # STEP 1: ALWAYS CHECK CACHE FIRST FOR REAL URL
-    # ============================================================
-    cached_video_url = get_direct_url_from_cache_only(url)
-    cached_caption = None
-    
-    if cached_video_url:
-        app.logger.info(f"✅ [CACHE] Found real video URL in cache: {cached_video_url[:50]}...")
-        
-        # Get caption from cache
-        conn = get_db_connection()
-        if conn:
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT caption FROM reel_cache WHERE reel_url = %s", (url,))
-                result = cur.fetchone()
-                if result and result[0]:
-                    cached_caption = result[0]
-                cur.close()
-                conn.close()
-            except:
-                pass
-        
-        # Return the REAL URL immediately - even in async mode!
-        response = {
-            "status": "success",
-            "url": url,
-            "media_id": media_id,
-            "action": action,
-            "download_url": cached_video_url,
-            "video_info": {
-                "id": media_id or 'instagram_video',
-                "title": cached_caption or "Instagram video",
-                "thumbnail": None,
-                "ext": "mp4"
-            },
-            "from_cache": True,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        if cached_caption:
-            response["caption"] = cached_caption
-        
-        session['current_video_url'] = cached_video_url
-        session['current_video_title'] = cached_caption or "Instagram video"
-        return jsonify(response)
-    
-    # ============================================================
-    # STEP 2: RETRY LOGIC FOR SERVICE CALLS
+    # STEP 1: RETRY LOGIC FOR SERVICE CALLS (shared helper)
     # ============================================================
     def call_service_with_retry(url, max_retries=3, timeout=30):
-        """Call the video URL service with retry logic"""
+        """Call the video URL service with retry logic."""
         last_error = None
-        
+
         for attempt in range(max_retries):
             try:
-                app.logger.info(f"📥 [Attempt {attempt + 1}/{max_retries}] Calling video URL service...")
-                
+                app.logger.info(
+                    f"📥 [Attempt {attempt + 1}/{max_retries}] "
+                    f"Calling video URL service..."
+                )
+
                 response = requests.post(
                     f"{IG_VIDEO_URL_GETTER}/api/download",
                     json={"url": url},
                     timeout=timeout,
                     headers={"Content-Type": "application/json"}
                 )
-                
+
                 if response.status_code == 200:
                     return response, None
                 elif response.status_code == 500:
-                    app.logger.warning(f"⚠️ [Attempt {attempt + 1}] Service returned 500, retrying...")
+                    app.logger.warning(
+                        f"⚠️ [Attempt {attempt + 1}] Service returned 500, retrying..."
+                    )
                     last_error = f"Service returned 500 (attempt {attempt + 1})"
-                    # Wait before retry with exponential backoff
                     if attempt < max_retries - 1:
                         wait_time = 2 ** attempt  # 1, 2, 4 seconds
                         app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
@@ -3918,7 +3874,7 @@ def api_download():
                     continue
                 else:
                     return response, None
-                    
+
             except requests.exceptions.Timeout:
                 last_error = f"Timeout (attempt {attempt + 1})"
                 app.logger.warning(f"⏰ [Attempt {attempt + 1}] Timeout, retrying...")
@@ -3927,16 +3883,18 @@ def api_download():
                     app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
                     time.sleep(wait_time)
                 continue
-                
+
             except requests.exceptions.ConnectionError as e:
                 last_error = f"Connection error: {str(e)}"
-                app.logger.warning(f"🔌 [Attempt {attempt + 1}] Connection error, retrying...")
+                app.logger.warning(
+                    f"🔌 [Attempt {attempt + 1}] Connection error, retrying..."
+                )
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt
                     app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
                     time.sleep(wait_time)
                 continue
-                
+
             except Exception as e:
                 last_error = str(e)
                 app.logger.error(f"❌ [Attempt {attempt + 1}] Error: {e}")
@@ -3945,43 +3903,54 @@ def api_download():
                     app.logger.info(f"⏳ Waiting {wait_time}s before retry...")
                     time.sleep(wait_time)
                 continue
-        
+
         return None, last_error
-    
+
     # ============================================================
-    # STEP 3: TRY FAST PATH WITH RETRY (10s timeout, 2 retries)
+    # STEP 2: ALWAYS FETCH FRESH — NEVER TRUST THE CACHE FIRST
+    # Fast path: 10s timeout, 2 retries.
     # ============================================================
-    app.logger.info(f"📥 [FAST] Trying to get real URL from service (10s timeout, 2 retries)...")
-    
+    app.logger.info(
+        f"📥 [FAST] Fetching FRESH video URL from service "
+        f"(10s timeout, 2 retries) for: {url[:50]}..."
+    )
+
     response, error = call_service_with_retry(url, max_retries=2, timeout=10)
-    
+
     if response and response.status_code == 200:
         service_data = response.json()
-        
+
         if service_data.get('success'):
             video_data = service_data.get('data', {})
-            download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
+            download_url = (
+                video_data.get('downloadUrl')
+                or video_data.get('directDownloadUrl')
+            )
             caption = video_data.get('caption', '') or ''
-            
+
             if download_url:
-                app.logger.info(f"✅ [FAST] Got REAL video URL: {download_url[:50]}...")
-                
-                # Cache it
+                app.logger.info(f"✅ [FAST] Got FRESH video URL: {download_url[:50]}...")
+
+                # Store it in the cache purely as an audit trail — nothing
+                # in the publish path reads it back as a source of truth.
                 cache_direct_url(url, download_url, caption)
-                
+
                 video_info = {
                     "id": media_id or video_data.get('id', 'instagram_video'),
                     "title": video_data.get('filename', caption or 'Instagram video'),
                     "duration": None,
                     "uploader": None,
-                    "thumbnail": video_data.get('thumbnail') or video_data.get('thumbnailUrl'),
+                    "thumbnail": (
+                        video_data.get('thumbnail')
+                        or video_data.get('thumbnailUrl')
+                    ),
                     "ext": "mp4"
                 }
-                
+
                 session['current_video_url'] = download_url
                 session['current_video_title'] = video_info.get('title')
                 session['current_video_thumbnail'] = video_info.get('thumbnail')
-                
+
                 response_data = {
                     "status": "success",
                     "url": url,
@@ -3994,19 +3963,19 @@ def api_download():
                 }
                 if caption:
                     response_data["caption"] = caption
-                
+
                 return jsonify(response_data)
-    
+
     # ============================================================
-    # STEP 4: ASYNC MODE - If webhook_url provided, use it
+    # STEP 3: ASYNC MODE — if a webhook was provided, use it
     # ============================================================
     if webhook_url:
         app.logger.info(f"📤 [ASYNC] Download request with webhook for: {url[:50]}...")
         app.logger.info(f"   Fast path failed: {error or 'Service unavailable'}")
-        
+
         # Generate a job ID for tracking
         job_id = str(uuid.uuid4())
-        
+
         # Store the request status
         DOWNLOAD_JOBS[job_id] = {
             'url': url,
@@ -4016,106 +3985,144 @@ def api_download():
             'media_id': media_id,
             'action': action
         }
-        
+
         # Start the video fetch in a background thread with retries
         import threading
-        
+
         def process_async_download():
             def run_async():
                 with app.app_context():
                     try:
-                        app.logger.info(f"📥 [ASYNC Job {job_id}] Fetching real video URL for: {url[:50]}...")
-                        
+                        app.logger.info(
+                            f"📥 [ASYNC Job {job_id}] Fetching real video URL "
+                            f"for: {url[:50]}..."
+                        )
+
                         # Use retry logic in background (3 retries, 60s timeout)
-                        response, error = call_service_with_retry(url, max_retries=3, timeout=60)
-                        
+                        response, error = call_service_with_retry(
+                            url, max_retries=3, timeout=60
+                        )
+
                         if response and response.status_code == 200:
                             service_data = response.json()
                             if service_data.get('success'):
                                 video_data = service_data.get('data', {})
-                                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
+                                download_url = (
+                                    video_data.get('downloadUrl')
+                                    or video_data.get('directDownloadUrl')
+                                )
                                 caption = video_data.get('caption', '') or ''
-                                
+
                                 if download_url:
-                                    app.logger.info(f"✅ [ASYNC Job {job_id}] Got REAL video URL: {download_url[:50]}...")
-                                    
+                                    app.logger.info(
+                                        f"✅ [ASYNC Job {job_id}] Got REAL video URL: "
+                                        f"{download_url[:50]}..."
+                                    )
+
                                     cache_direct_url(url, download_url, caption or '')
-                                    
+
                                     DOWNLOAD_JOBS[job_id]['video_url'] = download_url
                                     DOWNLOAD_JOBS[job_id]['caption'] = caption
                                     DOWNLOAD_JOBS[job_id]['status'] = 'completed'
-                                    DOWNLOAD_JOBS[job_id]['completed_at'] = datetime.utcnow().isoformat()
-                                    
-                                    send_download_webhook(job_id, url, download_url, media_id, action, None, caption)
+                                    DOWNLOAD_JOBS[job_id]['completed_at'] = (
+                                        datetime.utcnow().isoformat()
+                                    )
+
+                                    send_download_webhook(
+                                        job_id, url, download_url,
+                                        media_id, action, None, caption
+                                    )
                                     return
-                        
+
                         # If we get here, all retries failed
-                        app.logger.error(f"❌ [ASYNC Job {job_id}] All retries failed: {error}")
+                        app.logger.error(
+                            f"❌ [ASYNC Job {job_id}] All retries failed: {error}"
+                        )
                         DOWNLOAD_JOBS[job_id]['status'] = 'failed'
                         DOWNLOAD_JOBS[job_id]['error'] = error or 'All retries failed'
-                        DOWNLOAD_JOBS[job_id]['completed_at'] = datetime.utcnow().isoformat()
-                        send_download_webhook(job_id, url, None, media_id, action, error or 'All retries failed', None)
-                                
+                        DOWNLOAD_JOBS[job_id]['completed_at'] = (
+                            datetime.utcnow().isoformat()
+                        )
+                        send_download_webhook(
+                            job_id, url, None, media_id, action,
+                            error or 'All retries failed', None
+                        )
+
                     except Exception as e:
                         app.logger.error(f"❌ [ASYNC Job {job_id}] Error: {e}")
                         import traceback
                         app.logger.error(traceback.format_exc())
                         DOWNLOAD_JOBS[job_id]['status'] = 'failed'
                         DOWNLOAD_JOBS[job_id]['error'] = str(e)
-                        DOWNLOAD_JOBS[job_id]['completed_at'] = datetime.utcnow().isoformat()
-                        send_download_webhook(job_id, url, None, media_id, action, str(e), None)
-            
+                        DOWNLOAD_JOBS[job_id]['completed_at'] = (
+                            datetime.utcnow().isoformat()
+                        )
+                        send_download_webhook(
+                            job_id, url, None, media_id, action, str(e), None
+                        )
+
             thread = threading.Thread(target=run_async)
             thread.daemon = True
             thread.start()
-        
+
         process_async_download()
-        
+
         # Return job ID - webhook will send REAL URL when ready
         return jsonify({
             "status": "accepted",
             "job_id": job_id,
-            "message": "Download request accepted. You will receive the real video URL via webhook when ready.",
+            "message": (
+                "Download request accepted. You will receive the real "
+                "video URL via webhook when ready."
+            ),
             "action": action,
             "webhook_url": webhook_url,
             "timestamp": datetime.utcnow().isoformat()
         }), 202
-    
+
     # ============================================================
-    # STEP 5: SYNC MODE (No webhook) - Wait with full retries
+    # STEP 4: SYNC MODE (no webhook) — wait with full retries
     # ============================================================
     try:
         app.logger.info(f"📥 [SYNC] Download request for: {url[:50]}...")
-        
+
         # Use retry logic with full timeout (3 retries, 60s timeout)
         response, error = call_service_with_retry(url, max_retries=3, timeout=60)
-        
+
         if response and response.status_code == 200:
             service_data = response.json()
-            
+
             if service_data.get('success'):
                 video_data = service_data.get('data', {})
-                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
+                download_url = (
+                    video_data.get('downloadUrl')
+                    or video_data.get('directDownloadUrl')
+                )
                 caption = video_data.get('caption', '') or ''
-                
+
                 if download_url:
-                    app.logger.info(f"✅ [SYNC] Got REAL video URL: {download_url[:50]}...")
-                    
+                    app.logger.info(
+                        f"✅ [SYNC] Got REAL video URL: {download_url[:50]}..."
+                    )
+
                     cache_direct_url(url, download_url, caption)
-                    
+
                     video_info = {
                         "id": media_id or video_data.get('id', 'instagram_video'),
                         "title": video_data.get('filename', caption or 'Instagram video'),
                         "duration": None,
                         "uploader": None,
-                        "thumbnail": video_data.get('thumbnail') or video_data.get('thumbnailUrl'),
+                        "thumbnail": (
+                            video_data.get('thumbnail')
+                            or video_data.get('thumbnailUrl')
+                        ),
                         "ext": "mp4"
                     }
-                    
+
                     session['current_video_url'] = download_url
                     session['current_video_title'] = video_info.get('title')
                     session['current_video_thumbnail'] = video_info.get('thumbnail')
-                    
+
                     response_data = {
                         "status": "success",
                         "url": url,
@@ -4128,27 +4135,28 @@ def api_download():
                     }
                     if caption:
                         response_data["caption"] = caption
-                    
+
                     return jsonify(response_data)
                 else:
-                    app.logger.warning(f"⚠️ [SYNC] No download URL in service response")
-                    return jsonify({"error": "No video URL found in service response"}), 404
+                    app.logger.warning(
+                        "⚠️ [SYNC] No download URL in service response"
+                    )
+                    return jsonify({
+                        "error": "No video URL found in service response"
+                    }), 404
             else:
                 error_msg = service_data.get('error', 'Service error')
                 app.logger.warning(f"⚠️ [SYNC] Service error: {error_msg}")
                 return jsonify({"error": error_msg}), 500
         else:
             app.logger.error(f"❌ [SYNC] All retries failed: {error}")
-            return jsonify({"error": f"Service unavailable after retries: {error}"}), 503
-            
+            return jsonify({
+                "error": f"Service unavailable after retries: {error}"
+            }), 503
+
     except Exception as e:
         app.logger.error(f"❌ [SYNC] Download error: {e}")
         return jsonify({"error": clean_error(str(e))}), 500
-
-
-
-
-
 
 
 
