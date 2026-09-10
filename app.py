@@ -5123,42 +5123,48 @@ def process_post_with_caption(post, caption):
         # ✅ Use the correct IDs from aliases
         scheduled_id = post.get('scheduled_id')  # This is the SCHEDULED post ID
         pipeline_id = post.get('pipeline_id')    # This is the PIPELINE ID
-        
+
         app.logger.info(f"📤 Processing post with caption")
         app.logger.info(f"   Scheduled ID: {scheduled_id}")
         app.logger.info(f"   Pipeline ID: {pipeline_id}")
-        
+
         if not scheduled_id:
             app.logger.error("❌ No scheduled_id found in post")
             return
-        
-        # Get video URL
-        direct_video_url = post.get('direct_video_url', '')
+
+        # ============================================================
+        # STEP 1: ALWAYS fetch a FRESH video URL — no cache, no DB.
+        # The URL stored on the scheduled post may be an expired
+        # fdown.vn signed link from a previous run.
+        # ============================================================
+        app.logger.info(
+            f"📥 Fetching FRESH video URL for post {scheduled_id}..."
+        )
+        direct_video_url = get_direct_video_url(
+            post['reel_url'],
+            pipeline_id=pipeline_id,
+            post_id=scheduled_id,
+            profile_username=post.get('profile_username')
+        )
+
         if not direct_video_url:
-            direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
-            if not direct_video_url:
-                app.logger.error(f"❌ No video URL for post {scheduled_id}")
-                conn = get_db_connection()
-                if conn:
-                    cur = conn.cursor()
-                    cur.execute("""
-                        UPDATE scheduled_posts 
-                        SET status = 'failed', 
-                            error_message = 'No video URL available', 
-                            updated_at = NOW()
-                        WHERE id = %s
-                    """, (scheduled_id,))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                return
-        
-        # Get key_id from pipeline
+            app.logger.error(
+                f"❌ No fresh video URL for post {scheduled_id} — "
+                f"leaving it pending for retry"
+            )
+            # Do NOT mark as failed. The post remains in whatever
+            # status it had so a later run can retry with a live URL.
+            return
+
+        app.logger.info(f"🎬✅ Fresh video URL: {direct_video_url[:60]}...")
+
+        # ============================================================
+        # STEP 2: Publish to Facebook (video + caption ready)
+        # ============================================================
         key_id = post.get('zernio_key_id')
-        
-        # Publish to Facebook
+
         app.logger.info(f"📤 Publishing to Facebook with key: {key_id}")
-        
+
         result = publish_to_facebook(
             video_url=direct_video_url,
             text=caption,
@@ -5166,24 +5172,28 @@ def process_post_with_caption(post, caption):
             publish_now=True,
             key_id=key_id
         )
-        
+
         conn = get_db_connection()
         if not conn:
             app.logger.error("❌ No database connection")
             return
-        
+
         cur = conn.cursor()
-        
+
+        # ---------- Success OR idempotent "already posted" ----------
         if result and not result.get('error'):
-            post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
+            already_posted = result.get('already_posted', False)
+
+            post_result_id = (
+                result.get('post', {}).get('_id')
+                or result.get('post_id')
+            )
             post_url = None
-            platforms = result.get('post', {}).get('platforms', [])
-            for platform in platforms:
+            for platform in result.get('post', {}).get('platforms', []):
                 if platform.get('platform') == 'facebook':
                     post_url = platform.get('publishedUrl')
                     break
-            
-            # Mark as posted in posted_reels
+
             mark_reel_as_posted(
                 pipeline_id=pipeline_id,
                 reel_url=post['reel_url'],
@@ -5191,22 +5201,38 @@ def process_post_with_caption(post, caption):
                 caption=caption,
                 facebook_post_id=post_result_id,
                 facebook_post_url=post_url,
-                status='success'
+                status='success',
+                error_message=(
+                    'Already posted (dedup)' if already_posted else None
+                )
             )
-            
+
             # ✅ CRITICAL: Update scheduled_posts using scheduled_id
             cur.execute("""
-                UPDATE scheduled_posts 
+                UPDATE scheduled_posts
                 SET status = 'posted', posted_at = NOW(), updated_at = NOW()
                 WHERE id = %s
             """, (scheduled_id,))
             conn.commit()
-            
-            app.logger.info(f"✅ Post {scheduled_id} published and marked as posted!")
+
+            if already_posted:
+                app.logger.info(
+                    f"♻️ Post {scheduled_id} already existed on Facebook "
+                    f"(existingPostId={post_result_id})"
+                )
+            else:
+                app.logger.info(
+                    f"✅ Post {scheduled_id} published and marked as posted!"
+                )
+
+        # ---------- Genuine failure ----------
         else:
-            error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+            error_msg = (
+                result.get('error', 'Unknown error')
+                if result else 'Unknown error'
+            )
             app.logger.error(f"❌ Facebook publish failed: {error_msg}")
-            
+
             mark_reel_as_posted(
                 pipeline_id=pipeline_id,
                 reel_url=post['reel_url'],
@@ -5215,18 +5241,18 @@ def process_post_with_caption(post, caption):
                 status='failed',
                 error_message=str(error_msg)
             )
-            
+
             cur.execute("""
-                UPDATE scheduled_posts 
+                UPDATE scheduled_posts
                 SET status = 'failed', error_message = %s, updated_at = NOW()
                 WHERE id = %s
             """, (str(error_msg), scheduled_id))
             conn.commit()
-        
+
         update_pipeline_stats(pipeline_id, 0, 0)
         cur.close()
         conn.close()
-        
+
     except Exception as e:
         app.logger.error(f"❌ Error processing post from webhook: {e}")
         import traceback
@@ -5765,93 +5791,112 @@ def process_scheduled_posts():
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
-    
+
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        
+
         cur.execute("""
-            SELECT * FROM scheduled_posts 
-            WHERE status = 'pending' 
+            SELECT * FROM scheduled_posts
+            WHERE status = 'pending'
             AND scheduled_time <= NOW()
             ORDER BY scheduled_time ASC
             LIMIT 5
         """)
-        
+
         due_posts = cur.fetchall()
-        
+
         if not due_posts:
             return jsonify({"status": "success", "message": "No posts due", "posted": 0})
-        
+
         posted_count = 0
         failed_count = 0
-        
+
         for post in due_posts:
             try:
                 app.logger.info(f"📤 Processing due post: {post['reel_url'][:50]}...")
-                
-                cur.execute("SELECT * FROM pipelines WHERE id = %s", (post['pipeline_id'],))
+
+                cur.execute(
+                    "SELECT * FROM pipelines WHERE id = %s",
+                    (post['pipeline_id'],)
+                )
                 pipeline = cur.fetchone()
-                
+
                 if not pipeline:
                     app.logger.error(f"❌ Pipeline not found for post: {post['id']}")
-                    # Mark as failed
                     cur.execute("""
-                        UPDATE scheduled_posts 
-                        SET status = 'failed', error_message = 'Pipeline not found', updated_at = NOW()
+                        UPDATE scheduled_posts
+                        SET status = 'failed',
+                            error_message = 'Pipeline not found',
+                            updated_at = NOW()
                         WHERE id = %s
                     """, (post['id'],))
                     conn.commit()
                     failed_count += 1
                     continue
-                
-                # 🔥 Step 1: Get video URL NOW
-                direct_video_url = post.get('direct_video_url', '')
-                
+
+                # ============================================================
+                # Step 1: ALWAYS fetch a FRESH video URL — no cache, no DB.
+                # The URL stored on the scheduled post may be an expired
+                # fdown.vn signed link from a previous run.
+                # ============================================================
+                app.logger.info(
+                    f"📥 Fetching FRESH video URL for: {post['reel_url'][:50]}..."
+                )
+                direct_video_url = get_direct_video_url(
+                    post['reel_url'],
+                    pipeline_id=post['pipeline_id'],
+                    post_id=post['id'],
+                    profile_username=pipeline.get('profile_username')
+                )
+
+                if direct_video_url:
+                    # Audit trail only — nothing reads this back as truth.
+                    cur.execute("""
+                        UPDATE scheduled_posts
+                        SET direct_video_url = %s, updated_at = NOW()
+                        WHERE id = %s
+                    """, (direct_video_url, post['id']))
+                    conn.commit()
+                    app.logger.info(
+                        f"✅ Fresh video URL: {direct_video_url[:50]}..."
+                    )
+
                 if not direct_video_url:
-                    app.logger.info(f"📥 Fetching video URL NOW for: {post['reel_url'][:50]}...")
-                    direct_video_url = get_direct_video_url(post['reel_url'])
-                    
-                    if direct_video_url:
-                        cache_direct_url(post['reel_url'], direct_video_url, '')
-                        cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET direct_video_url = %s, updated_at = NOW()
-                            WHERE id = %s
-                        """, (direct_video_url, post['id']))
-                        conn.commit()
-                        app.logger.info(f"✅ Video URL fetched: {direct_video_url[:50]}...")
-                    else:
-                        # Try cache as fallback
-                        direct_video_url = get_direct_url_from_cache_only(post['reel_url'])
-                        if direct_video_url:
-                            app.logger.info(f"✅ Found video URL in cache: {direct_video_url[:50]}...")
-                            cur.execute("""
-                                UPDATE scheduled_posts 
-                                SET direct_video_url = %s, updated_at = NOW()
-                                WHERE id = %s
-                            """, (direct_video_url, post['id']))
-                            conn.commit()
-                
-                if not direct_video_url:
-                    app.logger.warning(f"⚠️ No video URL for: {post['reel_url'][:50]}... - will retry")
-                    # Don't mark as failed, will retry next time
+                    app.logger.warning(
+                        f"⚠️ No fresh video URL for: {post['reel_url'][:50]}... "
+                        f"- will retry next run"
+                    )
                     continue
-                
-                # 🔥 Step 2: Get caption
+
+                # ============================================================
+                # Step 2: Get caption
+                # ============================================================
                 caption = post.get('caption', '')
                 if not caption or not caption.strip():
-                    caption = get_caption_for_reel(post['reel_url'], pipeline['profile_username'], post['pipeline_id'])
-                
+                    caption = get_caption_for_reel(
+                        post['reel_url'],
+                        pipeline['profile_username'],
+                        post['pipeline_id']
+                    )
+
                 if not caption or not caption.strip():
-                    app.logger.info(f"📝 Fetching caption NOW for: {post['reel_url'][:50]}...")
+                    app.logger.info(
+                        f"📝 Fetching caption NOW for: {post['reel_url'][:50]}..."
+                    )
                     caption = fetch_caption_from_service(post['reel_url'])
                     if caption:
-                        store_caption_in_database(post['reel_url'], caption, pipeline['profile_username'])
-                
-                # 🔥 Step 3: Post to Facebook
+                        store_caption_in_database(
+                            post['reel_url'],
+                            caption,
+                            pipeline['profile_username']
+                        )
+
+                # ============================================================
+                # Step 3: Post to Facebook
+                # ============================================================
                 if caption and caption.strip() and direct_video_url:
                     key_id = pipeline.get('zernio_key_id')
-                    
+
                     result = publish_to_facebook(
                         video_url=direct_video_url,
                         text=caption,
@@ -5859,19 +5904,21 @@ def process_scheduled_posts():
                         publish_now=True,
                         key_id=key_id
                     )
-                    
+
                     # ---------- Success OR idempotent "already posted" ----------
                     if result and not result.get('error'):
                         already_posted = result.get('already_posted', False)
-                        
-                        post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
+
+                        post_result_id = (
+                            result.get('post', {}).get('_id')
+                            or result.get('post_id')
+                        )
                         post_url = None
                         for platform in result.get('post', {}).get('platforms', []):
                             if platform.get('platform') == 'facebook':
                                 post_url = platform.get('publishedUrl')
                                 break
-                        
-                        # ✅ FIXED: Pass reel_url as positional argument
+
                         mark_reel_as_posted(
                             pipeline_id=post['pipeline_id'],
                             reel_url=post['reel_url'],
@@ -5880,33 +5927,41 @@ def process_scheduled_posts():
                             facebook_post_id=post_result_id,
                             facebook_post_url=post_url,
                             status='success',
-                            error_message='Already posted (dedup)' if already_posted else None
+                            error_message=(
+                                'Already posted (dedup)' if already_posted else None
+                            )
                         )
-                        
-                        # Update scheduled post status
+
                         cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET status = 'posted', posted_at = NOW(), updated_at = NOW()
+                            UPDATE scheduled_posts
+                            SET status = 'posted',
+                                posted_at = NOW(),
+                                updated_at = NOW()
                             WHERE id = %s
                         """, (post['id'],))
                         conn.commit()
-                        
+
                         posted_count += 1
-                        
+
                         if already_posted:
                             app.logger.info(
-                                f"♻️ Already posted (dedup): {post['reel_url'][:50]}... "
+                                f"♻️ Already posted (dedup): "
+                                f"{post['reel_url'][:50]}... "
                                 f"(existingPostId={post_result_id})"
                             )
                         else:
-                            app.logger.info(f"✅ Posted successfully: {post['reel_url'][:50]}...")
-                    
+                            app.logger.info(
+                                f"✅ Posted successfully: {post['reel_url'][:50]}..."
+                            )
+
                     # ---------- Genuine failure ----------
                     else:
-                        error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+                        error_msg = (
+                            result.get('error', 'Unknown error')
+                            if result else 'Unknown error'
+                        )
                         app.logger.error(f"❌ Facebook publish failed: {error_msg}")
-                        
-                        # Mark reel as failed
+
                         mark_reel_as_posted(
                             pipeline_id=post['pipeline_id'],
                             reel_url=post['reel_url'],
@@ -5915,48 +5970,49 @@ def process_scheduled_posts():
                             status='failed',
                             error_message=str(error_msg)
                         )
-                        
-                        # Update scheduled post status
+
                         cur.execute("""
-                            UPDATE scheduled_posts 
-                            SET status = 'failed', error_message = %s, updated_at = NOW()
+                            UPDATE scheduled_posts
+                            SET status = 'failed',
+                                error_message = %s,
+                                updated_at = NOW()
                             WHERE id = %s
                         """, (str(error_msg), post['id']))
                         conn.commit()
-                        
+
                         failed_count += 1
                 else:
-                    app.logger.warning(f"⚠️ Missing data for: {post['reel_url'][:50]}...")
-                    # Mark as failed with specific error
+                    app.logger.warning(
+                        f"⚠️ Missing data for: {post['reel_url'][:50]}..."
+                    )
                     cur.execute("""
-                        UPDATE scheduled_posts 
-                        SET status = 'failed', 
-                            error_message = 'Missing video URL or caption', 
+                        UPDATE scheduled_posts
+                        SET status = 'failed',
+                            error_message = 'Missing video URL or caption',
                             updated_at = NOW()
                         WHERE id = %s
                     """, (post['id'],))
                     conn.commit()
                     failed_count += 1
-                    
+
             except Exception as e:
                 app.logger.error(f"❌ Error processing scheduled post: {e}")
                 import traceback
                 app.logger.error(traceback.format_exc())
-                
-                # Mark individual post as failed
+
                 try:
                     cur.execute("""
-                        UPDATE scheduled_posts 
-                        SET status = 'failed', 
-                            error_message = %s, 
+                        UPDATE scheduled_posts
+                        SET status = 'failed',
+                            error_message = %s,
                             updated_at = NOW()
                         WHERE id = %s
                     """, (str(e), post['id']))
                     conn.commit()
-                except:
+                except Exception:
                     pass
                 failed_count += 1
-        
+
         # Update pipeline stats
         if posted_count > 0 or failed_count > 0:
             try:
@@ -5965,13 +6021,13 @@ def process_scheduled_posts():
                         update_pipeline_stats(post['pipeline_id'], 0, 0)
             except Exception as e:
                 app.logger.error(f"Error updating pipeline stats: {e}")
-        
+
         return jsonify({
-            "status": "success", 
-            "posted": posted_count, 
+            "status": "success",
+            "posted": posted_count,
             "failed": failed_count
         })
-        
+
     except Exception as e:
         app.logger.error(f"❌ Scheduler error: {e}")
         import traceback
@@ -5980,8 +6036,6 @@ def process_scheduled_posts():
     finally:
         cur.close()
         conn.close()
-
-
 
 
 
