@@ -530,69 +530,105 @@ load_zernio_keys()
 
 
 def get_direct_video_url_from_service(instagram_url, pipeline_id=None, post_id=None, profile_username=None):
-    """
-    Get direct video URL from the Instagram video URL getter service.
-    Now supports autonomous pipeline and post tracking.
-    
-    Args:
-        instagram_url: The Instagram reel URL
-        pipeline_id: (Optional) Pipeline ID for tracking
-        post_id: (Optional) Scheduled post ID for tracking
-        profile_username: (Optional) Profile username for tracking
-    
-    Returns:
-        str: The direct video URL or None if failed
-    """
-    try:
-        app.logger.info(f"📥 Fetching video URL from service: {IG_VIDEO_URL_GETTER}")
-        app.logger.info(f"   Pipeline ID: {pipeline_id or 'None'}")
-        app.logger.info(f"   Post ID: {post_id or 'None'}")
-        app.logger.info(f"   Profile: {profile_username or 'None'}")
-        
-        # Build payload with all identifiers for autonomy
-        payload = {"url": instagram_url}
-        if pipeline_id:
-            payload["pipeline_id"] = pipeline_id
-        if post_id:
-            payload["post_id"] = post_id
-        if profile_username:
-            payload["profile_username"] = profile_username
-        
-        response = requests.post(
-            f"{IG_VIDEO_URL_GETTER}/api/download",
-            json=payload,
-            timeout=60,
-            headers={"Content-Type": "application/json"}
+    """Get a direct video URL, handling Render cold starts synchronously."""
+    service_root = (IG_VIDEO_URL_GETTER or '').rstrip('/')
+    download_endpoint = f"{service_root}/api/download"
+    health_endpoint = f"{service_root}/api/health"
+    max_attempts = 4
+    retry_delays = (5, 10, 20)
+
+    payload = {"url": instagram_url}
+    if pipeline_id:
+        payload["pipeline_id"] = pipeline_id
+    if post_id:
+        payload["post_id"] = post_id
+    if profile_username:
+        payload["profile_username"] = profile_username
+
+    last_error = None
+    for attempt in range(max_attempts):
+        attempt_no = attempt + 1
+        app.logger.info(
+            f"📥 [Video {attempt_no}/{max_attempts}] Waking/checking video service: {service_root}"
         )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success'):
-                video_data = data.get('data', {})
-                download_url = video_data.get('downloadUrl') or video_data.get('directDownloadUrl')
-                
-                if download_url:
-                    app.logger.info(f"✅ Video URL fetched from service: {download_url[:50]}...")
-                    return download_url
-                else:
-                    app.logger.warning(f"⚠️ No download URL in response")
-                    return None
+        try:
+            health_response = requests.get(
+                health_endpoint, timeout=45,
+                headers={"User-Agent": "FetchGram/1.0"}
+            )
+            app.logger.info(f"💓 Video service health response: {health_response.status_code}")
+        except requests.exceptions.Timeout:
+            app.logger.warning("⏰ Video health check timed out; trying download API")
+        except requests.exceptions.RequestException as e:
+            app.logger.warning(f"⚠️ Video health check failed: {e}; trying download API")
+        except Exception as e:
+            app.logger.warning(f"⚠️ Video health check error: {e}; trying download API")
+
+        try:
+            app.logger.info(
+                f"📞 [Video {attempt_no}/{max_attempts}] Requesting video URL for {instagram_url[:60]}..."
+            )
+            response = requests.post(
+                download_endpoint,
+                json=payload,
+                timeout=90,
+                headers={"Content-Type": "application/json"}
+            )
+
+            if response.status_code in (502, 503, 504):
+                last_error = f"HTTP {response.status_code}"
+                app.logger.warning(
+                    f"⚠️ Video service gateway error {response.status_code}; Render may still be waking up."
+                )
+            elif response.status_code != 200:
+                last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                app.logger.warning(f"⚠️ Video service returned {response.status_code}: {response.text[:200]}")
             else:
-                app.logger.warning(f"⚠️ Service returned error: {data.get('error')}")
-                return None
-        else:
-            app.logger.error(f"❌ Service returned {response.status_code}")
-            return None
-            
-    except requests.exceptions.Timeout:
-        app.logger.error(f"⏰ Service timeout after 60s")
-        return None
-    except requests.exceptions.ConnectionError:
-        app.logger.error(f"🔌 Connection error to {IG_VIDEO_URL_GETTER}")
-        return None
-    except Exception as e:
-        app.logger.error(f"❌ Error fetching video URL: {e}")
-        return None
+                try:
+                    data = response.json()
+                except ValueError as e:
+                    last_error = f"Invalid JSON response: {e}"
+                    app.logger.warning("⚠️ Video service returned invalid JSON")
+                else:
+                    if data.get('success'):
+                        video_data = data.get('data') or {}
+                        download_url = (
+                            video_data.get('downloadUrl')
+                            or video_data.get('directDownloadUrl')
+                            or data.get('downloadUrl')
+                            or data.get('directDownloadUrl')
+                        )
+                        if download_url:
+                            app.logger.info(f"✅ VIDEO READY before caption step: {download_url[:60]}...")
+                            return download_url
+                        last_error = "Video service returned success without a download URL"
+                        app.logger.warning(f"⚠️ {last_error}")
+                    else:
+                        last_error = str(data.get('error') or 'Video service returned success=false')
+                        app.logger.warning(f"⚠️ Video service error: {last_error}")
+
+        except requests.exceptions.Timeout:
+            last_error = "Video service request timed out"
+            app.logger.warning(
+                f"⏰ [Video {attempt_no}/{max_attempts}] Video request timed out; Render may still be waking up."
+            )
+        except requests.exceptions.ConnectionError as e:
+            last_error = f"Video connection error: {e}"
+            app.logger.warning(f"🔌 [Video {attempt_no}/{max_attempts}] Connection error: {e}")
+        except requests.exceptions.RequestException as e:
+            last_error = f"Video request error: {e}"
+            app.logger.warning(f"⚠️ [Video {attempt_no}/{max_attempts}] Request error: {e}")
+        except Exception as e:
+            last_error = str(e)
+            app.logger.error(f"❌ [Video {attempt_no}/{max_attempts}] Unexpected video error: {e}")
+
+        if attempt < max_attempts - 1:
+            wait_time = retry_delays[attempt]
+            app.logger.info(f"⏳ Video service may be waking up. Waiting {wait_time}s before retry...")
+            time.sleep(wait_time)
+
+    app.logger.error(f"❌ VIDEO NOT READY after {max_attempts} attempts. Last error: {last_error}")
+    return None
 
 
 
@@ -2809,66 +2845,38 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
 # ============== UPDATED RUN_PIPELINE - WITH PIPELINE & POST TRACKING ==============
 
 def run_pipeline(pipeline_id):
-    """
-    Process due posts for one pipeline synchronously.
-
-    For each due post:
-      1. Get the direct video URL.
-      2. Get the caption synchronously.
-      3. Publish to Facebook.
-      4. Mark the scheduled post as posted/failed.
-
-    No daemon threads, delayed caption requests, or caption webhooks are used
-    in this pipeline flow.
-    """
-    # Load and validate the pipeline first.
+    """Run each due post strictly as VIDEO -> CAPTION -> FACEBOOK."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
-
     cur = None
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            "SELECT * FROM pipelines WHERE id = %s",
-            (pipeline_id,)
-        )
+        cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
         pipeline = cur.fetchone()
     except Exception as e:
         app.logger.error(f"❌ Failed to load pipeline {pipeline_id}: {e}")
-        try:
-            conn.close()
-        except Exception:
-            pass
         return {"error": str(e)}
     finally:
         if cur is not None:
-            try:
-                cur.close()
-            except Exception:
-                pass
-        try:
-            conn.close()
-        except Exception:
-            pass
+            try: cur.close()
+            except Exception: pass
+        try: conn.close()
+        except Exception: pass
 
     if not pipeline:
         return {"error": "Pipeline not found"}
-
     if not pipeline['is_active']:
         return {"error": "Pipeline is inactive"}
 
-    # Get due posts using a short-lived connection.
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
-
     cur = None
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT *
-            FROM scheduled_posts
+            SELECT * FROM scheduled_posts
             WHERE pipeline_id = %s
               AND status = 'pending'
               AND scheduled_time <= NOW()
@@ -2881,217 +2889,103 @@ def run_pipeline(pipeline_id):
         return {"error": str(e)}
     finally:
         if cur is not None:
-            try:
-                cur.close()
-            except Exception:
-                pass
-        try:
-            conn.close()
-        except Exception:
-            pass
+            try: cur.close()
+            except Exception: pass
+        try: conn.close()
+        except Exception: pass
 
     if not due_posts:
-        log_pipeline_run(
-            pipeline_id,
-            0,
-            0,
-            'completed',
-            'No due posts found'
-        )
-        return {
-            "message": "No due posts to process",
-            "posted": 0,
-            "failed": 0,
-            "total": 0
-        }
+        log_pipeline_run(pipeline_id, 0, 0, 'completed')
+        return {"message": "No due posts", "posted": 0, "failed": 0, "total": 0}
 
     posted_count = 0
     failed_count = 0
 
-    def update_scheduled_post(post_id, status, error_message=None):
-        update_conn = get_db_connection()
-        if not update_conn:
-            app.logger.error(
-                f"❌ Could not update scheduled post {post_id}: "
-                "database connection failed"
-            )
-            return False
-
-        update_cur = None
-        try:
-            update_cur = update_conn.cursor()
-            if status == 'posted':
-                update_cur.execute("""
-                    UPDATE scheduled_posts
-                    SET status = 'posted',
-                        posted_at = NOW(),
-                        updated_at = NOW(),
-                        error_message = NULL
-                    WHERE id = %s
-                """, (post_id,))
-            else:
-                update_cur.execute("""
-                    UPDATE scheduled_posts
-                    SET status = %s,
-                        error_message = %s,
-                        updated_at = NOW()
-                    WHERE id = %s
-                """, (status, error_message, post_id))
-
-            update_conn.commit()
-            return True
-        except Exception as e:
-            update_conn.rollback()
-            app.logger.error(
-                f"❌ Failed updating scheduled post {post_id}: {e}"
-            )
-            return False
-        finally:
-            if update_cur is not None:
-                try:
-                    update_cur.close()
-                except Exception:
-                    pass
-            try:
-                update_conn.close()
-            except Exception:
-                pass
-
     for post in due_posts:
         scheduled_post_id = post['id']
-        reel_url = post['reel_url']
+        reel_url = post.get('reel_url')
+        if not reel_url:
+            update_scheduled_post(scheduled_post_id, 'failed', 'Missing reel URL')
+            failed_count += 1
+            continue
 
         try:
-            app.logger.info(
-                f"📤 Processing due post: {reel_url[:50]}..."
-            )
-            app.logger.info(f"   Pipeline ID: {pipeline_id}")
-            app.logger.info(f"   Post ID: {scheduled_post_id}")
-            app.logger.info(
-                f"   Profile: {pipeline['profile_username']}"
-            )
-
             # ============================================================
-            # STEP 1: Get the direct video URL.
+            # STEP 1: VIDEO FIRST. Nothing below runs until video exists.
             # ============================================================
-            direct_video_url = post.get('direct_video_url') or ''
+            app.logger.info(
+                f"\n{'=' * 70}\n"
+                f"🎬 PIPELINE {pipeline_id} | POST {scheduled_post_id}\n"
+                f"1️⃣ VIDEO FIRST: {reel_url[:70]}\n"
+                f"{'=' * 70}"
+            )
 
-            if not direct_video_url:
-                app.logger.info(
-                    f"📥 [Video Fetch] Fetching video URL for: "
-                    f"{reel_url[:50]}..."
-                )
-
+            direct_video_url = post.get('direct_video_url')
+            if direct_video_url:
+                app.logger.info("✅ Existing direct video URL found on scheduled post")
+            else:
+                # Synchronous call. It wakes Render and retries cold-start failures.
                 direct_video_url = get_direct_video_url(
                     reel_url,
                     pipeline_id=pipeline_id,
                     post_id=scheduled_post_id,
-                    profile_username=pipeline['profile_username']
+                    profile_username=pipeline.get('profile_username')
                 )
 
-                if direct_video_url:
-                    cache_direct_url(
-                        reel_url,
-                        direct_video_url,
-                        post.get('caption') or ''
-                    )
-
-                    update_conn = get_db_connection()
-                    if update_conn:
-                        update_cur = None
-                        try:
-                            update_cur = update_conn.cursor()
-                            update_cur.execute("""
-                                UPDATE scheduled_posts
-                                SET direct_video_url = %s,
-                                    updated_at = NOW()
-                                WHERE id = %s
-                            """, (direct_video_url, scheduled_post_id))
-                            update_conn.commit()
-                        except Exception as e:
-                            update_conn.rollback()
-                            app.logger.warning(
-                                f"⚠️ Failed saving video URL: {e}"
-                            )
-                        finally:
-                            if update_cur is not None:
-                                try:
-                                    update_cur.close()
-                                except Exception:
-                                    pass
-                            update_conn.close()
-
-                    app.logger.info(
-                        f"✅ [Video Fetch] Got video URL: "
-                        f"{direct_video_url[:50]}..."
-                    )
-
             if not direct_video_url:
+                # Video-only fallback. Caption service is still NOT contacted.
                 direct_video_url = get_direct_url_from_cache_only(reel_url)
-
                 if direct_video_url:
-                    app.logger.info(
-                        f"✅ [Video Fetch] Found video URL in cache: "
-                        f"{direct_video_url[:50]}..."
-                    )
-
-                    update_conn = get_db_connection()
-                    if update_conn:
-                        update_cur = None
-                        try:
-                            update_cur = update_conn.cursor()
-                            update_cur.execute("""
-                                UPDATE scheduled_posts
-                                SET direct_video_url = %s,
-                                    updated_at = NOW()
-                                WHERE id = %s
-                            """, (direct_video_url, scheduled_post_id))
-                            update_conn.commit()
-                        except Exception as e:
-                            update_conn.rollback()
-                            app.logger.warning(
-                                f"⚠️ Failed saving cached video URL: {e}"
-                            )
-                        finally:
-                            if update_cur is not None:
-                                try:
-                                    update_cur.close()
-                                except Exception:
-                                    pass
-                            update_conn.close()
+                    app.logger.info("✅ Video URL recovered from cache")
 
             if not direct_video_url:
-                # Keep pending so the next pipeline run can try again.
                 app.logger.warning(
-                    f"⚠️ No video URL for {reel_url[:50]}... "
-                    "— leaving post pending for retry"
+                    f"🛑 VIDEO NOT READY for {reel_url[:60]} — caption step will NOT run; leaving post pending."
                 )
                 continue
 
-            # ============================================================
-            # STEP 2: Get caption synchronously.
-            # ============================================================
-            caption = post.get('caption') or ''
+            # Save video before contacting caption service.
+            update_conn = get_db_connection()
+            if update_conn:
+                update_cur = None
+                try:
+                    update_cur = update_conn.cursor()
+                    update_cur.execute("""
+                        UPDATE scheduled_posts
+                        SET direct_video_url = %s, updated_at = NOW()
+                        WHERE id = %s
+                    """, (direct_video_url, scheduled_post_id))
+                    update_conn.commit()
+                except Exception as e:
+                    update_conn.rollback()
+                    app.logger.warning(f"⚠️ Failed saving video URL: {e}")
+                finally:
+                    if update_cur is not None:
+                        try: update_cur.close()
+                        except Exception: pass
+                    update_conn.close()
 
+            app.logger.info(f"🎬✅ VIDEO READY — now moving to caption: {direct_video_url[:70]}...")
+
+            # ============================================================
+            # STEP 2: CAPTION SECOND. Only now can caption retrieval start.
+            # ============================================================
+            app.logger.info("2️⃣ CAPTION SECOND — video is ready, contacting caption service")
+            caption = post.get('caption') or ''
             if not caption.strip():
                 caption = get_caption_for_reel(
                     reel_url=reel_url,
-                    profile_username=pipeline['profile_username'],
+                    profile_username=pipeline.get('profile_username'),
                     pipeline_id=pipeline_id
                 )
 
             if not caption or not caption.strip():
-                # Do NOT mark this as failed. The caption service may be
-                # temporarily unavailable; a later run can retry it.
                 app.logger.warning(
-                    f"⚠️ No caption for {reel_url[:50]}... "
-                    "— leaving post pending for retry"
+                    f"🛑 CAPTION NOT READY for {reel_url[:60]} — Facebook publish will NOT run; leaving post pending."
                 )
                 continue
-
             caption = caption.strip()
 
-            # Save caption to scheduled_posts before publishing.
             caption_conn = get_db_connection()
             if caption_conn:
                 caption_cur = None
@@ -3099,38 +2993,26 @@ def run_pipeline(pipeline_id):
                     caption_cur = caption_conn.cursor()
                     caption_cur.execute("""
                         UPDATE scheduled_posts
-                        SET caption = %s,
-                            direct_video_url = %s,
-                            status = 'processing',
-                            updated_at = NOW()
+                        SET caption = %s, direct_video_url = %s,
+                            status = 'processing', updated_at = NOW()
                         WHERE id = %s
-                    """, (
-                        caption,
-                        direct_video_url,
-                        scheduled_post_id
-                    ))
+                    """, (caption, direct_video_url, scheduled_post_id))
                     caption_conn.commit()
                 except Exception as e:
                     caption_conn.rollback()
-                    app.logger.warning(
-                        f"⚠️ Failed saving caption before publish: {e}"
-                    )
+                    app.logger.warning(f"⚠️ Failed saving caption before publish: {e}")
                 finally:
                     if caption_cur is not None:
-                        try:
-                            caption_cur.close()
-                        except Exception:
-                            pass
+                        try: caption_cur.close()
+                        except Exception: pass
                     caption_conn.close()
 
-            # ============================================================
-            # STEP 3: Publish to Facebook.
-            # ============================================================
-            app.logger.info(
-                f"📤 Publishing to Facebook for post "
-                f"{scheduled_post_id}..."
-            )
+            app.logger.info(f"📝✅ CAPTION READY ({len(caption)} chars) — now publishing")
 
+            # ============================================================
+            # STEP 3: FACEBOOK LAST. Both prerequisites are now present.
+            # ============================================================
+            app.logger.info("3️⃣ FACEBOOK — both video and caption are ready")
             result = publish_to_facebook(
                 video_url=direct_video_url,
                 text=caption,
@@ -3140,14 +3022,9 @@ def run_pipeline(pipeline_id):
             )
 
             if result and not result.get('error'):
-                post_result_id = (
-                    result.get('post', {}).get('_id')
-                    or result.get('post_id')
-                )
-
+                post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
                 post_url = None
-                platforms = result.get('post', {}).get('platforms', [])
-                for platform in platforms:
+                for platform in result.get('post', {}).get('platforms', []):
                     if platform.get('platform') == 'facebook':
                         post_url = platform.get('publishedUrl')
                         break
@@ -3161,28 +3038,12 @@ def run_pipeline(pipeline_id):
                     facebook_post_url=post_url,
                     status='success'
                 )
-
-                update_scheduled_post(
-                    scheduled_post_id,
-                    'posted'
-                )
-
+                update_scheduled_post(scheduled_post_id, 'posted')
                 posted_count += 1
-                app.logger.info(
-                    f"✅ Post published successfully! "
-                    f"Scheduled post: {scheduled_post_id}"
-                )
+                app.logger.info(f"🎉 POSTED — video + caption successfully published for {scheduled_post_id}")
             else:
-                error_msg = (
-                    result.get('error', 'Unknown error')
-                    if result
-                    else 'Unknown error'
-                )
-
-                app.logger.error(
-                    f"❌ Facebook publish failed: {error_msg}"
-                )
-
+                error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+                app.logger.error(f"❌ Facebook publish failed: {error_msg}")
                 mark_reel_as_posted(
                     pipeline_id=pipeline_id,
                     reel_url=reel_url,
@@ -3191,48 +3052,28 @@ def run_pipeline(pipeline_id):
                     status='failed',
                     error_message=str(error_msg)
                 )
-
-                update_scheduled_post(
-                    scheduled_post_id,
-                    'failed',
-                    str(error_msg)
-                )
-
+                update_scheduled_post(scheduled_post_id, 'failed', str(error_msg))
                 failed_count += 1
 
         except Exception as e:
-            app.logger.error(
-                f"❌ Error processing scheduled post "
-                f"{scheduled_post_id}: {e}"
-            )
-            app.logger.error(traceback.format_exc())
-
-            update_scheduled_post(
-                scheduled_post_id,
-                'failed',
-                str(e)
-            )
+            app.logger.error(f"❌ Error processing scheduled post {scheduled_post_id}: {e}")
+            try:
+                import traceback
+                app.logger.error(traceback.format_exc())
+            except Exception:
+                pass
+            update_scheduled_post(scheduled_post_id, 'failed', str(e))
             failed_count += 1
 
-    # Sync aggregate pipeline statistics after the synchronous run.
     try:
         update_pipeline_stats(pipeline_id, 0, 0)
     except Exception as e:
-        app.logger.warning(
-            f"⚠️ Failed to update pipeline stats: {e}"
-        )
+        app.logger.warning(f"⚠️ Failed to update pipeline stats: {e}")
 
     run_status = 'completed' if failed_count == 0 else 'partial'
-
-    log_pipeline_run(
-        pipeline_id,
-        posted_count,
-        failed_count,
-        run_status
-    )
-
+    log_pipeline_run(pipeline_id, posted_count, failed_count, run_status)
     return {
-        "message": "Pipeline completed synchronously",
+        "message": "Pipeline completed in strict VIDEO -> CAPTION -> FACEBOOK order",
         "posted": posted_count,
         "failed": failed_count,
         "total": len(due_posts)
