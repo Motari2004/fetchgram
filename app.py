@@ -2771,21 +2771,9 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
         cur.close()
         conn.close()
 
-def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=None,
-                        facebook_post_id=None, facebook_post_url=None,
+def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=None, 
+                        facebook_post_id=None, facebook_post_url=None, 
                         status='success', error_message=None):
-    """
-    Record the outcome of a publish attempt for a (pipeline, reel) pair.
-
-    Rules:
-      - A 'success' always overwrites whatever was there before.
-      - A 'failed' NEVER downgrades an existing 'success' row.
-        A later failure on a retry must not erase the fact that the
-        reel was successfully published earlier.
-      - Non-null facebook_post_id / facebook_post_url / caption are
-        preserved when a subsequent call does not provide them.
-      - posted_at only advances when transitioning INTO 'success'.
-    """
     conn = get_db_connection()
     if not conn:
         return False
@@ -2799,61 +2787,27 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (pipeline_id, reel_url) DO UPDATE SET
                 direct_video_url = EXCLUDED.direct_video_url,
-                caption = COALESCE(EXCLUDED.caption, posted_reels.caption),
-                facebook_post_id = COALESCE(
-                    EXCLUDED.facebook_post_id, posted_reels.facebook_post_id
-                ),
-                facebook_post_url = COALESCE(
-                    EXCLUDED.facebook_post_url, posted_reels.facebook_post_url
-                ),
-                -- Never downgrade a prior success.
-                status = CASE
-                    WHEN posted_reels.status = 'success' THEN 'success'
-                    ELSE EXCLUDED.status
-                END,
-                -- Preserve the original success message; a later failure
-                -- on a retry is informational, not the final word.
-                error_message = CASE
-                    WHEN posted_reels.status = 'success'
-                         AND EXCLUDED.status = 'failed'
-                        THEN posted_reels.error_message
-                    ELSE EXCLUDED.error_message
-                END,
-                -- Only bump posted_at on transitions into success.
-                posted_at = CASE
-                    WHEN EXCLUDED.status = 'success' THEN NOW()
-                    ELSE posted_reels.posted_at
-                END
-        """, (pipeline_id, reel_url, direct_video_url, caption,
+                caption = EXCLUDED.caption,
+                facebook_post_id = EXCLUDED.facebook_post_id,
+                facebook_post_url = EXCLUDED.facebook_post_url,
+                status = EXCLUDED.status,
+                error_message = EXCLUDED.error_message,
+                posted_at = NOW()
+        """, (pipeline_id, reel_url, direct_video_url, caption, 
               facebook_post_id, facebook_post_url, status, error_message))
-
-        # Recompute total_posted on EVERY mark (success or failure).
-        # Because 'success' is now sticky, this always reflects the true
-        # number of successfully-published reels. Self-healing: any past
-        # corruption is corrected the next time any reel is marked.
-        cur.execute(
-            "SELECT COUNT(*) FROM posted_reels "
-            "WHERE pipeline_id = %s AND status = 'success'",
-            (pipeline_id,)
-        )
-        total_posted = cur.fetchone()[0]
-        cur.execute("""
-            UPDATE pipelines
-            SET total_posted = %s, last_run = NOW(), updated_at = NOW()
-            WHERE id = %s
-        """, (total_posted, pipeline_id))
-
+        if status == 'success':
+            cur.execute("SELECT COUNT(*) FROM posted_reels WHERE pipeline_id = %s AND status = 'success'", (pipeline_id,))
+            total_posted = cur.fetchone()[0]
+            cur.execute("""
+                UPDATE pipelines SET total_posted = %s, last_run = NOW(), updated_at = NOW()
+                WHERE id = %s
+            """, (total_posted, pipeline_id))
+            app.logger.info(f"📊 Updated pipeline {pipeline_id} total_posted to: {total_posted}")
         conn.commit()
-        app.logger.info(
-            f"✅ Marked reel as posted: {reel_url[:50]}... (status: {status})"
-        )
+        app.logger.info(f"✅ Marked reel as posted: {reel_url[:50]}... (status: {status})")
         return True
     except Exception as e:
         app.logger.error(f"Error marking reel as posted: {e}")
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return False
     finally:
         cur.close()
