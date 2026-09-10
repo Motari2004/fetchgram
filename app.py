@@ -2181,36 +2181,30 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
 def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None, key_id=None):
     """
     Publish to Facebook using a specific Zernio key or the best available.
-    
-    Args:
-        video_url: URL of the video to publish
-        text: Caption text
-        account_id: Zernio Facebook account ID
-        publish_now: If True, publish immediately
-        scheduled_time: ISO format datetime string
-        key_id: Specific key to use (optional)
-    
-    Returns:
-        dict: Response from Zernio API
+
+    Returns a dict with one of these shapes:
+      - Success:         {"post": {...}, "already_posted": False}
+      - Already posted:  {"post": {"_id": <existingPostId>, ...}, "already_posted": True}
+      - Failure:         {"error": "...", "status_code": <int>}
     """
     # Get the key to use
     zernio_base_url = get_zernio_base_url()
-    
+
     if key_id and str(key_id) in ZERNIO_KEYS:
         key = ZERNIO_KEYS[str(key_id)]
     else:
         key = get_best_zernio_key()
-    
+
     if not key:
         return {"error": "No available Zernio keys with remaining capacity"}
-    
+
     app.logger.info(f"📤 Using Zernio key: {key['name']}")
-    
+
     headers = {
         "Authorization": f"Bearer {key['api_key']}",
         "Content-Type": "application/json"
     }
-    
+
     payload = {
         "content": text,
         "platforms": [
@@ -2226,13 +2220,13 @@ def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled
             }
         ]
     }
-    
+
     if publish_now:
         payload["publishNow"] = True
     elif scheduled_time:
         payload["scheduledFor"] = scheduled_time
         payload["timezone"] = "UTC"
-    
+
     try:
         response = requests.post(
             f"{zernio_base_url}/posts",
@@ -2240,14 +2234,65 @@ def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled
             json=payload,
             timeout=120
         )
-        
-        # Increment usage
+
+        # Increment usage (a request was made regardless of outcome)
         increment_key_usage(key['id'])
-        
-        if response.status_code in [200, 201]:
-            return response.json()
-        else:
-            return {"error": response.text, "status_code": response.status_code}
+
+        # ---------- Happy path ----------
+        if response.status_code in (200, 201):
+            data = response.json()
+            data.setdefault("already_posted", False)
+            return data
+
+        # ---------- Non-2xx: inspect the body for idempotency signals ----------
+        try:
+            err_body = response.json()
+        except ValueError:
+            err_body = {}
+
+        err_text = (err_body.get("error") or response.text or "").lower()
+        details = err_body.get("details") or {}
+        existing_post_id = details.get("existingPostId")
+        existing_post_url = (
+            details.get("existingPostUrl")
+            or details.get("publishedUrl")
+        )
+
+        # Zernio returns this when the same content was already
+        # scheduled / publishing / posted to this account in the last 24h.
+        is_duplicate = (
+            bool(existing_post_id)
+            or "already scheduled" in err_text
+            or "already posted" in err_text
+            or "within the last 24 hours" in err_text
+        )
+
+        if is_duplicate:
+            app.logger.info(
+                f"♻️ Facebook publish skipped — content already exists "
+                f"(existingPostId={existing_post_id})"
+            )
+            return {
+                "already_posted": True,
+                "post": {
+                    "_id": existing_post_id,
+                    "platforms": [
+                        {
+                            "platform": "facebook",
+                            "publishedUrl": existing_post_url
+                        }
+                    ]
+                },
+                "error": None
+            }
+
+        # ---------- Genuine hard failure ----------
+        app.logger.warning(
+            f"⚠️ Facebook publish hard failure "
+            f"(status={response.status_code}): {response.text[:200]}"
+        )
+        return {"error": response.text, "status_code": response.status_code}
+
     except Exception as e:
         return {"error": str(e)}
 
@@ -2375,27 +2420,36 @@ def process_pending_post(post):
     try:
         app.logger.info(f"📤 Processing pending post for: {post['reel_url'][:50]}...")
         update_pending_post_status(post['id'], 'processing')
-        caption = get_caption_for_reel(post['reel_url'], post['profile_username'], post['pipeline_id'])
+
+        caption = get_caption_for_reel(
+            post['reel_url'], post['profile_username'], post['pipeline_id']
+        )
         if not caption or not caption.strip():
             app.logger.error(f"❌ No caption available for: {post['reel_url'][:50]}...")
             update_pending_post_status(post['id'], 'failed', 'No caption available')
             return False
-        
+
         # Get the pipeline's zernio_key_id if set
         conn = get_db_connection()
         key_id = None
         if conn:
             try:
                 cur = conn.cursor()
-                cur.execute("SELECT zernio_key_id FROM pipelines WHERE id = %s", (post['pipeline_id'],))
+                cur.execute(
+                    "SELECT zernio_key_id FROM pipelines WHERE id = %s",
+                    (post['pipeline_id'],)
+                )
                 result = cur.fetchone()
                 if result and result[0]:
                     key_id = result[0]
                 cur.close()
                 conn.close()
-            except:
-                pass
-        
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
         result = publish_to_facebook(
             video_url=post['direct_video_url'],
             text=caption,
@@ -2403,14 +2457,18 @@ def process_pending_post(post):
             publish_now=True,
             key_id=key_id
         )
+
+        # ---------- Success or idempotent "already posted" ----------
         if result and not result.get('error'):
+            already_posted = result.get('already_posted', False)
+
             post_id = result.get('post', {}).get('_id') or result.get('post_id')
             post_url = None
-            platforms = result.get('post', {}).get('platforms', [])
-            for platform in platforms:
+            for platform in result.get('post', {}).get('platforms', []):
                 if platform.get('platform') == 'facebook':
                     post_url = platform.get('publishedUrl')
                     break
+
             mark_reel_as_posted(
                 pipeline_id=post['pipeline_id'],
                 reel_url=post['reel_url'],
@@ -2418,26 +2476,41 @@ def process_pending_post(post):
                 caption=caption,
                 facebook_post_id=post_id,
                 facebook_post_url=post_url,
-                status='success'
+                status='success',
+                error_message='Already posted (dedup)' if already_posted else None
             )
             update_pipeline_stats(post['pipeline_id'], 0, 0)
             update_pending_post_status(post['id'], 'completed', None, post_id, post_url)
-            app.logger.info(f"✅ Pending post completed and stats updated: {post['reel_url'][:50]}...")
+
+            if already_posted:
+                app.logger.info(
+                    f"♻️ Pending post already existed on Facebook "
+                    f"(existingPostId={post_id}): {post['reel_url'][:50]}..."
+                )
+            else:
+                app.logger.info(
+                    f"✅ Pending post completed and stats updated: "
+                    f"{post['reel_url'][:50]}..."
+                )
             return True
-        else:
-            error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
-            update_pending_post_status(post['id'], 'failed', str(error_msg))
-            mark_reel_as_posted(
-                pipeline_id=post['pipeline_id'],
-                reel_url=post['reel_url'],
-                direct_video_url=post['direct_video_url'],
-                caption=caption if caption else '',
-                status='failed',
-                error_message=str(error_msg)
-            )
-            update_pipeline_stats(post['pipeline_id'], 0, 0)
-            app.logger.error(f"❌ Pending post failed: {post['reel_url'][:50]}... - {error_msg}")
-            return False
+
+        # ---------- Genuine failure ----------
+        error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+        update_pending_post_status(post['id'], 'failed', str(error_msg))
+        mark_reel_as_posted(
+            pipeline_id=post['pipeline_id'],
+            reel_url=post['reel_url'],
+            direct_video_url=post['direct_video_url'],
+            caption=caption if caption else '',
+            status='failed',
+            error_message=str(error_msg)
+        )
+        update_pipeline_stats(post['pipeline_id'], 0, 0)
+        app.logger.error(
+            f"❌ Pending post failed: {post['reel_url'][:50]}... - {error_msg}"
+        )
+        return False
+
     except Exception as e:
         app.logger.error(f"❌ Error processing pending post: {e}")
         update_pending_post_status(post['id'], 'failed', str(e))
@@ -2451,10 +2524,9 @@ def process_pending_post(post):
                 error_message=str(e)
             )
             update_pipeline_stats(post['pipeline_id'], 0, 0)
-        except:
+        except Exception:
             pass
         return False
-    
     
     
     
@@ -2834,14 +2906,6 @@ def log_pipeline_run(pipeline_id, posted_count, failed_count, status='completed'
 
 
 
-
-
-
-
-
-
-
-
 # ============== UPDATED RUN_PIPELINE - WITH PIPELINE & POST TRACKING ==============
 
 def run_pipeline(pipeline_id):
@@ -3021,7 +3085,10 @@ def run_pipeline(pipeline_id):
                 key_id=pipeline.get('zernio_key_id')
             )
 
+            # ---------- Success OR idempotent "already posted" ----------
             if result and not result.get('error'):
+                already_posted = result.get('already_posted', False)
+
                 post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
                 post_url = None
                 for platform in result.get('post', {}).get('platforms', []):
@@ -3036,11 +3103,24 @@ def run_pipeline(pipeline_id):
                     caption=caption,
                     facebook_post_id=post_result_id,
                     facebook_post_url=post_url,
-                    status='success'
+                    status='success',
+                    error_message='Already posted (dedup)' if already_posted else None
                 )
                 update_scheduled_post(scheduled_post_id, 'posted')
                 posted_count += 1
-                app.logger.info(f"🎉 POSTED — video + caption successfully published for {scheduled_post_id}")
+
+                if already_posted:
+                    app.logger.info(
+                        f"♻️ ALREADY POSTED — Facebook already had this content "
+                        f"(existingPostId={post_result_id}) for {scheduled_post_id}"
+                    )
+                else:
+                    app.logger.info(
+                        f"🎉 POSTED — video + caption successfully published "
+                        f"for {scheduled_post_id}"
+                    )
+
+            # ---------- Genuine failure ----------
             else:
                 error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
                 app.logger.error(f"❌ Facebook publish failed: {error_msg}")
@@ -3078,9 +3158,6 @@ def run_pipeline(pipeline_id):
         "failed": failed_count,
         "total": len(due_posts)
     }
-
-
-
 
 
 
@@ -5787,14 +5864,27 @@ def process_scheduled_posts():
                         key_id=key_id
                     )
                     
+                    # ---------- Success OR idempotent "already posted" ----------
                     if result and not result.get('error'):
+                        already_posted = result.get('already_posted', False)
+                        
+                        post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
+                        post_url = None
+                        for platform in result.get('post', {}).get('platforms', []):
+                            if platform.get('platform') == 'facebook':
+                                post_url = platform.get('publishedUrl')
+                                break
+                        
                         # ✅ FIXED: Pass reel_url as positional argument
                         mark_reel_as_posted(
                             pipeline_id=post['pipeline_id'],
-                            reel_url=post['reel_url'],  # ← THIS WAS MISSING
+                            reel_url=post['reel_url'],
                             direct_video_url=direct_video_url,
                             caption=caption,
-                            status='success'
+                            facebook_post_id=post_result_id,
+                            facebook_post_url=post_url,
+                            status='success',
+                            error_message='Already posted (dedup)' if already_posted else None
                         )
                         
                         # Update scheduled post status
@@ -5806,7 +5896,16 @@ def process_scheduled_posts():
                         conn.commit()
                         
                         posted_count += 1
-                        app.logger.info(f"✅ Posted successfully: {post['reel_url'][:50]}...")
+                        
+                        if already_posted:
+                            app.logger.info(
+                                f"♻️ Already posted (dedup): {post['reel_url'][:50]}... "
+                                f"(existingPostId={post_result_id})"
+                            )
+                        else:
+                            app.logger.info(f"✅ Posted successfully: {post['reel_url'][:50]}...")
+                    
+                    # ---------- Genuine failure ----------
                     else:
                         error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
                         app.logger.error(f"❌ Facebook publish failed: {error_msg}")
@@ -5814,7 +5913,7 @@ def process_scheduled_posts():
                         # Mark reel as failed
                         mark_reel_as_posted(
                             pipeline_id=post['pipeline_id'],
-                            reel_url=post['reel_url'],  # ← THIS WAS MISSING
+                            reel_url=post['reel_url'],
                             direct_video_url=direct_video_url,
                             caption=caption if caption else '',
                             status='failed',
@@ -5885,11 +5984,6 @@ def process_scheduled_posts():
     finally:
         cur.close()
         conn.close()
-
-
-
-
-
 
 
 
