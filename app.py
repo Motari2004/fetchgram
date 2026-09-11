@@ -825,7 +825,29 @@ def load_buffer_keys():
 
 
 def get_buffer_key_by_id(key_id):
-    return BUFFER_KEYS.get(str(key_id))
+    """
+    Return a Buffer key by id.
+
+    Checks the in-memory cache first. On a miss, reloads from the
+    database and retries — this covers the case where the key was
+    added or reactivated after the process started.
+    """
+    kid = str(key_id)
+    if not kid or kid == 'None':
+        return None
+
+    key = BUFFER_KEYS.get(kid)
+    if key:
+        return key
+
+    app.logger.info(f"🔄 Buffer key {kid} not in cache — reloading from DB")
+    try:
+        load_buffer_keys()
+    except Exception as e:
+        app.logger.error(f"❌ Failed to reload Buffer keys: {e}")
+        return None
+
+    return BUFFER_KEYS.get(kid)
 
 
 def get_buffer_channels_for_key(key_id, service=None):
