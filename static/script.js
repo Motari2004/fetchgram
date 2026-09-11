@@ -2392,8 +2392,8 @@ function renderPipelines(pipelines) {
             <span class="pipeline-value">@${escapeHtml(p.profile_username)}</span>
           </div>
           <div class="pipeline-detail">
-            <span class="pipeline-label">Publisher:</span>
-            <span class="pipeline-value">${p.publisher_provider === 'buffer' ? `Buffer · ${escapeHtml((p.buffer_platform || 'channel').toUpperCase())} · ${escapeHtml(p.buffer_channel_name || p.buffer_channel_id || '')}` : `Zernio · Facebook · ${escapeHtml(p.facebook_page_name || p.facebook_account_id)}`}</span>
+            <span class="pipeline-label">Facebook:</span>
+            <span class="pipeline-value">${escapeHtml(p.facebook_page_name || p.facebook_account_id)}</span>
           </div>
           <div class="pipeline-detail">
             <span class="pipeline-label">Daily Limit:</span>
@@ -2752,32 +2752,62 @@ async function togglePipeline(pipelineId, currentActive) {
 // ==================== CREATE PIPELINE ====================
 
 createPipelineBtn?.addEventListener('click', async function() {
-    const name=pipelineName?.value.trim(), username=pipelineUsername?.value.trim();
-    const platform=document.getElementById('pipeline-platform')?.value || 'facebook';
-    const sourceMode='scraped';
-    const dailyLimit=parseInt(pipelineDailyLimit?.value)||2;
-    let body={name,profile_username:username,daily_limit:dailyLimit,source_mode:sourceMode};
-    if(platform==='facebook'){
-        const select=pipelineFacebookAccount, accountId=select?.value;
-        const opt=select?.options[select.selectedIndex];
-        if(!accountId){showPipelinesStatus('❌ Select a Facebook account','error');return;}
-        body.publisher_provider='zernio'; body.facebook_account_id=accountId; body.zernio_key_id=opt?.dataset?.keyId||null;
-    } else {
-        const raw=document.getElementById('pipeline-buffer-channel')?.value;
-        if(!raw){showPipelinesStatus('❌ Select a Buffer channel','error');return;}
-        const ch=JSON.parse(raw);
-        body.publisher_provider='buffer'; body.buffer_key_id=ch.key_id; body.buffer_channel_id=ch.channel_id;
-        body.buffer_channel_name=ch.display_name; body.buffer_platform=ch.service;
+    const name = pipelineName?.value.trim();
+    const username = pipelineUsername?.value.trim();
+    const accountSelect = pipelineFacebookAccount;
+    const accountId = accountSelect?.value;
+    const dailyLimit = parseInt(pipelineDailyLimit?.value) || 2;
+    
+    // ✅ Get the key ID from the selected option
+    const selectedOption = accountSelect?.options[accountSelect.selectedIndex];
+    const zernioKeyId = selectedOption?.dataset?.keyId || null;
+    const keyName = selectedOption?.dataset?.keyName || 'Unknown';
+    
+    if (!name || !username || !accountId) {
+        showPipelinesStatus('❌ Please fill in all fields', 'error');
+        return;
     }
-    if(!name||!username){showPipelinesStatus('❌ Enter pipeline name and profile username','error');return;}
-    this.disabled=true; this.textContent='Creating...';
-    try{
-      const response=await fetch('/api/pipelines',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});
-      const data=await response.json();
-      if(response.ok){showPipelinesStatus(`✅ Pipeline "${name}" created`,'success'); if(pipelineName)pipelineName.value=''; if(pipelineUsername)pipelineUsername.value=''; loadPipelines();}
-      else showPipelinesStatus(`❌ ${data.error||'Failed to create pipeline'}`,'error');
-    }catch(e){showPipelinesStatus(`❌ ${e.message}`,'error');}
-    finally{this.disabled=false;this.textContent='Create Pipeline';}
+    
+    if (!zernioKeyId) {
+        showPipelinesStatus('⚠️ Please select an account with a valid Zernio key', 'error');
+        return;
+    }
+    
+    console.log(`🔑 Creating pipeline with key: ${keyName} (${zernioKeyId})`);
+    
+    this.disabled = true;
+    this.textContent = 'Creating...';
+    
+    try {
+        const response = await fetch('/api/pipelines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                name,
+                profile_username: username,
+                facebook_account_id: accountId,
+                daily_limit: dailyLimit,
+                zernio_key_id: zernioKeyId  // ✅ Send the key ID!
+            })
+        });
+        const data = await response.json();
+        
+        if (response.ok) {
+            showPipelinesStatus(`✅ Pipeline "${name}" created with ${keyName}!`, 'success');
+            if (pipelineName) pipelineName.value = '';
+            if (pipelineUsername) pipelineUsername.value = '';
+            if (pipelineDailyLimit) pipelineDailyLimit.value = '2';
+            loadPipelines();
+        } else {
+            showPipelinesStatus(`❌ ${data.error || 'Failed to create pipeline'}`, 'error');
+        }
+    } catch (error) {
+        showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
+    } finally {
+        this.disabled = false;
+        this.textContent = 'Create Pipeline';
+    }
 });
 
 // ==================== AUTO-LOAD ON PAGE LOAD ====================
@@ -5390,380 +5420,304 @@ function showToast(message, type = 'info') {
     }, 3000);
 }
 
+// ==================== BUFFER / TIKTOK ====================
 
+let tiktokChannels = [];
+let bufferKeyConfigured = false;
 
+function showBufferKeyStatus(message, type) {
+    const el = document.getElementById('buffer-key-status');
+    if (!el) return;
+    el.textContent = message;
+    el.className = 'status-message ' + (type || '');
+    el.style.display = 'block';
+    el.hidden = false;
+    if (type !== 'error') {
+        setTimeout(() => { el.style.display = 'none'; el.hidden = true; }, 6000);
+    }
+}
 
+function showTikTokStatus(message, type) {
+    const el = document.getElementById('tiktok-status');
+    if (!el) return;
+    el.textContent = message;
+    el.className = 'status-message ' + (type || '');
+    el.style.display = 'block';
+    el.hidden = false;
+    if (type === 'info') {
+        setTimeout(() => { el.style.display = 'none'; el.hidden = true; }, 8000);
+    }
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ============================================================
-// buffer_platforms.js
-// Paste this whole block at the bottom of your existing script.js
-// (after the Zernio keys section, before the final init calls,
-// is a fine place — it only *adds* listeners, it doesn't touch
-// anything already defined above it).
-// ============================================================
-
-let bufferAccounts = [];      // Buffer API keys with automatically discovered channels
-let bufferChannelsFlat = [];  // flattened for the composer dropdown
-
-// ---------------------------------------------------------------
-// LOAD / RENDER BUFFER ACCOUNTS
-// ---------------------------------------------------------------
-
-async function loadBufferAccounts() {
-    const list = document.getElementById('buffer-accounts-list');
-    const badge = document.getElementById('buffer-accounts-count');
-    if (!list) return;
-
+async function loadBufferKeyStatus() {
     try {
-        const res = await fetch('/api/buffer/keys', { credentials: 'same-origin' });
+        const res = await fetch('/api/buffer/key', { credentials: 'same-origin' });
         const data = await res.json();
-
-        if (data.status !== 'success') {
-            list.innerHTML = `<div class="empty-state">❌ ${data.error || 'Failed to load accounts'}</div>`;
-            return;
+        bufferKeyConfigured = !!data.has_key;
+        const badge = document.getElementById('buffer-key-badge');
+        const clearBtn = document.getElementById('clear-buffer-key-btn');
+        const masked = document.getElementById('buffer-key-masked');
+        if (badge) {
+            if (data.has_key) {
+                badge.textContent = '✅ Configured';
+                badge.style.background = 'var(--success-bg)';
+                badge.style.color = 'var(--success)';
+            } else {
+                badge.textContent = 'Not set';
+                badge.style.background = '';
+                badge.style.color = '';
+            }
         }
+        if (clearBtn) clearBtn.hidden = !data.has_key;
+        if (masked) {
+            if (data.masked_key) {
+                masked.textContent = 'Current: ' + data.masked_key;
+                masked.style.display = 'block';
+            } else {
+                masked.style.display = 'none';
+            }
+        }
+        return data.has_key;
+    } catch (e) {
+        console.error('Buffer key status error:', e);
+        return false;
+    }
+}
 
-        bufferAccounts = (data.keys || []).map(acc => ({
-            ...acc,
-            channels: (acc.channels || []).map(ch => ({
-                ...ch,
-                id: ch.id || ch.channel_id,
-                channel_id: ch.channel_id || ch.id,
-                display_name: ch.display_name || ch.name || ch.channel_id || ch.id,
-                service: (ch.service || '').toLowerCase(),
-            })),
-        }));
-        if (badge) badge.textContent = `${bufferAccounts.length} keys`;
-
-        bufferChannelsFlat = [];
-        bufferAccounts.forEach(acc => {
-            (acc.channels || []).forEach(ch => {
-                bufferChannelsFlat.push({
-                    account_id: acc.id, key_id: acc.id,
-                    account_name: acc.name,
-                    channel_id: ch.channel_id || ch.id,
-                    service: ch.service,
-                    display_name: ch.display_name || ch.name || ch.channel_id || ch.id,
+async function loadTikTokChannels() {
+    const select = document.getElementById('tiktok-channel-select');
+    const badge = document.getElementById('tiktok-status-badge');
+    const preview = document.getElementById('buffer-channels-preview');
+    try {
+        const res = await fetch('/api/buffer/channels?service=tiktok', { credentials: 'same-origin' });
+        const data = await res.json();
+        if (!res.ok) {
+            if (select) {
+                select.innerHTML = `<option value="">${data.error || 'No key configured'}</option>`;
+            }
+            if (badge) {
+                badge.textContent = '⚠️ No key';
+                badge.style.background = 'var(--warning-bg)';
+                badge.style.color = 'var(--warning)';
+            }
+            if (preview) preview.textContent = data.hint || data.error || '';
+            return [];
+        }
+        tiktokChannels = data.channels || [];
+        if (select) {
+            select.innerHTML = '';
+            if (tiktokChannels.length === 0) {
+                select.innerHTML = '<option value="">No TikTok channels found in Buffer</option>';
+            } else {
+                const def = document.createElement('option');
+                def.value = '';
+                def.textContent = 'Select TikTok channel...';
+                def.disabled = true;
+                def.selected = true;
+                select.appendChild(def);
+                tiktokChannels.forEach(ch => {
+                    const opt = document.createElement('option');
+                    opt.value = ch.id;
+                    opt.textContent = ch.name || ch.id;
+                    select.appendChild(opt);
                 });
-            });
-        });
-
-        renderBufferAccounts(bufferAccounts);
-        populateBufferComposerChannels();
-        populatePipelineBufferChannels();
-
-    } catch (error) {
-        console.error('Failed to load Buffer accounts:', error);
-        list.innerHTML = `<div class="empty-state">❌ ${error.message}</div>`;
-    }
-}
-
-function renderBufferAccounts(accounts) {
-    const list = document.getElementById('buffer-accounts-list');
-    if (!list) return;
-
-    if (!accounts || accounts.length === 0) {
-        list.innerHTML = `
-            <div class="empty-state">
-                <div style="font-size: 32px; margin-bottom: 12px;">🧩</div>
-                <strong>No Buffer accounts connected</strong>
-                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-                    Add a Buffer API key and your connected social accounts will be discovered automatically.
-                </p>
-            </div>
-        `;
-        return;
-    }
-
-    const serviceIcon = { twitter: '🐦', youtube: '▶️', tiktok: '🎵', facebook: '📘', instagram: '📸' };
-
-    let html = `<div class="zernio-keys-grid">`;
-    accounts.forEach(acc => {
-        const channels = acc.channels || [];
-        html += `
-            <div class="zernio-key-card">
-                <div class="zernio-key-header">
-                    <div class="zernio-key-name">
-                        <span class="key-icon">🟢</span>
-                        <span class="key-title">${escapeHtml(acc.name)}</span>
-                        <span class="key-account-count-badge">${channels.length} channel${channels.length !== 1 ? 's' : ''}</span>
-                    </div>
-                    <div class="zernio-key-actions">
-                        <button class="btn btn-sm btn-ghost sync-buffer-account-btn" data-id="${acc.id}" title="Re-sync channels">🔄</button>
-                        <button class="btn btn-sm btn-danger delete-buffer-account-btn" data-id="${acc.id}" data-name="${escapeHtml(acc.name)}" title="Disconnect">🗑️</button>
-                    </div>
-                </div>
-                <div class="zernio-key-body">
-                    <div class="key-accounts-list">
-                        ${channels.map(ch => `
-                            <div class="key-account-item">
-                                <span class="account-icon">${serviceIcon[ch.service] || '🔗'}</span>
-                                <span class="account-name">${escapeHtml(ch.display_name || ch.name || ch.channel_id || ch.id)}</span>
-                                <span class="account-id">${escapeHtml(ch.service || '')}</span>
-                                <span class="account-status">✅</span>
-                            </div>
-                        `).join('') || '<span style="color:var(--text-muted);font-size:13px;">No channels found</span>'}
-                    </div>
-                </div>
-            </div>
-        `;
-    });
-    html += `</div>`;
-    list.innerHTML = html;
-
-    list.querySelectorAll('.delete-buffer-account-btn').forEach(btn => {
-        btn.addEventListener('click', () => deleteBufferAccount(btn.dataset.id, btn.dataset.name));
-    });
-    list.querySelectorAll('.sync-buffer-account-btn').forEach(btn => {
-        btn.addEventListener('click', () => syncBufferAccount(btn.dataset.id, btn));
-    });
-}
-
-async function deleteBufferAccount(accountId, name) {
-    if (!confirm(`Disconnect Buffer account "${name}"? Pipelines using its channels will start failing until reassigned.`)) return;
-    try {
-        const res = await fetch(`/api/buffer/keys/${accountId}`, { method: 'DELETE', credentials: 'same-origin' });
-        const data = await res.json();
-        if (res.ok) {
-            showToast(`✅ Disconnected "${name}"`, 'success');
-            loadBufferAccounts();
-        } else {
-            showToast(`❌ ${data.error || 'Failed to disconnect'}`, 'error');
+                if (tiktokChannels.length === 1) {
+                    select.value = tiktokChannels[0].id;
+                }
+            }
         }
-    } catch (error) {
-        showToast(`❌ ${error.message}`, 'error');
-    }
-}
-
-async function syncBufferAccount(accountId, btn) {
-    btn.disabled = true;
-    btn.textContent = '⏳';
-    try {
-        const res = await fetch(`/api/buffer/keys/${accountId}/refresh`, { method: 'POST', credentials: 'same-origin' });
-        const data = await res.json();
-        if (res.ok) {
-            showToast(`✅ Synced ${data.count ?? (data.channels || []).length} channels`, 'success');
-            loadBufferAccounts();
-        } else {
-            showToast(`❌ ${data.error || 'Sync failed'}`, 'error');
+        if (badge) {
+            if (tiktokChannels.length > 0) {
+                badge.textContent = `✅ ${tiktokChannels.length} channel(s)`;
+                badge.style.background = 'var(--success-bg)';
+                badge.style.color = 'var(--success)';
+            } else {
+                badge.textContent = '⚠️ No channels';
+                badge.style.background = 'var(--warning-bg)';
+                badge.style.color = 'var(--warning)';
+            }
         }
-    } catch (error) {
-        showToast(`❌ ${error.message}`, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '🔄';
+        if (preview) {
+            preview.textContent = tiktokChannels.length
+                ? `TikTok channels: ${tiktokChannels.map(c => c.name).join(', ')}`
+                : 'No TikTok channels connected in Buffer.';
+        }
+        return tiktokChannels;
+    } catch (e) {
+        console.error('Load TikTok channels error:', e);
+        if (select) select.innerHTML = '<option value="">Error loading channels</option>';
+        if (badge) {
+            badge.textContent = '❌ Error';
+            badge.style.background = 'var(--error-bg)';
+            badge.style.color = 'var(--error)';
+        }
+        return [];
     }
 }
 
-// ---------------------------------------------------------------
-// ADD BUFFER ACCOUNT MODAL
-// ---------------------------------------------------------------
-
-document.getElementById('add-buffer-account-btn')?.addEventListener('click', () => {
-    document.getElementById('add-buffer-account-modal').hidden = false;
-    document.getElementById('add-buffer-account-status').style.display = 'none';
-    document.getElementById('buffer-account-name').value = '';
-    document.getElementById('buffer-account-key').value = '';
-});
-
-document.getElementById('add-buffer-account-modal-close')?.addEventListener('click', () => {
-    document.getElementById('add-buffer-account-modal').hidden = true;
-});
-
-document.getElementById('add-buffer-account-modal')?.addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) e.target.hidden = true;
-});
-
-document.getElementById('save-buffer-account-btn')?.addEventListener('click', async function () {
-    const name = document.getElementById('buffer-account-name').value.trim();
-    const apiKey = document.getElementById('buffer-account-key').value.trim();
-    const status = document.getElementById('add-buffer-account-status');
-
+document.getElementById('save-buffer-key-btn')?.addEventListener('click', async function() {
+    const input = document.getElementById('buffer-api-key-input');
+    const apiKey = (input?.value || '').trim();
     if (!apiKey) {
-        status.textContent = '❌ Please paste your Buffer API token';
-        status.className = 'status-message error';
-        status.style.display = 'block';
+        showBufferKeyStatus('❌ Please paste a Buffer API key', 'error');
         return;
     }
-
     this.disabled = true;
-    this.textContent = '⏳ Connecting...';
-    status.style.display = 'none';
-
+    this.textContent = '⏳ Saving...';
     try {
-        const res = await fetch('/api/buffer/keys', {
+        const res = await fetch('/api/buffer/key', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ name: name || undefined, api_key: apiKey }),
+            body: JSON.stringify({ api_key: apiKey, validate: true }),
         });
         const data = await res.json();
-
-        if (res.ok) {
-            status.textContent = `✅ ${data.message}`;
-            status.className = 'status-message success';
-            status.style.display = 'block';
-            setTimeout(() => {
-                document.getElementById('add-buffer-account-modal').hidden = true;
-                loadBufferAccounts();
-            }, 1200);
+        if (res.ok && data.status === 'success') {
+            showBufferKeyStatus('✅ Buffer API key saved' + (data.validation?.message ? ` — ${data.validation.message}` : ''), 'success');
+            if (input) input.value = '';
+            await loadBufferKeyStatus();
+            await loadTikTokChannels();
         } else {
-            status.textContent = `❌ ${data.error || 'Failed to connect'}`;
-            status.className = 'status-message error';
-            status.style.display = 'block';
+            showBufferKeyStatus(`❌ ${data.message || data.error || 'Failed to save'}`, 'error');
         }
-    } catch (error) {
-        status.textContent = `❌ ${error.message}`;
-        status.className = 'status-message error';
-        status.style.display = 'block';
+    } catch (e) {
+        showBufferKeyStatus(`❌ ${e.message}`, 'error');
     } finally {
         this.disabled = false;
-        this.textContent = 'Connect';
+        this.textContent = '💾 Save Key';
     }
 });
 
-// ---------------------------------------------------------------
-// MANUAL COMPOSER (Twitter / YouTube / TikTok, one-off post)
-// ---------------------------------------------------------------
-
-function populateBufferComposerChannels() {
-    const serviceSelect = document.getElementById('buffer-composer-service');
-    const channelSelect = document.getElementById('buffer-composer-channel');
-    if (!serviceSelect || !channelSelect) return;
-
-    function refresh() {
-        const service = serviceSelect.value;
-        const matches = bufferChannelsFlat.filter(c => c.service === service);
-
-        channelSelect.innerHTML = '';
-        if (matches.length === 0) {
-            channelSelect.innerHTML = `<option value="">No ${service} channels connected</option>`;
-            return;
-        }
-        matches.forEach(c => {
-            const opt = document.createElement('option');
-            opt.value = JSON.stringify({ account_id: c.account_id, channel_id: c.channel_id, service: c.service });
-            opt.textContent = `${c.display_name} (${c.account_name})`;
-            channelSelect.appendChild(opt);
-        });
-
-        document.getElementById('buffer-youtube-fields').hidden = service !== 'youtube';
-        document.getElementById('buffer-tiktok-fields').hidden = service !== 'tiktok';
-    }
-
-    serviceSelect.onchange = refresh;
-    refresh();
-}
-
-document.getElementById('buffer-composer-publish-btn')?.addEventListener('click', async function () {
-    const service = document.getElementById('buffer-composer-service').value;
-    const channelRaw = document.getElementById('buffer-composer-channel').value;
-    const text = document.getElementById('buffer-composer-text').value.trim();
-    const status = document.getElementById('buffer-composer-status');
-    if (!channelRaw) { status.textContent='❌ Select a Buffer channel'; status.className='status-message error'; status.style.display='block'; return; }
-    const channel = JSON.parse(channelRaw);
-    const videoUrl = document.getElementById('buffer-composer-video-url')?.value.trim() || window.currentVideoUrl || null;
-    if (service !== 'twitter' && !videoUrl) { status.textContent='❌ Fetch an Instagram video first for TikTok/YouTube'; status.className='status-message error'; status.style.display='block'; return; }
-    const title = document.getElementById('buffer-yt-title')?.value.trim() || text.slice(0,100);
-    this.disabled=true; this.textContent='Publishing...'; status.style.display='none';
-    try {
-      const res=await fetch('/api/publish/manual',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({provider:'buffer',channel_id:channel.channel_id,text,video_url:service==='twitter'?null:videoUrl,title})});
-      const data=await res.json();
-      status.textContent=res.ok ? `✅ Published to ${service}` : `❌ ${data.error || 'Failed to publish'}`;
-      status.className=res.ok?'status-message success':'status-message error'; status.style.display='block';
-    } catch(e) { status.textContent=`❌ ${e.message}`; status.className='status-message error'; status.style.display='block'; }
-    finally { this.disabled=false; this.textContent='🚀 Publish Now'; }
-});
-
-// ---------------------------------------------------------------
-// PIPELINE CREATE FORM — platform switching
-// ---------------------------------------------------------------
-
-function populatePipelineBufferChannels() {
-    const select = document.getElementById('pipeline-buffer-channel');
-    if (!select) return;
-
-    const platform = document.getElementById('pipeline-platform')?.value || 'facebook';
-    const service = platform === 'facebook' ? 'facebook' : platform.replace('buffer_', '');
-    const matches = bufferChannelsFlat.filter(c => c.service === service);
-
-    select.innerHTML = '';
-    if (matches.length === 0) {
-        select.innerHTML = `<option value="">No ${service} channels connected</option>`;
+document.getElementById('validate-buffer-key-btn')?.addEventListener('click', async function() {
+    const input = document.getElementById('buffer-api-key-input');
+    const apiKey = (input?.value || '').trim();
+    if (!apiKey) {
+        showBufferKeyStatus('⏳ Checking saved key...', 'info');
+        await loadTikTokChannels();
+        showBufferKeyStatus(bufferKeyConfigured ? '✅ Using saved key' : '❌ No key saved', bufferKeyConfigured ? 'success' : 'error');
         return;
     }
-    matches.forEach(c => {
-        const opt = document.createElement('option');
-        opt.value = JSON.stringify({ key_id: c.key_id || c.account_id, channel_id: c.channel_id, display_name: c.display_name, service: c.service });
-        opt.textContent = `${c.display_name} (${c.account_name})`;
-        select.appendChild(opt);
-    });
+    this.disabled = true;
+    this.textContent = '⏳ Validating...';
+    try {
+        const res = await fetch('/api/buffer/validate-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ api_key: apiKey }),
+        });
+        const data = await res.json();
+        if (data.valid) {
+            showBufferKeyStatus(`✅ ${data.message}`, 'success');
+        } else {
+            showBufferKeyStatus(`❌ ${data.message || 'Invalid key'}`, 'error');
+        }
+    } catch (e) {
+        showBufferKeyStatus(`❌ ${e.message}`, 'error');
+    } finally {
+        this.disabled = false;
+        this.textContent = '✓ Validate';
+    }
+});
+
+document.getElementById('clear-buffer-key-btn')?.addEventListener('click', async function() {
+    if (!confirm('Clear the Buffer API key? TikTok posting will stop working until you add a new key.')) return;
+    this.disabled = true;
+    try {
+        const res = await fetch('/api/buffer/key', { method: 'DELETE', credentials: 'same-origin' });
+        const data = await res.json();
+        if (res.ok) {
+            showBufferKeyStatus('✅ Buffer key cleared', 'success');
+            await loadBufferKeyStatus();
+            await loadTikTokChannels();
+        } else {
+            showBufferKeyStatus(`❌ ${data.error || 'Failed'}`, 'error');
+        }
+    } catch (e) {
+        showBufferKeyStatus(`❌ ${e.message}`, 'error');
+    } finally {
+        this.disabled = false;
+    }
+});
+
+document.getElementById('refresh-buffer-channels-btn')?.addEventListener('click', () => loadTikTokChannels());
+document.getElementById('refresh-tiktok-btn')?.addEventListener('click', () => loadTikTokChannels());
+
+async function publishToTikTok({ addToQueue = false } = {}) {
+    const channelId = document.getElementById('tiktok-channel-select')?.value;
+    const text = document.getElementById('tiktok-text')?.value?.trim() || '';
+    const scheduleInput = document.getElementById('tiktok-schedule')?.value;
+    const videoUrl = typeof currentVideoUrl !== 'undefined' ? currentVideoUrl : null;
+    const fallbackUrl = document.getElementById('direct-url-display')?.value;
+    const finalUrl = videoUrl || fallbackUrl;
+
+    if (!channelId) {
+        showTikTokStatus('❌ Select a TikTok channel first', 'error');
+        return;
+    }
+    if (!finalUrl) {
+        showTikTokStatus('❌ No video URL. Fetch a video first.', 'error');
+        return;
+    }
+
+    let dueAt = null;
+    if (scheduleInput && !addToQueue) {
+        const d = new Date(scheduleInput);
+        if (!isNaN(d.getTime())) {
+            dueAt = d.toISOString();
+        }
+    }
+
+    const btn = addToQueue
+        ? document.getElementById('tiktok-queue-btn')
+        : document.getElementById('tiktok-publish-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="btn-spinner"></span> Posting...';
+    }
+    showTikTokStatus(addToQueue ? '⏳ Adding to Buffer queue...' : '⏳ Publishing to TikTok via Buffer...', 'info');
+
+    try {
+        const res = await fetch('/api/tiktok/post', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                channel_id: channelId,
+                video_url: finalUrl,
+                text: text,
+                due_at: dueAt,
+                add_to_queue: addToQueue,
+            }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'success') {
+            const when = data.due_at
+                ? ` scheduled for ${new Date(data.due_at).toLocaleString()}`
+                : (addToQueue ? ' added to queue' : '');
+            showTikTokStatus(`✅ TikTok post created${when} (id: ${data.post_id || 'n/a'})`, 'success');
+        } else {
+            showTikTokStatus(`❌ ${data.error || 'Failed to post'}`, 'error');
+        }
+    } catch (e) {
+        showTikTokStatus(`❌ ${e.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = addToQueue
+                ? '<span class="btn-content">📥 Add to Queue</span>'
+                : '<span class="btn-content">Publish to TikTok</span>';
+        }
+    }
 }
 
-document.getElementById('pipeline-platform')?.addEventListener('change', function () {
-    const isFacebook = this.value === 'facebook';
-    const fbField=document.getElementById('pipeline-facebook-field');
-    const bufferField=document.getElementById('pipeline-buffer-field');
-    if (fbField) fbField.hidden=!isFacebook;
-    if (bufferField) bufferField.hidden=isFacebook;
-    if (!isFacebook) populatePipelineBufferChannels();
-});
+document.getElementById('tiktok-publish-btn')?.addEventListener('click', () => publishToTikTok({ addToQueue: false }));
+document.getElementById('tiktok-queue-btn')?.addEventListener('click', () => publishToTikTok({ addToQueue: true }));
 
-// ---------------------------------------------------------------
-// EXTEND createPipelineBtn to send the new platform fields.
-// Your existing createPipelineBtn listener in script.js already
-// reads name/username/accountId/dailyLimit — add this small patch
-// right before the fetch('/api/pipelines', ...) call inside it:
-//
-//     const platform = document.getElementById('pipeline-platform')?.value || 'facebook';
-//     let bufferAccountId = null, bufferChannelId = null;
-//     if (platform !== 'facebook') {
-//         const raw = document.getElementById('pipeline-buffer-channel')?.value;
-//         if (raw) {
-//             const parsed = JSON.parse(raw);
-//             bufferAccountId = parsed.account_id;
-//             bufferChannelId = parsed.channel_id;
-//         }
-//     }
-//
-// ...then add platform, buffer_account_id, buffer_channel_id to the
-// JSON.stringify(...) body of that fetch call.
-// ---------------------------------------------------------------
-
-// ---------------------------------------------------------------
-// INIT
-// ---------------------------------------------------------------
-
-document.getElementById('refresh-buffer-accounts-btn')?.addEventListener('click', loadBufferAccounts);
-
-document.addEventListener('DOMContentLoaded', function () {
-    loadBufferAccounts();
-});
-
-
-
-
-
-
-
-
-
+async function initTikTokUI() {
+    await loadBufferKeyStatus();
+    await loadTikTokChannels();
+}
 
 // ==================== INITIALIZE ====================
 
@@ -5774,23 +5728,5 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     initManualScheduler();
+    initTikTokUI();
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

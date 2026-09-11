@@ -368,46 +368,6 @@
 
 
 
-<!-- ============ BUFFER INTEGRATION ============ -->
-<div id="buffer-accounts-section" class="zernio-section premium-card">
-  <div class="zernio-header">
-    <div class="zernio-header-left"><span class="zernio-icon">🧩</span><h3>Buffer — TikTok / YouTube / X</h3></div>
-    <div class="zernio-header-right"><span class="badge" id="buffer-accounts-count">0 keys</span><button id="refresh-buffer-accounts-btn" class="btn btn-sm btn-ghost">🔄</button></div>
-  </div>
-  <div class="zernio-body">
-    <p class="modal-desc">Add a Buffer API key from the UI. Connected Buffer channels are discovered automatically.</p>
-    <div class="zernio-actions"><button id="add-buffer-account-btn" class="btn btn-primary">➕ Add Buffer Key</button></div>
-    <div id="buffer-accounts-list" style="margin-top:14px"><div class="loading-state">Loading Buffer keys...</div></div>
-  </div>
-</div>
-
-<div id="add-buffer-account-modal" class="modal-overlay" hidden>
-  <div class="modal-content premium-card">
-    <div class="modal-header"><h3>🔑 Add Buffer API Key</h3><button id="add-buffer-account-modal-close" class="modal-close">✕</button></div>
-    <div class="modal-body">
-      <p class="modal-desc">The key is stored on the server and used to discover your Buffer organizations and channels.</p>
-      <div class="form-group"><label>Key Name</label><input id="buffer-account-name" class="input-field" placeholder="My Buffer" /></div>
-      <div class="form-group"><label>Buffer API Key</label><input id="buffer-account-key" type="password" class="input-field" placeholder="Paste Buffer API key" autocomplete="off" /></div>
-      <button id="save-buffer-account-btn" class="btn btn-primary btn-block">Connect</button>
-      <div id="add-buffer-account-status" class="status-message" hidden></div>
-    </div>
-  </div>
-</div>
-
-<div id="buffer-composer-section" class="zernio-section premium-card">
-  <div class="zernio-header"><div class="zernio-header-left"><span class="zernio-icon">🚀</span><h3>Post Manually Through Buffer</h3></div><span class="badge">Now</span></div>
-  <div class="zernio-body">
-    <div class="form-group"><label>Platform</label><select id="buffer-composer-service" class="input-field"><option value="twitter">X / Twitter</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option></select></div>
-    <div class="form-group"><label>Channel</label><select id="buffer-composer-channel" class="input-field"><option value="">Connect Buffer first...</option></select></div>
-    <div class="form-group"><label>Text / Caption</label><textarea id="buffer-composer-text" class="zernio-textarea" rows="3" placeholder="Write your own content..."></textarea></div>
-    <div class="form-group"><label>Video URL <span style="color:var(--text-muted)">(optional — or use the fetched Instagram video)</span></label><input id="buffer-composer-video-url" class="input-field" placeholder="https://.../video.mp4" /></div>
-    <div id="buffer-youtube-fields" class="form-group" hidden><label>YouTube Title</label><input id="buffer-yt-title" class="input-field" placeholder="Video title" /></div>
-    <div id="buffer-tiktok-fields" class="form-group" hidden><small style="color:var(--text-muted)">TikTok requires a video asset for this composer.</small></div>
-    <button id="buffer-composer-publish-btn" class="btn btn-primary btn-block">🚀 Publish Now</button>
-    <div id="buffer-composer-status" class="status-message" hidden></div>
-  </div>
-</div>
-
 <!-- ============ ZERNIO (FACEBOOK) SECTION ============ -->
 <div id="zernio-section" class="zernio-section premium-card">
   <div class="zernio-header">
@@ -498,6 +458,77 @@
         </div>
     </div>
 
+    <!-- ============ BUFFER API KEY (for TikTok) ============ -->
+    <div class="buffer-key-section premium-card" id="buffer-key-section">
+        <div class="zernio-keys-header">
+            <div class="zernio-keys-title">
+                <span class="zernio-keys-icon">🎵</span>
+                <h3>Buffer API Key (TikTok)</h3>
+                <span class="badge" id="buffer-key-badge">Not set</span>
+            </div>
+            <div class="zernio-keys-actions">
+                <button id="refresh-buffer-channels-btn" class="btn btn-sm btn-ghost">🔄 Refresh Channels</button>
+            </div>
+        </div>
+        <div class="zernio-body" style="padding-top: 12px;">
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">
+                Buffer is used to post to TikTok. Generate an API key in your Buffer dashboard
+                (Settings → API) and paste it here. The key is stored securely in the database.
+            </p>
+            <div class="form-group">
+                <label for="buffer-api-key-input">Buffer API Key</label>
+                <input type="password" id="buffer-api-key-input" class="input-field" placeholder="Paste your Buffer API key…" autocomplete="off" />
+                <span id="buffer-key-masked" style="font-size: 12px; color: var(--text-muted); display: none;"></span>
+            </div>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px;">
+                <button id="save-buffer-key-btn" class="btn btn-primary">💾 Save Key</button>
+                <button id="validate-buffer-key-btn" class="btn btn-ghost">✓ Validate</button>
+                <button id="clear-buffer-key-btn" class="btn btn-danger" hidden>🗑️ Clear</button>
+            </div>
+            <div id="buffer-key-status" class="status-message" hidden></div>
+            <div id="buffer-channels-preview" style="margin-top: 12px; font-size: 13px; color: var(--text-secondary);"></div>
+        </div>
+    </div>
+
+    <!-- ============ TIKTOK PUBLISH SECTION ============ -->
+    <div id="tiktok-section" class="zernio-section premium-card">
+        <div class="zernio-header">
+            <div class="zernio-header-left">
+                <span class="zernio-icon">🎵</span>
+                <h3>Publish to TikTok</h3>
+            </div>
+            <div class="zernio-header-right">
+                <span class="badge" id="tiktok-status-badge">Loading...</span>
+                <button id="refresh-tiktok-btn" class="btn btn-sm btn-ghost" title="Refresh channels">🔄</button>
+            </div>
+        </div>
+        <div class="zernio-body">
+            <div class="form-group">
+                <label>Select TikTok Channel</label>
+                <select id="tiktok-channel-select" class="input-field">
+                    <option value="">Loading channels...</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="tiktok-text">Caption</label>
+                <textarea id="tiktok-text" class="zernio-textarea" rows="3" placeholder="Write your TikTok caption…">Check out this video! 🎬</textarea>
+            </div>
+            <div class="form-group">
+                <label for="tiktok-schedule">Schedule Post (optional)</label>
+                <input type="datetime-local" id="tiktok-schedule" class="input-field" />
+            </div>
+            <div class="zernio-actions">
+                <button id="tiktok-publish-btn" class="btn btn-primary">
+                    <span class="btn-content">Publish to TikTok</span>
+                </button>
+                <button id="tiktok-queue-btn" class="btn btn-ghost">
+                    <span class="btn-content">📥 Add to Queue</span>
+                </button>
+            </div>
+            <div id="tiktok-status" class="status-message" hidden></div>
+        </div>
+    </div>
+
     <!-- ============ ADD ZERNIO KEY MODAL (SIMPLIFIED) ============ -->
     <div id="add-zernio-key-modal" class="modal-overlay" hidden>
         <div class="modal-content premium-card">
@@ -564,23 +595,11 @@
                     <input type="text" id="pipeline-username" class="input-field" placeholder="elenaajoyce" />
                 </div>
                 <div class="form-group">
-                    <label>Publisher</label>
-                    <select id="pipeline-platform" class="input-field">
-                        <option value="facebook">Facebook — Zernio</option>
-                        <option value="buffer_twitter">X / Twitter — Buffer</option>
-                        <option value="buffer_tiktok">TikTok — Buffer</option>
-                        <option value="buffer_youtube">YouTube — Buffer</option>
+                    <label>Facebook Account ID</label>
+                    <select id="pipeline-facebook-account" class="input-field">
+                        <option value="">Select Facebook account...</option>
                     </select>
                 </div>
-                <div class="form-group" id="pipeline-facebook-field">
-                    <label>Facebook Account</label>
-                    <select id="pipeline-facebook-account" class="input-field"><option value="">Select Facebook account...</option></select>
-                </div>
-                <div class="form-group" id="pipeline-buffer-field" hidden>
-                    <label>Buffer Channel</label>
-                    <select id="pipeline-buffer-channel" class="input-field"><option value="">Connect Buffer first...</option></select>
-                </div>
-
                 <div class="form-group">
                     <label>Daily Post Limit</label>
                     <input type="number" id="pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />

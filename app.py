@@ -19,6 +19,9 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+# TikTok / Buffer integration
+import tiktok as tiktok_module
+
 # Load .env file manually if it exists (for local development)
 try:
     with open('.env', 'r') as f:
@@ -68,224 +71,248 @@ def get_db_connection():
         return None
 
 def init_db():
-    """Create missing tables and migrate missing columns safely.
-
-    This function is idempotent: it can run on every application startup.
-    Buffer organization_id is intentionally not stored.
-    """
     conn = get_db_connection()
     if not conn:
         return
-
-    cur = None
+    
     try:
         cur = conn.cursor()
-
-        def add_column(table, column, definition):
-            cur.execute(
-                f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {definition};'
-            )
-
-        # Create every table first. This is important: never ALTER a table
-        # before CREATE TABLE IF NOT EXISTS has guaranteed it exists.
-        cur.execute("""CREATE TABLE IF NOT EXISTS user_cookies (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT NOT NULL,
-            cookie_data JSONB NOT NULL, username TEXT,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), UNIQUE(user_id));""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS scraped_reels (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT NOT NULL,
-            job_id TEXT NOT NULL, usernames TEXT[] NOT NULL, results JSONB NOT NULL,
-            status TEXT DEFAULT 'completed', total_profiles INTEGER DEFAULT 0,
-            total_reels INTEGER DEFAULT 0, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), UNIQUE(user_id, job_id));""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS pipelines (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL,
-            profile_username TEXT NOT NULL, facebook_account_id TEXT, facebook_page_name TEXT,
-            daily_limit INTEGER DEFAULT 2, is_active BOOLEAN DEFAULT TRUE,
-            last_run TIMESTAMP WITH TIME ZONE, total_posted INTEGER DEFAULT 0,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS posted_reels (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE, reel_url TEXT NOT NULL,
-            direct_video_url TEXT, caption TEXT, facebook_post_id TEXT, facebook_post_url TEXT,
-            posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), status TEXT DEFAULT 'success',
-            error_message TEXT, UNIQUE(pipeline_id, reel_url));""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS pipeline_runs (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-            run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), reels_posted INTEGER DEFAULT 0,
-            reels_failed INTEGER DEFAULT 0, status TEXT DEFAULT 'completed', error_message TEXT);""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS reel_cache (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), reel_url TEXT NOT NULL UNIQUE,
-            direct_url TEXT NOT NULL, caption TEXT, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS sync_status (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), username TEXT NOT NULL UNIQUE,
-            status TEXT DEFAULT 'idle', total_reels INTEGER DEFAULT 0, captions_fetched INTEGER DEFAULT 0,
-            captions_skipped INTEGER DEFAULT 0, errors INTEGER DEFAULT 0,
-            started_at TIMESTAMP WITH TIME ZONE, completed_at TIMESTAMP WITH TIME ZONE,
-            last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(), job_id TEXT);""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS scheduled_posts (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), reel_url TEXT NOT NULL,
-            direct_video_url TEXT NOT NULL, caption TEXT,
-            pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-            scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL, status TEXT DEFAULT 'pending',
-            error_message TEXT, posted_at TIMESTAMP WITH TIME ZONE,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS pending_posts (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), reel_url TEXT NOT NULL UNIQUE,
-            direct_video_url TEXT NOT NULL, pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-            profile_username TEXT NOT NULL, facebook_account_id TEXT NOT NULL, caption TEXT,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, error_message TEXT,
-            facebook_post_id TEXT, facebook_post_url TEXT, wakeup_sent BOOLEAN DEFAULT FALSE,
-            real_fetch_attempts INTEGER DEFAULT 0, webhook_received BOOLEAN DEFAULT FALSE);""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS zernio_keys (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL,
-            api_key TEXT NOT NULL UNIQUE, facebook_account_id TEXT NOT NULL, facebook_page_name TEXT,
-            daily_limit INTEGER DEFAULT 50, usage_count INTEGER DEFAULT 0,
-            last_used TIMESTAMP WITH TIME ZONE, is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS buffer_keys (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL,
-            api_key TEXT NOT NULL UNIQUE, usage_count INTEGER DEFAULT 0, is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS buffer_channels (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            buffer_key_id UUID REFERENCES buffer_keys(id) ON DELETE CASCADE,
-            channel_id TEXT NOT NULL, name TEXT, display_name TEXT, service TEXT NOT NULL,
-            external_link TEXT, is_disconnected BOOLEAN DEFAULT FALSE, is_locked BOOLEAN DEFAULT FALSE,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            UNIQUE(buffer_key_id, channel_id));""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS app_settings (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), setting_key TEXT NOT NULL UNIQUE,
-            setting_value TEXT, setting_type TEXT DEFAULT 'string', description TEXT,
-            is_encrypted BOOLEAN DEFAULT FALSE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
-
-        # Add every known column to every table. Existing rows are preserved.
-        columns = {
-            'user_cookies': {
-                'user_id':'TEXT','cookie_data':'JSONB','username':'TEXT',
-                'created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
-            'scraped_reels': {
-                'user_id':'TEXT','job_id':'TEXT','usernames':'TEXT[]','results':'JSONB','status':"TEXT DEFAULT 'completed'",
-                'total_profiles':'INTEGER DEFAULT 0','total_reels':'INTEGER DEFAULT 0',
-                'created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
-            'pipelines': {
-                'name':'TEXT','profile_username':'TEXT','facebook_account_id':'TEXT','facebook_page_name':'TEXT',
-                'daily_limit':'INTEGER DEFAULT 2','is_active':'BOOLEAN DEFAULT TRUE','last_run':'TIMESTAMP WITH TIME ZONE',
-                'total_posted':'INTEGER DEFAULT 0','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
-                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','zernio_key_id':'UUID',
-                'publisher_provider':"TEXT DEFAULT 'zernio'",'source_mode':"TEXT DEFAULT 'scraped'",
-                'buffer_key_id':'UUID','buffer_channel_id':'TEXT','buffer_channel_name':'TEXT','buffer_platform':'TEXT'},
-            'posted_reels': {
-                'pipeline_id':'UUID','reel_url':'TEXT','direct_video_url':'TEXT','caption':'TEXT',
-                'facebook_post_id':'TEXT','facebook_post_url':'TEXT','posted_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
-                'status':"TEXT DEFAULT 'success'",'error_message':'TEXT','publisher_provider':"TEXT DEFAULT 'zernio'",
-                'publisher_account_id':'TEXT','publisher_platform':'TEXT','publisher_post_id':'TEXT','publisher_post_url':'TEXT'},
-            'pipeline_runs': {
-                'pipeline_id':'UUID','run_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','reels_posted':'INTEGER DEFAULT 0',
-                'reels_failed':'INTEGER DEFAULT 0','status':"TEXT DEFAULT 'completed'",'error_message':'TEXT'},
-            'reel_cache': {'reel_url':'TEXT','direct_url':'TEXT','caption':'TEXT','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
-            'sync_status': {
-                'username':'TEXT','status':"TEXT DEFAULT 'idle'",'total_reels':'INTEGER DEFAULT 0',
-                'captions_fetched':'INTEGER DEFAULT 0','captions_skipped':'INTEGER DEFAULT 0','errors':'INTEGER DEFAULT 0',
-                'started_at':'TIMESTAMP WITH TIME ZONE','completed_at':'TIMESTAMP WITH TIME ZONE',
-                'last_updated':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','job_id':'TEXT'},
-            'scheduled_posts': {
-                'reel_url':'TEXT','direct_video_url':'TEXT','caption':'TEXT','pipeline_id':'UUID',
-                'scheduled_time':'TIMESTAMP WITH TIME ZONE','status':"TEXT DEFAULT 'pending'",'error_message':'TEXT',
-                'posted_at':'TIMESTAMP WITH TIME ZONE','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
-                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
-            'pending_posts': {
-                'reel_url':'TEXT','direct_video_url':'TEXT','pipeline_id':'UUID','profile_username':'TEXT',
-                'facebook_account_id':'TEXT','caption':'TEXT','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
-                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','status':"TEXT DEFAULT 'pending'",'attempts':'INTEGER DEFAULT 0',
-                'error_message':'TEXT','facebook_post_id':'TEXT','facebook_post_url':'TEXT','wakeup_sent':'BOOLEAN DEFAULT FALSE',
-                'real_fetch_attempts':'INTEGER DEFAULT 0','webhook_received':'BOOLEAN DEFAULT FALSE'},
-            'zernio_keys': {
-                'name':'TEXT','api_key':'TEXT','facebook_account_id':'TEXT','facebook_page_name':'TEXT',
-                'daily_limit':'INTEGER DEFAULT 50','usage_count':'INTEGER DEFAULT 0','last_used':'TIMESTAMP WITH TIME ZONE',
-                'is_active':'BOOLEAN DEFAULT TRUE','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
-                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
-            'buffer_keys': {
-                'name':'TEXT','api_key':'TEXT','usage_count':'INTEGER DEFAULT 0','is_active':'BOOLEAN DEFAULT TRUE',
-                'created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
-            'buffer_channels': {
-                'buffer_key_id':'UUID','channel_id':'TEXT','name':'TEXT','display_name':'TEXT','service':'TEXT',
-                'external_link':'TEXT','is_disconnected':'BOOLEAN DEFAULT FALSE','is_locked':'BOOLEAN DEFAULT FALSE',
-                'created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
-            'app_settings': {
-                'setting_key':'TEXT','setting_value':'TEXT','setting_type':"TEXT DEFAULT 'string'",'description':'TEXT',
-                'is_encrypted':'BOOLEAN DEFAULT FALSE','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
-                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'}
-        }
-
-        for table, table_columns in columns.items():
-            for column, definition in table_columns.items():
-                add_column(table, column, definition)
-
-        # Remove organization_id from old Buffer schemas. It is not part of this app's DB model.
-        cur.execute('ALTER TABLE buffer_keys DROP COLUMN IF EXISTS organization_id;')
-        cur.execute('ALTER TABLE buffer_channels DROP COLUMN IF EXISTS organization_id;')
-
-        # Default application settings.
+        
+        # User cookies table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_cookies (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id TEXT NOT NULL,
+                cookie_data JSONB NOT NULL,
+                username TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(user_id)
+            );
+        """)
+        
+        # Scraped reels table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scraped_reels (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                usernames TEXT[] NOT NULL,
+                results JSONB NOT NULL,
+                status TEXT DEFAULT 'completed',
+                total_profiles INTEGER DEFAULT 0,
+                total_reels INTEGER DEFAULT 0,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(user_id, job_id)
+            );
+        """)
+        
+        # Pipelines table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pipelines (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name TEXT NOT NULL,
+                profile_username TEXT NOT NULL,
+                facebook_account_id TEXT NOT NULL,
+                facebook_page_name TEXT,
+                daily_limit INTEGER DEFAULT 2,
+                is_active BOOLEAN DEFAULT TRUE,
+                last_run TIMESTAMP WITH TIME ZONE,
+                total_posted INTEGER DEFAULT 0,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # Posted reels table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS posted_reels (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+                reel_url TEXT NOT NULL,
+                direct_video_url TEXT,
+                caption TEXT,
+                facebook_post_id TEXT,
+                facebook_post_url TEXT,
+                posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                status TEXT DEFAULT 'success',
+                error_message TEXT,
+                UNIQUE(pipeline_id, reel_url)
+            );
+        """)
+        
+        # Add columns if they don't exist
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS caption TEXT;")
+        
+        # Pipeline runs log
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+                run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                reels_posted INTEGER DEFAULT 0,
+                reels_failed INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'completed',
+                error_message TEXT
+            );
+        """)
+        
+        # Reel cache table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reel_cache (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                reel_url TEXT NOT NULL UNIQUE,
+                direct_url TEXT NOT NULL,
+                caption TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # Sync status table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sync_status (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                username TEXT NOT NULL UNIQUE,
+                status TEXT DEFAULT 'idle',
+                total_reels INTEGER DEFAULT 0,
+                captions_fetched INTEGER DEFAULT 0,
+                captions_skipped INTEGER DEFAULT 0,
+                errors INTEGER DEFAULT 0,
+                started_at TIMESTAMP WITH TIME ZONE,
+                completed_at TIMESTAMP WITH TIME ZONE,
+                last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                job_id TEXT
+            );
+        """)
+        
+        # Scheduled posts table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scheduled_posts (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                reel_url TEXT NOT NULL,
+                direct_video_url TEXT NOT NULL,
+                caption TEXT,
+                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+                scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                status TEXT DEFAULT 'pending',
+                error_message TEXT,
+                posted_at TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # Pending posts table (kept for backward compatibility but not used in new flow)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pending_posts (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                reel_url TEXT NOT NULL UNIQUE,
+                direct_video_url TEXT NOT NULL,
+                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+                profile_username TEXT NOT NULL,
+                facebook_account_id TEXT NOT NULL,
+                caption TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                status TEXT DEFAULT 'pending',
+                attempts INTEGER DEFAULT 0,
+                error_message TEXT,
+                facebook_post_id TEXT,
+                facebook_post_url TEXT,
+                wakeup_sent BOOLEAN DEFAULT FALSE,
+                real_fetch_attempts INTEGER DEFAULT 0,
+                webhook_received BOOLEAN DEFAULT FALSE
+            );
+        """)
+        
+        # Add columns if they don't exist
+        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS wakeup_sent BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;")
+        
+        # ========== NEW: ZERNIO KEYS TABLE ==========
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS zernio_keys (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name TEXT NOT NULL,
+                api_key TEXT NOT NULL UNIQUE,
+                facebook_account_id TEXT NOT NULL,
+                facebook_page_name TEXT,
+                daily_limit INTEGER DEFAULT 50,
+                usage_count INTEGER DEFAULT 0,
+                last_used TIMESTAMP WITH TIME ZONE,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # Add zernio_key_id to pipelines
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
+        
+        # ========== NEW: APP SETTINGS TABLE ==========
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                setting_key TEXT NOT NULL UNIQUE,
+                setting_value TEXT,
+                setting_type TEXT DEFAULT 'string',
+                description TEXT,
+                is_encrypted BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # Insert default settings
         cur.execute("""
             INSERT INTO app_settings (setting_key, setting_value, description) VALUES
-            ('caption_service_url','https://copytxt-caption-automation.onrender.com/api/caption','Caption service endpoint'),
-            ('zernio_base_url','https://zernio.com/api/v1','Zernio API base URL'),
-            ('scraper_base_url','https://ig-reels-scraper.onrender.com','Instagram scraper service URL'),
-            ('max_reels_per_scrape','50','Maximum reels to scrape per profile'),
-            ('max_scrolls_per_scrape','200','Maximum scrolls per profile'),
-            ('enable_auto_sync','true','Auto-sync captions after scrape')
+                ('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption', 'Caption service endpoint'),
+                ('zernio_base_url', 'https://zernio.com/api/v1', 'Zernio API base URL'),
+                ('scraper_base_url', 'https://ig-reels-scraper.onrender.com', 'Instagram scraper service URL'),
+                ('max_reels_per_scrape', '50', 'Maximum reels to scrape per profile'),
+                ('max_scrolls_per_scrape', '200', 'Maximum scrolls per profile'),
+                ('enable_auto_sync', 'true', 'Auto-sync captions after scrape')
             ON CONFLICT (setting_key) DO NOTHING;
         """)
-
-        # Useful indexes.
-        indexes = [
-            'CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id ON scraped_reels(user_id);',
-            'CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at ON scraped_reels(created_at DESC);',
-            'CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id ON user_cookies(user_id);',
-            'CREATE INDEX IF NOT EXISTS idx_posted_reels_pipeline_id ON posted_reels(pipeline_id);',
-            'CREATE INDEX IF NOT EXISTS idx_posted_reels_posted_at ON posted_reels(posted_at);',
-            'CREATE INDEX IF NOT EXISTS idx_pipelines_is_active ON pipelines(is_active);',
-            'CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);',
-            'CREATE INDEX IF NOT EXISTS idx_reel_cache_reel_url ON reel_cache(reel_url);',
-            'CREATE INDEX IF NOT EXISTS idx_reel_cache_created_at ON reel_cache(created_at);',
-            'CREATE INDEX IF NOT EXISTS idx_sync_status_username ON sync_status(username);',
-            'CREATE INDEX IF NOT EXISTS idx_sync_status_status ON sync_status(status);',
-            'CREATE INDEX IF NOT EXISTS idx_scheduled_posts_scheduled_time ON scheduled_posts(scheduled_time);',
-            'CREATE INDEX IF NOT EXISTS idx_scheduled_posts_status ON scheduled_posts(status);',
-            'CREATE INDEX IF NOT EXISTS idx_scheduled_posts_pipeline_id ON scheduled_posts(pipeline_id);',
-            "CREATE INDEX IF NOT EXISTS idx_scheduled_posts_processing ON scheduled_posts(status, updated_at) WHERE status = 'processing';",
-            'CREATE INDEX IF NOT EXISTS idx_scheduled_posts_due ON scheduled_posts(status, scheduled_time);',
-            'CREATE INDEX IF NOT EXISTS idx_pending_posts_reel_url ON pending_posts(reel_url);',
-            'CREATE INDEX IF NOT EXISTS idx_pending_posts_status ON pending_posts(status);',
-            'CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at ON pending_posts(created_at DESC);',
-            'CREATE INDEX IF NOT EXISTS idx_zernio_keys_api_key ON zernio_keys(api_key);',
-            'CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);',
-            'CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);',
-            'CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);',
-            'CREATE INDEX IF NOT EXISTS idx_buffer_keys_active ON buffer_keys(is_active);',
-            'CREATE INDEX IF NOT EXISTS idx_buffer_channels_key ON buffer_channels(buffer_key_id);',
-            'CREATE INDEX IF NOT EXISTS idx_buffer_channels_service ON buffer_channels(service);'
-        ]
-        for statement in indexes:
-            cur.execute(statement)
-
+        
+        # Create indexes
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id ON scraped_reels(user_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at ON scraped_reels(created_at DESC);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id ON user_cookies(user_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_posted_reels_pipeline_id ON posted_reels(pipeline_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_posted_reels_posted_at ON posted_reels(posted_at);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_is_active ON pipelines(is_active);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_reel_cache_reel_url ON reel_cache(reel_url);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_reel_cache_created_at ON reel_cache(created_at);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sync_status_username ON sync_status(username);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sync_status_status ON sync_status(status);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_scheduled_time ON scheduled_posts(scheduled_time);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_status ON scheduled_posts(status);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_pipeline_id ON scheduled_posts(pipeline_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_processing ON scheduled_posts(status, updated_at) WHERE status = 'processing';")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_due ON scheduled_posts(status, scheduled_time);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_reel_url ON pending_posts(reel_url);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_status ON pending_posts(status);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at ON pending_posts(created_at DESC);")
+        
+        # ========== NEW INDEXES ==========
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_api_key ON zernio_keys(api_key);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);")
+        
         conn.commit()
-        app.logger.info('Database initialization/migration completed successfully.')
-
+        app.logger.info("✅ Database tables ready with all columns (including Zernio keys and app settings)")
     except Exception as e:
-        conn.rollback()
-        app.logger.error(f'Database init/migration error: {e}')
+        app.logger.error(f"❌ Database init error: {e}")
         import traceback
         app.logger.error(traceback.format_exc())
     finally:
-        if cur:
-            cur.close()
+        cur.close()
         conn.close()
 
 # Initialize database on startup
@@ -2145,341 +2172,6 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-
-# ============== BUFFER INTEGRATION ==============
-
-BUFFER_API_URL = "https://api.buffer.com"
-
-
-def buffer_graphql(api_key, query, variables=None, timeout=60):
-    """Execute a Buffer GraphQL request and raise useful errors."""
-    if not api_key:
-        raise Exception("Buffer API key is required")
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    response = requests.post(
-        BUFFER_API_URL,
-        headers=headers,
-        json={"query": query, "variables": variables or {}},
-        timeout=timeout,
-    )
-
-    try:
-        body = response.json()
-    except ValueError:
-        body = {"errors": [{"message": response.text[:1000] or f"Buffer HTTP {response.status_code}"}]}
-
-    if response.status_code >= 400:
-        errors = body.get("errors") or []
-        message = errors[0].get("message") if errors else f"Buffer HTTP {response.status_code}"
-        raise Exception(str(message))
-
-    if body.get("errors"):
-        messages = []
-        for error in body["errors"]:
-            if isinstance(error, dict):
-                messages.append(str(error.get("message", "Buffer GraphQL error")))
-            else:
-                messages.append(str(error))
-        raise Exception("; ".join(messages))
-
-    return body.get("data") or {}
-
-
-def buffer_get_organizations(api_key):
-    """Automatically discover every organization available to this Buffer API key.
-
-    The organization IDs are used only during this request flow and are NOT stored
-    in our database. Buffer requires an organization ID when listing channels.
-    """
-    query = """
-        query GetOrganizations {
-          account {
-            id
-            email
-            name
-            organizations {
-              id
-              name
-            }
-          }
-        }
-    """
-    data = buffer_graphql(api_key, query)
-    account = data.get("account") or {}
-    organizations = account.get("organizations") or []
-
-    app.logger.info(
-        "Buffer automatic discovery: account=%s organizations=%s",
-        account.get("email") or account.get("id") or "unknown",
-        len(organizations),
-    )
-    return organizations
-
-
-def buffer_get_channels(api_key, organization_id):
-    """Get all connected Buffer channels for one organization.
-
-    organization_id is transient only. It is never persisted in our DB.
-    """
-    if not organization_id:
-        return []
-
-    query = """
-        query GetChannels($organizationId: OrganizationId!) {
-          channels(input: { organizationId: $organizationId }) {
-            id
-            name
-            displayName
-            service
-            avatar
-            externalLink
-            isDisconnected
-            isLocked
-          }
-        }
-    """
-    data = buffer_graphql(
-        api_key,
-        query,
-        {"organizationId": organization_id},
-    )
-    return data.get("channels") or []
-
-
-def sync_buffer_channels(buffer_key_id, api_key):
-    """Automatically discover and synchronize all Buffer-connected accounts.
-
-    Flow:
-      API key -> organizations -> channels -> local channel cache.
-
-    No organization ID is stored. Stale local channels for this key are removed
-    before the fresh Buffer discovery result is inserted/upserted.
-    """
-    orgs = buffer_get_organizations(api_key)
-    conn = get_db_connection()
-    if not conn:
-        raise Exception("Database connection failed")
-
-    discovered = []
-    seen_channel_ids = set()
-
-    try:
-        cur = conn.cursor()
-
-        # Remove stale cached channels for this key. The fresh Buffer response is
-        # authoritative for the current set of connected channels.
-        cur.execute("DELETE FROM buffer_channels WHERE buffer_key_id=%s", (buffer_key_id,))
-
-        for org in orgs:
-            org_id = org.get("id")
-            org_name = org.get("name") or "Unnamed organization"
-            if not org_id:
-                app.logger.warning("Buffer organization without an ID: %s", org)
-                continue
-
-            try:
-                org_channels = buffer_get_channels(api_key, org_id)
-            except Exception as exc:
-                app.logger.exception(
-                    "Buffer channel discovery failed for organization %s (%s): %s",
-                    org_name,
-                    org_id,
-                    exc,
-                )
-                raise Exception(f"Could not load Buffer accounts for {org_name}: {exc}")
-
-            app.logger.info(
-                "Buffer automatic discovery: organization=%s channels=%s",
-                org_name,
-                len(org_channels),
-            )
-
-            for ch in org_channels:
-                channel_id = ch.get("id")
-                if not channel_id or channel_id in seen_channel_ids:
-                    continue
-                seen_channel_ids.add(channel_id)
-
-                service = (ch.get("service") or "").lower()
-                display_name = ch.get("displayName") or ch.get("name") or channel_id
-
-                cur.execute(
-                    """
-                    INSERT INTO buffer_channels
-                    (buffer_key_id, channel_id, name, display_name, service,
-                     external_link, is_disconnected, is_locked, updated_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
-                    ON CONFLICT (buffer_key_id,channel_id) DO UPDATE SET
-                      name=EXCLUDED.name,
-                      display_name=EXCLUDED.display_name,
-                      service=EXCLUDED.service,
-                      external_link=EXCLUDED.external_link,
-                      is_disconnected=EXCLUDED.is_disconnected,
-                      is_locked=EXCLUDED.is_locked,
-                      updated_at=NOW()
-                    """,
-                    (
-                        buffer_key_id,
-                        channel_id,
-                        ch.get("name"),
-                        display_name,
-                        service,
-                        ch.get("externalLink"),
-                        bool(ch.get("isDisconnected")),
-                        bool(ch.get("isLocked")),
-                    ),
-                )
-
-                discovered.append(
-                    {
-                        "id": channel_id,
-                        "channel_id": channel_id,
-                        "name": ch.get("name"),
-                        "display_name": display_name,
-                        "service": service,
-                        "external_link": ch.get("externalLink"),
-                        "avatar": ch.get("avatar"),
-                        "is_disconnected": bool(ch.get("isDisconnected")),
-                        "is_locked": bool(ch.get("isLocked")),
-                    }
-                )
-
-        conn.commit()
-        app.logger.info(
-            "Buffer automatic discovery complete: %s organization(s), %s channel(s)",
-            len(orgs),
-            len(discovered),
-        )
-        return discovered
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-def publish_to_buffer(api_key, channel_id, text="", video_url=None,
-                      publish_now=True, scheduled_time=None, platform=None,
-                      title=None, youtube_category_id="22"):
-    """Create a Buffer post for one discovered channel."""
-    if not channel_id:
-        raise Exception("Buffer channel_id is required")
-
-    service = (platform or "").lower()
-    if publish_now:
-        mode = "shareNow"
-    elif scheduled_time:
-        mode = "customScheduled"
-    else:
-        mode = "addToQueue"
-
-    post_input = {
-        "text": text or "",
-        "channelId": channel_id,
-        "schedulingType": "automatic",
-        "mode": mode,
-    }
-
-    if scheduled_time and mode == "customScheduled":
-        post_input["dueAt"] = scheduled_time
-
-    if video_url:
-        post_input["assets"] = [{"video": {"url": video_url}}]
-
-    if service == "youtube":
-        post_input["metadata"] = {
-            "youtube": {
-                "title": title or (text or "New video")[:100],
-                "categoryId": str(youtube_category_id or "22"),
-            }
-        }
-
-    query = """
-      mutation CreatePost($input: CreatePostInput!) {
-        createPost(input: $input) {
-          ... on PostActionSuccess {
-            post {
-              id
-              text
-              dueAt
-              status
-            }
-          }
-          ... on MutationError {
-            message
-          }
-        }
-      }
-    """
-
-    result = (
-        buffer_graphql(api_key, query, {"input": post_input}, 120)
-        .get("createPost")
-        or {}
-    )
-
-    if result.get("post"):
-        return {
-            "success": True,
-            "post": result["post"],
-            "publisher_provider": "buffer",
-            "publisher_platform": service,
-            "publisher_account_id": channel_id,
-        }
-
-    raise Exception(result.get("message", "Buffer did not create the post"))
-
-
-def get_buffer_key(buffer_key_id):
-    conn = get_db_connection()
-    if not conn:
-        return None
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            "SELECT * FROM buffer_keys WHERE id=%s AND is_active=TRUE",
-            (buffer_key_id,),
-        )
-        return cur.fetchone()
-    finally:
-        conn.close()
-
-
-def publish_via_pipeline(pipeline, video_url, text, publish_now=True, scheduled_time=None):
-    provider = (pipeline.get("publisher_provider") or "zernio").lower()
-    if provider == "buffer":
-        key = get_buffer_key(pipeline.get("buffer_key_id"))
-        if not key:
-            return {"error": "Buffer key is missing or inactive"}
-        channel_id = pipeline.get("buffer_channel_id")
-        if not channel_id:
-            return {"error": "Buffer channel is not configured for this pipeline"}
-        try:
-            return publish_to_buffer(
-                key["api_key"],
-                channel_id,
-                text,
-                video_url,
-                publish_now,
-                scheduled_time,
-                pipeline.get("buffer_platform"),
-                text,
-            )
-        except Exception as e:
-            return {"error": str(e)}
-    return publish_to_facebook(
-        video_url=video_url,
-        text=text,
-        account_id=pipeline.get("facebook_account_id"),
-        publish_now=publish_now,
-        scheduled_time=scheduled_time,
-        key_id=pipeline.get("zernio_key_id"),
-    )
-
 # ============== ZERNIO (FACEBOOK) INTEGRATION ==============
 
 def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None, key_id=None):
@@ -3733,11 +3425,12 @@ def run_pipeline(pipeline_id):
 
                 try:
                     app.logger.info("3️⃣ FACEBOOK — publishing exactly once")
-                    result = publish_via_pipeline(
-                        pipeline=pipeline,
+                    result = publish_to_facebook(
                         video_url=direct_video_url,
                         text=caption,
-                        publish_now=True
+                        account_id=pipeline['facebook_account_id'],
+                        publish_now=True,
+                        key_id=pipeline.get('zernio_key_id')
                     )
                 finally:
                     release_global_publisher_lock(publish_lock_conn, publish_lock_cur)
@@ -5937,280 +5630,6 @@ def get_caption_status_dual(reel_url):
 def get_all_caption_status():
     return jsonify({"status": "success", "total": len(CAPTION_FETCH_STATUS), "statuses": CAPTION_FETCH_STATUS})
 
-
-# ============== BUFFER API ROUTES ==============
-
-@app.route('/api/buffer/keys', methods=['GET'])
-def get_buffer_keys():
-    """Return saved Buffer API keys plus their automatically discovered channels."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            """
-            SELECT id, name, is_active, created_at, updated_at
-            FROM buffer_keys
-            ORDER BY created_at DESC
-            """
-        )
-        keys = cur.fetchall()
-
-        for key in keys:
-            cur.execute(
-                """
-                SELECT
-                    channel_id AS id,
-                    channel_id,
-                    name,
-                    display_name,
-                    service,
-                    external_link,
-                    is_disconnected,
-                    is_locked,
-                    updated_at
-                FROM buffer_channels
-                WHERE buffer_key_id=%s
-                ORDER BY service, display_name, name
-                """,
-                (key["id"],),
-            )
-            channels = cur.fetchall()
-            key["channels"] = channels
-            key["channel_count"] = len(channels)
-
-        return jsonify({"status": "success", "keys": keys})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route('/api/buffer/keys', methods=['POST'])
-def create_buffer_key():
-    """Save a Buffer API key and automatically discover all its accounts."""
-    data = request.get_json(silent=True) or {}
-    api_key = (data.get("api_key") or "").strip()
-    name = (data.get("name") or "Buffer Account").strip()
-
-    if not api_key:
-        return jsonify({"error": "Buffer API key is required"}), 400
-
-    # Validate and discover BEFORE saving. This prevents dead/invalid keys from
-    # being inserted into the local database.
-    try:
-        organizations = buffer_get_organizations(api_key)
-        if not organizations:
-            return jsonify({
-                "error": "Buffer key is valid but no organizations were returned by Buffer."
-            }), 400
-    except Exception as e:
-        return jsonify({"error": f"Could not validate Buffer API key: {e}"}), 400
-
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-
-    key_id = None
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO buffer_keys(name, api_key)
-            VALUES(%s,%s)
-            ON CONFLICT (api_key) DO UPDATE SET
-                name=EXCLUDED.name,
-                is_active=TRUE,
-                updated_at=NOW()
-            RETURNING id
-            """,
-            (name, api_key),
-        )
-        key_id = cur.fetchone()[0]
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"error": str(e)}), 400
-    finally:
-        conn.close()
-
-    try:
-        channels = sync_buffer_channels(key_id, api_key)
-        return jsonify({
-            "status": "success",
-            "key_id": str(key_id),
-            "organization_count": len(organizations),
-            "channels": channels,
-            "channel_count": len(channels),
-            "message": (
-                f"Buffer connected. Automatically discovered "
-                f"{len(channels)} social account(s) across "
-                f"{len(organizations)} organization(s)."
-            ),
-        })
-    except Exception as e:
-        # The key was saved, but discovery failed. Keep the key so the user can
-        # retry refresh without having to enter it again.
-        return jsonify({
-            "status": "partial",
-            "key_id": str(key_id),
-            "error": f"Buffer key was saved, but automatic account discovery failed: {e}",
-        }), 400
-
-
-@app.route('/api/buffer/keys/<key_id>', methods=['DELETE'])
-def delete_buffer_key(key_id):
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM buffer_keys WHERE id=%s", (key_id,))
-        deleted = cur.rowcount
-        conn.commit()
-        return jsonify({"status": "success", "deleted": deleted})
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route('/api/buffer/keys/<key_id>/refresh', methods=['POST'])
-def refresh_buffer_key(key_id):
-    """Re-discover Buffer accounts automatically using the saved API key."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            "SELECT api_key FROM buffer_keys WHERE id=%s AND is_active=TRUE",
-            (key_id,),
-        )
-        row = cur.fetchone()
-    finally:
-        conn.close()
-
-    if not row:
-        return jsonify({"error": "Buffer key not found or inactive"}), 404
-
-    try:
-        organizations = buffer_get_organizations(row["api_key"])
-        channels = sync_buffer_channels(key_id, row["api_key"])
-        return jsonify({
-            "status": "success",
-            "organization_count": len(organizations),
-            "channels": channels,
-            "count": len(channels),
-            "message": f"Automatically discovered {len(channels)} social account(s).",
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-
-@app.route('/api/buffer/channels', methods=['GET'])
-def get_buffer_channels():
-    """Return all automatically discovered active Buffer social accounts."""
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            """
-            SELECT
-                c.id,
-                c.buffer_key_id AS key_id,
-                k.name AS key_name,
-                c.channel_id,
-                c.name,
-                c.display_name,
-                c.service,
-                c.external_link,
-                c.is_disconnected,
-                c.is_locked
-            FROM buffer_channels c
-            JOIN buffer_keys k ON k.id=c.buffer_key_id
-            WHERE k.is_active=TRUE
-            ORDER BY c.service, c.display_name, c.name
-            """
-        )
-        return jsonify({"status": "success", "channels": cur.fetchall()})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route('/api/publish/manual', methods=['POST'])
-def publish_manual_unified():
-    data = request.get_json(silent=True) or {}
-    provider = (data.get("provider") or "buffer").lower()
-    text = data.get("text", "")
-    video_url = data.get("video_url")
-    scheduled_time = data.get("scheduled_time")
-    publish_now = not bool(scheduled_time)
-
-    try:
-        if provider == "buffer":
-            channel_id = data.get("channel_id")
-            if not channel_id:
-                return jsonify({"error": "channel_id is required"}), 400
-
-            conn = get_db_connection()
-            if not conn:
-                return jsonify({"error": "Database connection failed"}), 500
-            try:
-                cur = conn.cursor(cursor_factory=RealDictCursor)
-                cur.execute(
-                    """
-                    SELECT k.api_key, c.service
-                    FROM buffer_channels c
-                    JOIN buffer_keys k ON k.id=c.buffer_key_id
-                    WHERE c.channel_id=%s
-                      AND k.is_active=TRUE
-                    LIMIT 1
-                    """,
-                    (channel_id,),
-                )
-                row = cur.fetchone()
-            finally:
-                conn.close()
-
-            if not row:
-                return jsonify({"error": "Buffer channel not found or key inactive"}), 404
-
-            return jsonify(
-                publish_to_buffer(
-                    row["api_key"],
-                    channel_id,
-                    text,
-                    video_url,
-                    publish_now,
-                    scheduled_time,
-                    row["service"],
-                    data.get("title"),
-                )
-            )
-
-        if provider == "zernio":
-            return jsonify(
-                publish_to_facebook(
-                    video_url=video_url,
-                    text=text,
-                    account_id=data.get("account_id"),
-                    publish_now=publish_now,
-                    scheduled_time=scheduled_time,
-                    key_id=data.get("key_id"),
-                )
-            )
-
-        return jsonify({"error": f"Unsupported provider: {provider}"}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
 # ============== PIPELINE API ROUTES ==============
 
 @app.route('/api/pipelines', methods=['GET'])
@@ -6238,13 +5657,7 @@ def get_pipelines():
                 p.total_posted,
                 p.created_at,
                 p.updated_at,
-                p.zernio_key_id,
-                p.publisher_provider,
-                p.source_mode,
-                p.buffer_key_id,
-                p.buffer_channel_id,
-                p.buffer_channel_name,
-                p.buffer_platform
+                p.zernio_key_id
             FROM pipelines p
             ORDER BY p.created_at DESC
         """)
@@ -6335,22 +5748,12 @@ def create_pipeline():
     data = request.get_json(silent=True) or {}
     name = data.get('name')
     profile_username = data.get('profile_username')
-    facebook_account_id = data.get('facebook_account_id') or ''
+    facebook_account_id = data.get('facebook_account_id')
     daily_limit = data.get('daily_limit', 2)
-    zernio_key_id = data.get('zernio_key_id')
-    publisher_provider = (data.get('publisher_provider') or 'zernio').lower()
-    source_mode = (data.get('source_mode') or 'scraped').lower()
-    buffer_key_id = data.get('buffer_key_id')
-    buffer_channel_id = data.get('buffer_channel_id')
-    buffer_channel_name = data.get('buffer_channel_name')
-    buffer_platform = data.get('buffer_platform')
-
-    if not name or not profile_username:
-        return jsonify({"error": "name and profile_username are required"}), 400
-    if publisher_provider == 'zernio' and not facebook_account_id:
-        return jsonify({"error": "facebook_account_id is required for Zernio pipelines"}), 400
-    if publisher_provider == 'buffer' and (not buffer_key_id or not buffer_channel_id):
-        return jsonify({"error": "buffer_key_id and buffer_channel_id are required for Buffer pipelines"}), 400
+    zernio_key_id = data.get('zernio_key_id')  # Optional: assign a specific key
+    
+    if not name or not profile_username or not facebook_account_id:
+        return jsonify({"error": "name, profile_username, and facebook_account_id are required"}), 400
     
     conn = get_db_connection()
     if not conn:
@@ -6359,11 +5762,9 @@ def create_pipeline():
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO pipelines (id, name, profile_username, facebook_account_id, daily_limit, is_active,
-                zernio_key_id, publisher_provider, source_mode, buffer_key_id, buffer_channel_id, buffer_channel_name, buffer_platform)
-            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-        """, (name, profile_username, facebook_account_id, daily_limit, zernio_key_id,
-              publisher_provider, source_mode, buffer_key_id, buffer_channel_id, buffer_channel_name, buffer_platform))
+            INSERT INTO pipelines (id, name, profile_username, facebook_account_id, daily_limit, is_active, zernio_key_id)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE, %s) RETURNING id
+        """, (name, profile_username, facebook_account_id, daily_limit, zernio_key_id))
         pipeline_id = cur.fetchone()[0]
         conn.commit()
         return jsonify({"status": "success", "message": "Pipeline created", "pipeline_id": pipeline_id})
@@ -6394,18 +5795,6 @@ def update_pipeline(pipeline_id):
             updates.append("is_active = %s"); params.append(data['is_active'])
         if 'zernio_key_id' in data:
             updates.append("zernio_key_id = %s"); params.append(data['zernio_key_id'])
-        if 'publisher_provider' in data:
-            updates.append("publisher_provider = %s"); params.append((data['publisher_provider'] or 'zernio').lower())
-        if 'source_mode' in data:
-            updates.append("source_mode = %s"); params.append((data['source_mode'] or 'scraped').lower())
-        if 'buffer_key_id' in data:
-            updates.append("buffer_key_id = %s"); params.append(data['buffer_key_id'])
-        if 'buffer_channel_id' in data:
-            updates.append("buffer_channel_id = %s"); params.append(data['buffer_channel_id'])
-        if 'buffer_channel_name' in data:
-            updates.append("buffer_channel_name = %s"); params.append(data['buffer_channel_name'])
-        if 'buffer_platform' in data:
-            updates.append("buffer_platform = %s"); params.append(data['buffer_platform'])
         if not updates:
             return jsonify({"error": "No fields to update"}), 400
         updates.append("updated_at = NOW()")
@@ -7732,6 +7121,183 @@ def update_setting_endpoint():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# ============== BUFFER / TIKTOK ROUTES ==============
+
+@app.route('/api/buffer/key', methods=['GET'])
+def get_buffer_key_status():
+    """Return whether a Buffer API key is configured (never return the raw key)."""
+    key = get_setting('buffer_api_key') or os.environ.get('BUFFER_API_KEY')
+    has_key = bool(key and str(key).strip())
+    masked = None
+    if has_key:
+        k = str(key).strip()
+        masked = (k[:6] + '…' + k[-4:]) if len(k) > 12 else '••••••••'
+    return jsonify({
+        "status": "success",
+        "has_key": has_key,
+        "masked_key": masked,
+    })
+
+
+@app.route('/api/buffer/key', methods=['POST', 'PUT'])
+def save_buffer_key():
+    """Save Buffer API key from the UI into app_settings."""
+    data = request.get_json(silent=True) or {}
+    api_key = (data.get('api_key') or data.get('value') or '').strip()
+
+    if not api_key:
+        return jsonify({"error": "api_key is required"}), 400
+
+    # Optional validation before saving
+    validate = data.get('validate', True)
+    if validate:
+        result = tiktok_module.validate_buffer_key(api_key)
+        if not result.get('valid'):
+            return jsonify({
+                "status": "error",
+                "valid": False,
+                "message": result.get('message', 'Invalid Buffer API key'),
+            }), 400
+
+    ok = update_setting('buffer_api_key', api_key)
+    if not ok:
+        return jsonify({"error": "Failed to save key to database"}), 500
+
+    # Also refresh description
+    try:
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE app_settings
+                SET description = %s, setting_type = 'string', updated_at = NOW()
+                WHERE setting_key = 'buffer_api_key'
+            """, ('Buffer API key for TikTok posting',))
+            conn.commit()
+            cur.close()
+            conn.close()
+    except Exception:
+        pass
+
+    return jsonify({
+        "status": "success",
+        "message": "Buffer API key saved",
+        "has_key": True,
+        "validation": result if validate else None,
+    })
+
+
+@app.route('/api/buffer/key', methods=['DELETE'])
+def clear_buffer_key():
+    """Remove the Buffer API key."""
+    ok = update_setting('buffer_api_key', '')
+    if not ok:
+        return jsonify({"error": "Failed to clear key"}), 500
+    return jsonify({"status": "success", "message": "Buffer API key cleared", "has_key": False})
+
+
+@app.route('/api/buffer/validate-key', methods=['POST'])
+def validate_buffer_key_endpoint():
+    """Validate a Buffer API key without saving it."""
+    data = request.get_json(silent=True) or {}
+    api_key = (data.get('api_key') or '').strip()
+    if not api_key:
+        return jsonify({"valid": False, "message": "api_key required"}), 400
+    result = tiktok_module.validate_buffer_key(api_key)
+    status = 200 if result.get('valid') else 400
+    return jsonify(result), status
+
+
+@app.route('/api/buffer/channels', methods=['GET'])
+def get_buffer_channels():
+    """List channels from Buffer. Optional ?service=tiktok to filter."""
+    service = (request.args.get('service') or '').lower().strip()
+    try:
+        if service in ('tiktok', 'tik tok'):
+            channels = tiktok_module.list_tiktok_channels()
+        else:
+            channels = tiktok_module.list_channels()
+        return jsonify({
+            "status": "success",
+            "channels": channels,
+            "count": len(channels),
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e), "hint": "Save a Buffer API key in the UI first"}), 400
+    except Exception as e:
+        app.logger.error(f"Buffer channels error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/tiktok/post', methods=['POST'])
+def tiktok_manual_post():
+    """
+    Manual TikTok post via Buffer.
+
+    Body:
+    {
+      "channel_id": "...",          # required – Buffer TikTok channel ID
+      "video_url": "https://...",   # required – public direct video URL
+      "text": "caption",            # optional
+      "due_at": "2026-09-12T14:30:00Z",  # optional ISO schedule
+      "add_to_queue": false,        # optional
+      "thumbnail_offset_ms": 1000   # optional
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    channel_id = (data.get('channel_id') or '').strip()
+    video_url = (data.get('video_url') or data.get('url') or '').strip()
+    text = data.get('text') or data.get('caption') or ''
+    due_at = data.get('due_at') or data.get('scheduled_time')
+    add_to_queue = bool(data.get('add_to_queue', False))
+    thumbnail_offset_ms = int(data.get('thumbnail_offset_ms') or 1000)
+
+    if not channel_id:
+        return jsonify({"error": "channel_id is required"}), 400
+    if not video_url:
+        return jsonify({"error": "video_url is required"}), 400
+
+    try:
+        result = tiktok_module.post_video_to_tiktok(
+            channel_id=channel_id,
+            video_url=video_url,
+            text=text,
+            due_at=due_at,
+            thumbnail_offset_ms=thumbnail_offset_ms,
+            add_to_queue=add_to_queue,
+        )
+        return jsonify({"status": "success", **result})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        app.logger.error(f"TikTok post error: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/tiktok/status', methods=['GET'])
+def tiktok_status():
+    """Quick health check for TikTok / Buffer integration."""
+    key = get_setting('buffer_api_key') or os.environ.get('BUFFER_API_KEY')
+    has_key = bool(key and str(key).strip())
+    channels = []
+    error = None
+    if has_key:
+        try:
+            channels = tiktok_module.list_tiktok_channels()
+        except Exception as e:
+            error = str(e)
+    return jsonify({
+        "status": "success",
+        "has_buffer_key": has_key,
+        "tiktok_channel_count": len(channels),
+        "channels": channels,
+        "error": error,
+    })
+
+
 # ============== AFTER REQUEST ==============
 
 @app.after_request
@@ -7742,3 +7308,4 @@ def after_request(response):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
+
