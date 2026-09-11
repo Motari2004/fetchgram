@@ -83,8 +83,6 @@ def get_db_connection():
 
 
 
-
-
 def init_db():
     conn = get_db_connection()
     if not conn:
@@ -282,6 +280,27 @@ def init_db():
             );
         """)
         
+        # ========== BUFFER KEYS SAFETY NET ==========
+        # If the table already existed in an older/partial shape, add any missing columns.
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS name TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS api_key TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS tiktok_channel_id TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS tiktok_channel_name TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS last_used TIMESTAMP WITH TIME ZONE;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        
+        # Make sure the unique constraint on api_key exists (may fail silently if already present)
+        try:
+            cur.execute("""
+                ALTER TABLE buffer_keys
+                ADD CONSTRAINT buffer_keys_api_key_key UNIQUE (api_key);
+            """)
+        except Exception:
+            conn.rollback()
+            # Rollback only this statement; re-open a fresh cursor state by continuing.
+        
         # ========== APP SETTINGS TABLE ==========
         cur.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -351,8 +370,6 @@ def init_db():
     finally:
         cur.close()
         conn.close()
-        
-        
         
         
         
