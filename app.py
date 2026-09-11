@@ -273,6 +273,27 @@ def init_db():
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        # Create the channels table first. ALTER TABLE cannot run against a
+        # table that does not exist, which caused initialization to stop on
+        # fresh databases.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS buffer_channels (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                buffer_key_id UUID REFERENCES buffer_keys(id) ON DELETE CASCADE,
+                channel_id TEXT NOT NULL,
+                name TEXT,
+                display_name TEXT,
+                service TEXT,
+                external_link TEXT,
+                is_disconnected BOOLEAN DEFAULT FALSE,
+                is_locked BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(buffer_key_id, channel_id)
+            );
+        """)
+
+        # Safe migrations for existing installations.
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS name TEXT;")
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS display_name TEXT;")
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS service TEXT;")
@@ -281,20 +302,6 @@ def init_db():
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS is_locked BOOLEAN DEFAULT FALSE;")
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS buffer_channels (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                buffer_key_id UUID REFERENCES buffer_keys(id) ON DELETE CASCADE,
-                channel_id TEXT NOT NULL,
-                name TEXT, display_name TEXT, service TEXT NOT NULL,
-                external_link TEXT, is_disconnected BOOLEAN DEFAULT FALSE,
-                is_locked BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                UNIQUE(buffer_key_id, channel_id)
-            );
-        """)
         # Buffer does not persist organization_id; it is only used transiently\n        # when querying Buffer's channel API. Remove legacy columns from older schemas.\n        cur.execute("ALTER TABLE buffer_keys DROP COLUMN IF EXISTS organization_id;")\n        cur.execute("ALTER TABLE buffer_channels DROP COLUMN IF EXISTS organization_id;")\n\n        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_active ON buffer_keys(is_active);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_channels_key ON buffer_channels(buffer_key_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_channels_service ON buffer_channels(service);")
