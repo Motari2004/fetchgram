@@ -2989,7 +2989,7 @@ def claim_due_posts(limit=5, pipeline_id=None):
         cur.execute("""
             UPDATE scheduled_posts
             SET status = 'processing', updated_at = NOW(), error_message = NULL
-            WHERE id = ANY(%s)
+            WHERE id = ANY(%s::uuid[])
             RETURNING *
         """, (ids,))
         claimed = cur.fetchall()
