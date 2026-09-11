@@ -155,7 +155,6 @@ def init_db():
             );
         """)
         
-        # Add columns if they don't exist
         cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;")
         cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS caption TEXT;")
         
@@ -217,7 +216,7 @@ def init_db():
             );
         """)
         
-        # Pending posts table (kept for backward compatibility but not used in new flow)
+        # Pending posts table (backward compatibility)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pending_posts (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -240,7 +239,6 @@ def init_db():
             );
         """)
         
-        # Add columns if they don't exist
         cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS wakeup_sent BOOLEAN DEFAULT FALSE;")
         cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;")
         cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;")
@@ -262,10 +260,30 @@ def init_db():
             );
         """)
         
-        # Add zernio_key_id to pipelines
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
         
         # ========== BUFFER KEYS TABLE (TikTok) ==========
+        # Detect a stale/incorrect buffer_keys shape (e.g. leftover columns
+        # like api_key_encrypted with a NOT NULL constraint) and recreate it.
+        cur.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'buffer_keys'
+        """)
+        existing_cols = {row[0] for row in cur.fetchall()}
+
+        needs_recreate = bool(existing_cols) and (
+            'api_key' not in existing_cols
+            or 'api_key_encrypted' in existing_cols
+            or 'tiktok_channel_id' not in existing_cols
+        )
+
+        if needs_recreate:
+            app.logger.warning(
+                f"⚠️ buffer_keys has wrong shape {sorted(existing_cols)}; recreating"
+            )
+            cur.execute("DROP TABLE IF EXISTS buffer_keys CASCADE;")
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS buffer_keys (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -279,27 +297,6 @@ def init_db():
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
         """)
-        
-        # ========== BUFFER KEYS SAFETY NET ==========
-        # If the table already existed in an older/partial shape, add any missing columns.
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS name TEXT;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS api_key TEXT;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS tiktok_channel_id TEXT;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS tiktok_channel_name TEXT;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS last_used TIMESTAMP WITH TIME ZONE;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
-        
-        # Make sure the unique constraint on api_key exists (may fail silently if already present)
-        try:
-            cur.execute("""
-                ALTER TABLE buffer_keys
-                ADD CONSTRAINT buffer_keys_api_key_key UNIQUE (api_key);
-            """)
-        except Exception:
-            conn.rollback()
-            # Rollback only this statement; re-open a fresh cursor state by continuing.
         
         # ========== APP SETTINGS TABLE ==========
         cur.execute("""
@@ -315,7 +312,6 @@ def init_db():
             );
         """)
         
-        # Insert default settings
         cur.execute("""
             INSERT INTO app_settings (setting_key, setting_value, description) VALUES
                 ('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption', 'Caption service endpoint'),
@@ -328,7 +324,7 @@ def init_db():
             ON CONFLICT (setting_key) DO NOTHING;
         """)
         
-        # Create indexes
+        # Indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id ON scraped_reels(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at ON scraped_reels(created_at DESC);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id ON user_cookies(user_id);")
@@ -354,7 +350,7 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);")
         
-        # ========== BUFFER KEYS INDEXES ==========
+        # Buffer indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_api_key ON buffer_keys(api_key);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_is_active ON buffer_keys(is_active);")
         
