@@ -139,10 +139,6 @@ def init_db():
             );
         """)
         
-        # Add columns if they don't exist
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS caption TEXT;")
-        
         # Pipeline runs log
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pipeline_runs (
@@ -201,7 +197,7 @@ def init_db():
             );
         """)
         
-        # Pending posts table (kept for backward compatibility but not used in new flow)
+        # Pending posts table (backward compat)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pending_posts (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -224,11 +220,6 @@ def init_db():
             );
         """)
         
-        # Add columns if they don't exist
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS wakeup_sent BOOLEAN DEFAULT FALSE;")
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;")
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;")
-        
         # ========== ZERNIO KEYS TABLE ==========
         cur.execute("""
             CREATE TABLE IF NOT EXISTS zernio_keys (
@@ -245,9 +236,6 @@ def init_db():
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
         """)
-        
-        # Add zernio_key_id to pipelines
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
         
         # ========== APP SETTINGS TABLE ==========
         cur.execute("""
@@ -276,7 +264,7 @@ def init_db():
             ON CONFLICT (setting_key) DO NOTHING;
         """)
         
-        # ========== NEW: BUFFER KEYS TABLE (Twitter + TikTok) ==========
+        # ========== BUFFER KEYS TABLE (Twitter + TikTok) ==========
         cur.execute("""
             CREATE TABLE IF NOT EXISTS buffer_keys (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -293,7 +281,7 @@ def init_db():
             );
         """)
         
-        # ========== NEW: BUFFER CHANNELS TABLE ==========
+        # ========== BUFFER CHANNELS TABLE ==========
         cur.execute("""
             CREATE TABLE IF NOT EXISTS buffer_channels (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -310,17 +298,53 @@ def init_db():
             );
         """)
         
-        # ========== ADD BUFFER COLUMNS TO PIPELINES ==========
+        # ============================================================
+        # ENSURE ALL COLUMNS EXIST (protects against tables created
+        # by earlier schema versions)
+        # ============================================================
+        
+        # posted_reels
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS caption TEXT;")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'facebook';")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS external_post_url TEXT;")
+        
+        # pending_posts
+        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS wakeup_sent BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;")
+        
+        # pipelines
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'facebook';")
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_key_id UUID REFERENCES buffer_keys(id);")
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_id TEXT;")
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_name TEXT;")
         
-        # ========== ADD BUFFER COLUMNS TO POSTED_REELS ==========
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'facebook';")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS external_post_url TEXT;")
+        # buffer_keys — protects against an earlier minimal schema
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS organization_id TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS organization_name TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS daily_limit INTEGER DEFAULT 50;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS usage_count INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS last_used TIMESTAMP WITH TIME ZONE;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
         
-        # Create indexes
+        # buffer_channels — same protection
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS buffer_key_id UUID REFERENCES buffer_keys(id) ON DELETE CASCADE;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS name TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS display_name TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS service TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS avatar TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS is_disconnected BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        
+        # ============================================================
+        # INDEXES
+        # ============================================================
+        
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id ON scraped_reels(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at ON scraped_reels(created_at DESC);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id ON user_cookies(user_id);")
@@ -347,7 +371,7 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);")
         
-        # ========== NEW BUFFER INDEXES ==========
+        # Buffer indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_api_key ON buffer_keys(api_key);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_is_active ON buffer_keys(is_active);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_organization_id ON buffer_keys(organization_id);")
@@ -368,6 +392,10 @@ def init_db():
         app.logger.error(f"❌ Database init error: {e}")
         import traceback
         app.logger.error(traceback.format_exc())
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     finally:
         cur.close()
         conn.close()
