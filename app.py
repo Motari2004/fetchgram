@@ -19,8 +19,19 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-# TikTok / Buffer integration
-import tiktok as tiktok_module
+# TikTok / Buffer integration (tiktok.py must sit next to app.py)
+try:
+    import tiktok as tiktok_module
+except ImportError:
+    import importlib.util
+    import pathlib
+    _tiktok_path = pathlib.Path(__file__).resolve().parent / "tiktok.py"
+    if _tiktok_path.exists():
+        _spec = importlib.util.spec_from_file_location("tiktok", str(_tiktok_path))
+        tiktok_module = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(tiktok_module)
+    else:
+        tiktok_module = None
 
 # Load .env file manually if it exists (for local development)
 try:
@@ -406,6 +417,17 @@ def update_setting(key, value):
 
 # Load settings on startup
 load_app_settings()
+
+# Wire Buffer key into tiktok module (no circular import)
+if tiktok_module is not None:
+    try:
+        tiktok_module.set_key_provider(lambda: get_setting("buffer_api_key"))
+        # Seed in-memory key from current settings / env
+        _buf_key = get_setting("buffer_api_key") or os.environ.get("BUFFER_API_KEY")
+        if _buf_key:
+            tiktok_module.set_buffer_api_key(_buf_key)
+    except Exception as _e:
+        app.logger.warning(f"Could not wire Buffer key provider: {_e}")
 
 # ============== ZERNIO KEY MANAGER ==============
 
@@ -7124,6 +7146,14 @@ def update_setting_endpoint():
 
 # ============== BUFFER / TIKTOK ROUTES ==============
 
+def _require_tiktok_module():
+    if tiktok_module is None:
+        return jsonify({
+            "error": "tiktok module not found. Place tiktok.py next to app.py and restart."
+        }), 500
+    return None
+
+
 @app.route('/api/buffer/key', methods=['GET'])
 def get_buffer_key_status():
     """Return whether a Buffer API key is configured (never return the raw key)."""
@@ -7143,6 +7173,10 @@ def get_buffer_key_status():
 @app.route('/api/buffer/key', methods=['POST', 'PUT'])
 def save_buffer_key():
     """Save Buffer API key from the UI into app_settings."""
+    missing = _require_tiktok_module()
+    if missing:
+        return missing
+
     data = request.get_json(silent=True) or {}
     api_key = (data.get('api_key') or data.get('value') or '').strip()
 
@@ -7151,6 +7185,7 @@ def save_buffer_key():
 
     # Optional validation before saving
     validate = data.get('validate', True)
+    result = None
     if validate:
         result = tiktok_module.validate_buffer_key(api_key)
         if not result.get('valid'):
@@ -7163,6 +7198,10 @@ def save_buffer_key():
     ok = update_setting('buffer_api_key', api_key)
     if not ok:
         return jsonify({"error": "Failed to save key to database"}), 500
+
+    # Keep in-memory key in sync for immediate use
+    if tiktok_module is not None:
+        tiktok_module.set_buffer_api_key(api_key)
 
     # Also refresh description
     try:
@@ -7194,12 +7233,17 @@ def clear_buffer_key():
     ok = update_setting('buffer_api_key', '')
     if not ok:
         return jsonify({"error": "Failed to clear key"}), 500
+    if tiktok_module is not None:
+        tiktok_module.set_buffer_api_key(None)
     return jsonify({"status": "success", "message": "Buffer API key cleared", "has_key": False})
 
 
 @app.route('/api/buffer/validate-key', methods=['POST'])
 def validate_buffer_key_endpoint():
     """Validate a Buffer API key without saving it."""
+    missing = _require_tiktok_module()
+    if missing:
+        return missing
     data = request.get_json(silent=True) or {}
     api_key = (data.get('api_key') or '').strip()
     if not api_key:
@@ -7212,6 +7256,9 @@ def validate_buffer_key_endpoint():
 @app.route('/api/buffer/channels', methods=['GET'])
 def get_buffer_channels():
     """List channels from Buffer. Optional ?service=tiktok to filter."""
+    missing = _require_tiktok_module()
+    if missing:
+        return missing
     service = (request.args.get('service') or '').lower().strip()
     try:
         if service in ('tiktok', 'tik tok'):
@@ -7245,6 +7292,10 @@ def tiktok_manual_post():
       "thumbnail_offset_ms": 1000   # optional
     }
     """
+    missing = _require_tiktok_module()
+    if missing:
+        return missing
+
     data = request.get_json(silent=True) or {}
     channel_id = (data.get('channel_id') or '').strip()
     video_url = (data.get('video_url') or data.get('url') or '').strip()
@@ -7284,7 +7335,9 @@ def tiktok_status():
     has_key = bool(key and str(key).strip())
     channels = []
     error = None
-    if has_key:
+    if tiktok_module is None:
+        error = "tiktok module not loaded (place tiktok.py next to app.py)"
+    elif has_key:
         try:
             channels = tiktok_module.list_tiktok_channels()
         except Exception as e:
@@ -7295,6 +7348,7 @@ def tiktok_status():
         "tiktok_channel_count": len(channels),
         "channels": channels,
         "error": error,
+        "module_loaded": tiktok_module is not None,
     })
 
 
@@ -7308,4 +7362,3 @@ def after_request(response):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
-

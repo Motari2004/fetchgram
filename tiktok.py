@@ -3,37 +3,67 @@ TikTok posting via Buffer GraphQL API.
 
 - Buffer API key is managed from the UI and stored in app_settings.
 - Supports manual posts and autonomous pipelines.
+
+This module has NO dependency on app.py (avoids circular imports).
+Pass the API key via set_buffer_api_key() or the BUFFER_API_KEY env var.
 """
+
+from __future__ import annotations
 
 import os
 import logging
 import requests
-from typing import Optional, Dict, Any, List
-from datetime import datetime
+from typing import Optional, Dict, Any, List, Callable
 
 logger = logging.getLogger(__name__)
 
 BUFFER_API_URL = "https://api.buffer.com"
 
+# Module-level key (set by app after load_app_settings, or from env)
+_BUFFER_API_KEY: Optional[str] = None
 
-# ---------------------------------------------------------------------------
-# Key helpers (loaded from app_settings / env)
-# ---------------------------------------------------------------------------
+# Optional callback the app can register to fetch the key from DB/settings
+_key_provider: Optional[Callable[[], Optional[str]]] = None
+
+
+def set_buffer_api_key(key: Optional[str]) -> None:
+    """Set the Buffer API key in memory (called by app after saving from UI)."""
+    global _BUFFER_API_KEY
+    _BUFFER_API_KEY = (key or "").strip() or None
+
+
+def set_key_provider(provider: Callable[[], Optional[str]]) -> None:
+    """
+    Register a function that returns the current Buffer API key
+    (e.g. lambda: get_setting('buffer_api_key')).
+    """
+    global _key_provider
+    _key_provider = provider
+
 
 def get_buffer_api_key() -> Optional[str]:
     """
-    Prefer the key saved from the UI (app_settings), fall back to env.
+    Resolve Buffer API key in this order:
+    1. In-memory key set via set_buffer_api_key()
+    2. Key provider callback (from app settings)
+    3. BUFFER_API_KEY environment variable
     """
-    try:
-        # Late import to avoid circular imports with app.py
-        from app import get_setting
-        key = get_setting("buffer_api_key")
-        if key and str(key).strip():
-            return str(key).strip()
-    except Exception as e:
-        logger.debug(f"Could not load buffer_api_key from settings: {e}")
+    if _BUFFER_API_KEY:
+        return _BUFFER_API_KEY
 
-    return os.environ.get("BUFFER_API_KEY") or None
+    if _key_provider is not None:
+        try:
+            key = _key_provider()
+            if key and str(key).strip():
+                return str(key).strip()
+        except Exception as e:
+            logger.debug(f"Key provider failed: {e}")
+
+    env_key = os.environ.get("BUFFER_API_KEY")
+    if env_key and env_key.strip():
+        return env_key.strip()
+
+    return None
 
 
 def _headers() -> Dict[str, str]:
@@ -76,28 +106,66 @@ def _gql(query: str, variables: Optional[Dict] = None) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Channels
+# Organizations & Channels
 # ---------------------------------------------------------------------------
 
-def list_channels() -> List[Dict[str, Any]]:
-    """Return all channels connected to the Buffer account."""
+def list_organizations() -> List[Dict[str, Any]]:
+    """Return organizations for the authenticated Buffer account."""
     query = """
     query {
-      channels {
+      account {
+        organizations {
+          id
+          name
+        }
+      }
+    }
+    """
+    data = _gql(query)
+    account = data.get("account") or {}
+    return account.get("organizations") or []
+
+
+def get_default_organization_id() -> Optional[str]:
+    """
+    Return the first organization ID (most accounts have one).
+    """
+    orgs = list_organizations()
+    if not orgs:
+        return None
+    return orgs[0].get("id")
+
+
+def list_channels(organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Return all channels for a Buffer organization.
+    Buffer requires organizationId in ChannelsInput.
+    """
+    org_id = organization_id or get_default_organization_id()
+    if not org_id:
+        raise ValueError(
+            "No Buffer organization found for this API key. "
+            "Check the key and that the account has an organization."
+        )
+
+    query = """
+    query GetChannels($orgId: OrganizationId!) {
+      channels(input: { organizationId: $orgId }) {
         id
         name
+        displayName
         service
         avatar
       }
     }
     """
-    data = _gql(query)
+    data = _gql(query, {"orgId": org_id})
     return data.get("channels") or []
 
 
-def list_tiktok_channels() -> List[Dict[str, Any]]:
+def list_tiktok_channels(organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Return only TikTok channels."""
-    channels = list_channels()
+    channels = list_channels(organization_id=organization_id)
     return [
         c for c in channels
         if (c.get("service") or "").lower() in ("tiktok", "tik tok")
@@ -136,13 +204,11 @@ def post_video_to_tiktok(
     if not video_url:
         raise ValueError("video_url is required")
 
-    # Decide scheduling mode
     if due_at:
         mode = "customScheduled"
     elif add_to_queue:
         mode = "addToQueue"
     else:
-        # Safe default: put in queue so Buffer handles timing
         mode = "addToQueue"
 
     mutation = """
@@ -179,7 +245,6 @@ def post_video_to_tiktok(
     }
 
     if due_at:
-        # Ensure Buffer-friendly ISO format
         if due_at.endswith("Z") or "+" in due_at:
             input_data["dueAt"] = due_at
         else:
@@ -210,7 +275,7 @@ def post_video_to_tiktok(
 
 def validate_buffer_key(api_key: str) -> Dict[str, Any]:
     """
-    Quick validation: try listing channels with the provided key.
+    Quick validation: resolve org + list channels with the provided key.
     Does not persist the key.
     """
     if not api_key or not api_key.strip():
@@ -220,43 +285,77 @@ def validate_buffer_key(api_key: str) -> Dict[str, Any]:
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
     }
-    query = """
-    query {
-      channels {
-        id
-        name
-        service
-      }
-    }
-    """
-    try:
+
+    def _post(query: str, variables: Optional[Dict] = None) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"query": query}
+        if variables is not None:
+            payload["variables"] = variables
         resp = requests.post(
             BUFFER_API_URL,
-            json={"query": query},
+            json=payload,
             headers=headers,
             timeout=30,
         )
         if resp.status_code != 200:
-            return {
-                "valid": False,
-                "message": f"HTTP {resp.status_code}: {resp.text[:200]}",
-            }
-        data = resp.json()
-        if "errors" in data and data["errors"]:
-            msg = data["errors"][0].get("message", str(data["errors"]))
-            return {"valid": False, "message": msg}
+            raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        body = resp.json()
+        if "errors" in body and body["errors"]:
+            msg = body["errors"][0].get("message", str(body["errors"]))
+            raise Exception(msg)
+        return body.get("data") or {}
 
-        channels = (data.get("data") or {}).get("channels") or []
+    try:
+        # 1) Organizations
+        org_data = _post("""
+            query {
+              account {
+                organizations { id name }
+              }
+            }
+        """)
+        orgs = (org_data.get("account") or {}).get("organizations") or []
+        if not orgs:
+            return {
+                "valid": True,
+                "channel_count": 0,
+                "tiktok_count": 0,
+                "tiktok_channels": [],
+                "message": "Key OK but no organizations found on this account",
+            }
+
+        org_id = orgs[0]["id"]
+        org_name = orgs[0].get("name") or org_id
+
+        # 2) Channels for that org
+        ch_data = _post(
+            """
+            query GetChannels($orgId: OrganizationId!) {
+              channels(input: { organizationId: $orgId }) {
+                id
+                name
+                displayName
+                service
+              }
+            }
+            """,
+            {"orgId": org_id},
+        )
+        channels = ch_data.get("channels") or []
         tiktok = [
             c for c in channels
             if (c.get("service") or "").lower() in ("tiktok", "tik tok")
         ]
         return {
             "valid": True,
+            "organization_id": org_id,
+            "organization_name": org_name,
             "channel_count": len(channels),
             "tiktok_count": len(tiktok),
             "tiktok_channels": tiktok,
-            "message": f"Key OK — {len(tiktok)} TikTok channel(s) found",
+            "message": (
+                f"Key OK — org “{org_name}”, "
+                f"{len(channels)} channel(s), {len(tiktok)} TikTok"
+            ),
         }
     except Exception as e:
         return {"valid": False, "message": str(e)}
