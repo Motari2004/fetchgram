@@ -1,11 +1,13 @@
 """
 TikTok posting via Buffer GraphQL API.
 
-- Buffer API key is managed from the UI and stored in app_settings.
-- Supports manual posts and autonomous pipelines.
+Matches the proven Buffer client pattern:
+- Resolve organizations from account
+- List channels with ChannelsInput { organizationId }
+- createPost with video asset + thumbnailOffset
 
-This module has NO dependency on app.py (avoids circular imports).
-Pass the API key via set_buffer_api_key() or the BUFFER_API_KEY env var.
+API key is managed from the UI (app_settings) or BUFFER_API_KEY env.
+This module does NOT import app.py (no circular imports).
 """
 
 from __future__ import annotations
@@ -66,43 +68,35 @@ def get_buffer_api_key() -> Optional[str]:
     return None
 
 
-def _headers() -> Dict[str, str]:
+def buffer(query: str, variables: Optional[Dict] = None) -> Dict[str, Any]:
+    """
+    Core Buffer GraphQL helper (same pattern as the working client).
+    """
     key = get_buffer_api_key()
     if not key:
         raise ValueError(
             "Buffer API key is not configured. "
             "Please save it in the UI (Buffer API Key section)."
         )
-    return {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
 
+    if variables is None:
+        variables = {}
 
-def _gql(query: str, variables: Optional[Dict] = None) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"query": query}
-    if variables is not None:
-        payload["variables"] = variables
-
-    resp = requests.post(
+    res = requests.post(
         BUFFER_API_URL,
-        json=payload,
-        headers=_headers(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+        },
+        json={"query": query, "variables": variables},
         timeout=60,
     )
-    resp.raise_for_status()
-    data = resp.json()
-
-    if "errors" in data and data["errors"]:
-        messages = []
-        for err in data["errors"]:
-            if isinstance(err, dict):
-                messages.append(err.get("message", str(err)))
-            else:
-                messages.append(str(err))
-        raise Exception("; ".join(messages) or "Buffer GraphQL error")
-
-    return data.get("data") or {}
+    json_data = res.json()
+    if json_data.get("errors"):
+        raise Exception(
+            "; ".join(e.get("message", str(e)) for e in json_data["errors"])
+        )
+    return json_data.get("data") or {}
 
 
 # ---------------------------------------------------------------------------
@@ -111,64 +105,87 @@ def _gql(query: str, variables: Optional[Dict] = None) -> Dict[str, Any]:
 
 def list_organizations() -> List[Dict[str, Any]]:
     """Return organizations for the authenticated Buffer account."""
-    query = """
-    query {
-      account {
-        organizations {
-          id
-          name
+    data = buffer("""
+        query {
+          account {
+            id
+            organizations {
+              id
+              name
+            }
+          }
         }
-      }
-    }
-    """
-    data = _gql(query)
-    account = data.get("account") or {}
-    return account.get("organizations") or []
+    """)
+    return (data.get("account") or {}).get("organizations") or []
 
 
-def get_default_organization_id() -> Optional[str]:
+def list_all_channels() -> List[Dict[str, Any]]:
     """
-    Return the first organization ID (most accounts have one).
+    Fetch channels across all organizations (working Buffer pattern).
+    Each channel is annotated with organizationId.
     """
     orgs = list_organizations()
     if not orgs:
-        return None
-    return orgs[0].get("id")
+        return []
+
+    all_channels: List[Dict[str, Any]] = []
+    for org in orgs:
+        ch_data = buffer(
+            """
+            query GetChannels($input: ChannelsInput!) {
+              channels(input: $input) {
+                id
+                name
+                service
+                avatar
+                displayName
+                isDisconnected
+              }
+            }
+            """,
+            {"input": {"organizationId": org["id"]}},
+        )
+        for c in ch_data.get("channels") or []:
+            all_channels.append({**c, "organizationId": org["id"]})
+
+    return all_channels
 
 
 def list_channels(organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Return all channels for a Buffer organization.
-    Buffer requires organizationId in ChannelsInput.
+    Return channels. If organization_id is given, only that org;
+    otherwise all orgs (same as list_all_channels).
     """
-    org_id = organization_id or get_default_organization_id()
-    if not org_id:
-        raise ValueError(
-            "No Buffer organization found for this API key. "
-            "Check the key and that the account has an organization."
+    if organization_id:
+        ch_data = buffer(
+            """
+            query GetChannels($input: ChannelsInput!) {
+              channels(input: $input) {
+                id
+                name
+                service
+                avatar
+                displayName
+                isDisconnected
+              }
+            }
+            """,
+            {"input": {"organizationId": organization_id}},
         )
-
-    query = """
-    query GetChannels($orgId: OrganizationId!) {
-      channels(input: { organizationId: $orgId }) {
-        id
-        name
-        displayName
-        service
-        avatar
-      }
-    }
-    """
-    data = _gql(query, {"orgId": org_id})
-    return data.get("channels") or []
+        return [
+            {**c, "organizationId": organization_id}
+            for c in (ch_data.get("channels") or [])
+        ]
+    return list_all_channels()
 
 
 def list_tiktok_channels(organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return only TikTok channels."""
+    """Return connected (not disconnected) TikTok channels only."""
     channels = list_channels(organization_id=organization_id)
     return [
-        c for c in channels
-        if (c.get("service") or "").lower() in ("tiktok", "tik tok")
+        c
+        for c in channels
+        if (c.get("service") or "").lower() == "tiktok" and not c.get("isDisconnected")
     ]
 
 
@@ -183,62 +200,44 @@ def post_video_to_tiktok(
     due_at: Optional[str] = None,
     thumbnail_offset_ms: int = 1000,
     add_to_queue: bool = False,
+    mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Create a TikTok video post via Buffer.
+    Create a TikTok video post via Buffer (same mutation as the working client).
 
-    Args:
-        channel_id: Buffer channel ID for the TikTok account
-        video_url: Publicly accessible direct video URL
-        text: Caption (max ~2200 chars for TikTok)
-        due_at: ISO-8601 UTC datetime string for custom schedule
-                e.g. "2026-09-12T14:30:00.000Z"
-        thumbnail_offset_ms: Frame (ms) to use as thumbnail
-        add_to_queue: If True and no due_at, add to the channel queue
-
-    Returns:
-        dict with post id, status, dueAt, etc.
+    mode: "addToQueue" | "customScheduled" | "shareNow" (if supported)
+    If due_at is set, mode becomes customScheduled and dueAt is sent.
     """
     if not channel_id:
         raise ValueError("channel_id is required")
-    if not video_url:
-        raise ValueError("video_url is required")
+    if not video_url or not str(video_url).startswith("http"):
+        raise ValueError("A public video URL is required")
+
+    caption = (text or "").strip()
+    if len(caption) > 2200:
+        caption = caption[:2200]
 
     if due_at:
-        mode = "customScheduled"
+        share_mode = "customScheduled"
+    elif mode:
+        share_mode = mode
     elif add_to_queue:
-        mode = "addToQueue"
+        share_mode = "addToQueue"
     else:
-        mode = "addToQueue"
-
-    mutation = """
-    mutation CreatePost($input: CreatePostInput!) {
-      createPost(input: $input) {
-        ... on PostActionSuccess {
-          post {
-            id
-            text
-            dueAt
-            status
-          }
-        }
-        ... on MutationError {
-          message
-        }
-      }
-    }
-    """
+        share_mode = "addToQueue"
 
     input_data: Dict[str, Any] = {
-        "text": (text or "")[:2200],
         "channelId": channel_id,
+        "text": caption,
         "schedulingType": "automatic",
-        "mode": mode,
+        "mode": share_mode,
         "assets": [
             {
                 "video": {
                     "url": video_url,
-                    "metadata": {"thumbnailOffset": int(thumbnail_offset_ms)},
+                    "metadata": {
+                        "thumbnailOffset": int(thumbnail_offset_ms or 1000),
+                    },
                 }
             }
         ],
@@ -250,16 +249,28 @@ def post_video_to_tiktok(
         else:
             input_data["dueAt"] = due_at + "Z"
 
-    data = _gql(mutation, {"input": input_data})
-    result = data.get("createPost") or {}
+    data = buffer(
+        """
+        mutation CreatePost($input: CreatePostInput!) {
+          createPost(input: $input) {
+            ... on PostActionSuccess {
+              post { id text status dueAt shareMode }
+            }
+            ... on MutationError { message }
+          }
+        }
+        """,
+        {"input": input_data},
+    )
 
-    if "message" in result:
+    result = data.get("createPost") or {}
+    if result.get("message"):
         raise Exception(result["message"])
 
     post = result.get("post") or {}
     logger.info(
-        f"✅ TikTok post created via Buffer | channel={channel_id} | "
-        f"post_id={post.get('id')} | dueAt={post.get('dueAt')}"
+        f"✅ TikTok post via Buffer | channel={channel_id} | "
+        f"post_id={post.get('id')} | status={post.get('status')} | dueAt={post.get('dueAt')}"
     )
     return {
         "success": True,
@@ -267,16 +278,17 @@ def post_video_to_tiktok(
         "text": post.get("text"),
         "due_at": post.get("dueAt"),
         "status": post.get("status"),
+        "share_mode": post.get("shareMode"),
         "channel_id": channel_id,
         "platform": "tiktok",
         "provider": "buffer",
+        "post": post,
     }
 
 
 def validate_buffer_key(api_key: str) -> Dict[str, Any]:
     """
-    Quick validation: resolve org + list channels with the provided key.
-    Does not persist the key.
+    Validate a key by listing orgs + TikTok channels (does not persist the key).
     """
     if not api_key or not api_key.strip():
         return {"valid": False, "message": "API key is empty"}
@@ -287,25 +299,21 @@ def validate_buffer_key(api_key: str) -> Dict[str, Any]:
     }
 
     def _post(query: str, variables: Optional[Dict] = None) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"query": query}
-        if variables is not None:
-            payload["variables"] = variables
+        payload: Dict[str, Any] = {"query": query, "variables": variables or {}}
         resp = requests.post(
             BUFFER_API_URL,
             json=payload,
             headers=headers,
             timeout=30,
         )
-        if resp.status_code != 200:
-            raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
         body = resp.json()
-        if "errors" in body and body["errors"]:
-            msg = body["errors"][0].get("message", str(body["errors"]))
-            raise Exception(msg)
+        if body.get("errors"):
+            raise Exception(
+                "; ".join(e.get("message", str(e)) for e in body["errors"])
+            )
         return body.get("data") or {}
 
     try:
-        # 1) Organizations
         org_data = _post("""
             query {
               account {
@@ -323,38 +331,43 @@ def validate_buffer_key(api_key: str) -> Dict[str, Any]:
                 "message": "Key OK but no organizations found on this account",
             }
 
-        org_id = orgs[0]["id"]
-        org_name = orgs[0].get("name") or org_id
+        all_channels: List[Dict[str, Any]] = []
+        for org in orgs:
+            ch_data = _post(
+                """
+                query GetChannels($input: ChannelsInput!) {
+                  channels(input: $input) {
+                    id
+                    name
+                    displayName
+                    service
+                    isDisconnected
+                  }
+                }
+                """,
+                {"input": {"organizationId": org["id"]}},
+            )
+            for c in ch_data.get("channels") or []:
+                all_channels.append({**c, "organizationId": org["id"]})
 
-        # 2) Channels for that org
-        ch_data = _post(
-            """
-            query GetChannels($orgId: OrganizationId!) {
-              channels(input: { organizationId: $orgId }) {
-                id
-                name
-                displayName
-                service
-              }
-            }
-            """,
-            {"orgId": org_id},
-        )
-        channels = ch_data.get("channels") or []
         tiktok = [
-            c for c in channels
-            if (c.get("service") or "").lower() in ("tiktok", "tik tok")
+            c
+            for c in all_channels
+            if (c.get("service") or "").lower() == "tiktok"
+            and not c.get("isDisconnected")
         ]
+
+        org_name = orgs[0].get("name") or orgs[0]["id"]
         return {
             "valid": True,
-            "organization_id": org_id,
+            "organization_id": orgs[0]["id"],
             "organization_name": org_name,
-            "channel_count": len(channels),
+            "channel_count": len(all_channels),
             "tiktok_count": len(tiktok),
             "tiktok_channels": tiktok,
             "message": (
-                f"Key OK — org “{org_name}”, "
-                f"{len(channels)} channel(s), {len(tiktok)} TikTok"
+                f"Key OK — org \"{org_name}\", "
+                f"{len(all_channels)} channel(s), {len(tiktok)} TikTok"
             ),
         }
     except Exception as e:
