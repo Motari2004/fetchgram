@@ -3135,7 +3135,100 @@ def finalize_duplicate_scheduled_post(post_id, message='Duplicate prevented — 
         conn.close()
 
 
+def set_scheduled_post_status(post_id, status, error_message=None):
+    """Internal DB helper for scheduler workers. Do not call the Flask route directly."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    cur = None
+    try:
+        cur = conn.cursor()
+        if status == 'posted':
+            cur.execute("""
+                UPDATE scheduled_posts
+                SET status = %s,
+                    posted_at = COALESCE(posted_at, NOW()),
+                    error_message = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+            """, (status, error_message, post_id))
+        else:
+            cur.execute("""
+                UPDATE scheduled_posts
+                SET status = %s,
+                    error_message = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+            """, (status, error_message, post_id))
+        changed = cur.rowcount == 1
+        conn.commit()
+        if changed:
+            app.logger.info(f"📝 Scheduled post {post_id} -> {status}")
+        else:
+            app.logger.warning(f"⚠️ Scheduled post {post_id} not found while setting status={status}")
+        return changed
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        app.logger.error(f"❌ Failed setting scheduled post {post_id} -> {status}: {e}")
+        return False
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
 # ============== UPDATED RUN_PIPELINE - WITH PIPELINE & POST TRACKING ==============
+
+def acquire_global_publisher_lock():
+    """Acquire a session-level advisory lock used to serialize external Facebook publishes."""
+    conn = get_db_connection()
+    if not conn:
+        return None, None, False
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))",
+            ("facebook-global-publisher-lock",)
+        )
+        acquired = bool(cur.fetchone()[0])
+        if not acquired:
+            cur.close()
+            conn.close()
+            return None, None, False
+        return conn, cur, True
+    except Exception as e:
+        app.logger.error(f"❌ Failed acquiring global publisher lock: {e}")
+        try:
+            if cur: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+        return None, None, False
+
+
+def release_global_publisher_lock(conn, cur):
+    if not conn:
+        return
+    try:
+        if cur:
+            cur.execute(
+                "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                ("facebook-global-publisher-lock",)
+            )
+            conn.commit()
+    except Exception as e:
+        app.logger.warning(f"⚠️ Failed releasing global publisher lock: {e}")
+    finally:
+        try:
+            if cur: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+
 
 def run_pipeline(pipeline_id):
     """Run due posts strictly one-at-a-time with DB claim + duplicate protection."""
@@ -3171,7 +3264,7 @@ def run_pipeline(pipeline_id):
         scheduled_post_id = claimed['id']
         reel_url = claimed.get('reel_url')
         if not reel_url:
-            update_scheduled_post(scheduled_post_id, 'failed', 'Missing reel URL')
+            set_scheduled_post_status(scheduled_post_id, 'failed', 'Missing reel URL')
             failed_count += 1
             continue
 
@@ -3180,6 +3273,14 @@ def run_pipeline(pipeline_id):
         lock_conn = get_db_connection()
         lock_cur = None
         lock_acquired = False
+        if not lock_conn:
+            app.logger.error(f"❌ Could not acquire DB lock connection for post {scheduled_post_id}")
+            mark_processing_post_retryable(
+                scheduled_post_id,
+                'Database connection unavailable while acquiring duplicate lock'
+            )
+            failed_count += 1
+            continue
         try:
             lock_cur = lock_conn.cursor()
             lock_cur.execute(
@@ -3309,14 +3410,27 @@ def run_pipeline(pipeline_id):
                     posted_count += 1
                     continue
 
-                app.logger.info("3️⃣ FACEBOOK — publishing exactly once")
-                result = publish_to_facebook(
-                    video_url=direct_video_url,
-                    text=caption,
-                    account_id=pipeline['facebook_account_id'],
-                    publish_now=True,
-                    key_id=pipeline.get('zernio_key_id')
-                )
+                app.logger.info("3️⃣ FACEBOOK — acquiring global publisher lock")
+                publish_lock_conn, publish_lock_cur, publish_lock_acquired = acquire_global_publisher_lock()
+                if not publish_lock_acquired:
+                    app.logger.info("⏳ Another post is currently being published; returning this post to pending")
+                    mark_processing_post_retryable(
+                        scheduled_post_id,
+                        'Another Facebook publish is currently in progress'
+                    )
+                    continue
+
+                try:
+                    app.logger.info("3️⃣ FACEBOOK — publishing exactly once")
+                    result = publish_to_facebook(
+                        video_url=direct_video_url,
+                        text=caption,
+                        account_id=pipeline['facebook_account_id'],
+                        publish_now=True,
+                        key_id=pipeline.get('zernio_key_id')
+                    )
+                finally:
+                    release_global_publisher_lock(publish_lock_conn, publish_lock_cur)
 
                 if result and not result.get('error'):
                     already_posted = result.get('already_posted', False)
@@ -3337,7 +3451,7 @@ def run_pipeline(pipeline_id):
                         status='success',
                         error_message='Already posted (dedup)' if already_posted else None
                     )
-                    update_scheduled_post(scheduled_post_id, 'posted')
+                    set_scheduled_post_status(scheduled_post_id, 'posted')
                     posted_count += 1
 
                     app.logger.info(
@@ -3354,7 +3468,7 @@ def run_pipeline(pipeline_id):
                         status='failed',
                         error_message=str(error_msg)
                     )
-                    update_scheduled_post(scheduled_post_id, 'failed', str(error_msg))
+                    set_scheduled_post_status(scheduled_post_id, 'failed', str(error_msg))
                     failed_count += 1
 
             except Exception as e:
