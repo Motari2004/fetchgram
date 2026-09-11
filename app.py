@@ -2150,39 +2150,85 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
 
 BUFFER_API_URL = "https://api.buffer.com"
 
+
 def buffer_graphql(api_key, query, variables=None, timeout=60):
-    headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"}
-    response=requests.post(BUFFER_API_URL,headers=headers,json={"query":query,"variables":variables or {}},timeout=timeout)
-    try: body=response.json()
-    except ValueError: body={"errors":[{"message":response.text[:500]}]}
-    if response.status_code>=400:
-        raise Exception(body.get("errors",[{"message":f"Buffer HTTP {response.status_code}"}])[0].get("message"))
+    """Execute a Buffer GraphQL request and raise useful errors."""
+    if not api_key:
+        raise Exception("Buffer API key is required")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(
+        BUFFER_API_URL,
+        headers=headers,
+        json={"query": query, "variables": variables or {}},
+        timeout=timeout,
+    )
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"errors": [{"message": response.text[:1000] or f"Buffer HTTP {response.status_code}"}]}
+
+    if response.status_code >= 400:
+        errors = body.get("errors") or []
+        message = errors[0].get("message") if errors else f"Buffer HTTP {response.status_code}"
+        raise Exception(str(message))
+
     if body.get("errors"):
-        raise Exception("; ".join(str(e.get("message","Buffer GraphQL error")) for e in body["errors"]))
+        messages = []
+        for error in body["errors"]:
+            if isinstance(error, dict):
+                messages.append(str(error.get("message", "Buffer GraphQL error")))
+            else:
+                messages.append(str(error))
+        raise Exception("; ".join(messages))
+
     return body.get("data") or {}
 
+
 def buffer_get_organizations(api_key):
-    # Buffer's current API exposes organizations under account.organizations.
-    # channelCount is useful for diagnosing a valid key whose organization has
-    # no connected channels. The organization ID is used only transiently and
-    # is never stored in our database.
-    data=buffer_graphql(api_key,"""
+    """Automatically discover every organization available to this Buffer API key.
+
+    The organization IDs are used only during this request flow and are NOT stored
+    in our database. Buffer requires an organization ID when listing channels.
+    """
+    query = """
         query GetOrganizations {
           account {
+            id
+            email
+            name
             organizations {
               id
               name
-              channelCount
             }
           }
         }
-    """)
-    return data.get("account",{}).get("organizations",[])
+    """
+    data = buffer_graphql(api_key, query)
+    account = data.get("account") or {}
+    organizations = account.get("organizations") or []
+
+    app.logger.info(
+        "Buffer automatic discovery: account=%s organizations=%s",
+        account.get("email") or account.get("id") or "unknown",
+        len(organizations),
+    )
+    return organizations
+
 
 def buffer_get_channels(api_key, organization_id):
-    # Keep this query aligned with Buffer's documented Get Channels example.
-    # organizationId is required by Buffer but remains transient.
-    data=buffer_graphql(api_key,"""
+    """Get all connected Buffer channels for one organization.
+
+    organization_id is transient only. It is never persisted in our DB.
+    """
+    if not organization_id:
+        return []
+
+    query = """
         query GetChannels($organizationId: OrganizationId!) {
           channels(input: { organizationId: $organizationId }) {
             id
@@ -2195,73 +2241,244 @@ def buffer_get_channels(api_key, organization_id):
             isLocked
           }
         }
-    """,{"organizationId":organization_id})
-    return data.get("channels",[])
+    """
+    data = buffer_graphql(
+        api_key,
+        query,
+        {"organizationId": organization_id},
+    )
+    return data.get("channels") or []
+
 
 def sync_buffer_channels(buffer_key_id, api_key):
-    orgs=buffer_get_organizations(api_key); conn=get_db_connection()
-    if not conn: raise Exception("Database connection failed")
-    channels=[]
+    """Automatically discover and synchronize all Buffer-connected accounts.
+
+    Flow:
+      API key -> organizations -> channels -> local channel cache.
+
+    No organization ID is stored. Stale local channels for this key are removed
+    before the fresh Buffer discovery result is inserted/upserted.
+    """
+    orgs = buffer_get_organizations(api_key)
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Database connection failed")
+
+    discovered = []
+    seen_channel_ids = set()
+
     try:
-        cur=conn.cursor()
-        app.logger.info(f"🔎 Buffer API returned {len(orgs)} organization(s)")
+        cur = conn.cursor()
+
+        # Remove stale cached channels for this key. The fresh Buffer response is
+        # authoritative for the current set of connected channels.
+        cur.execute("DELETE FROM buffer_channels WHERE buffer_key_id=%s", (buffer_key_id,))
+
         for org in orgs:
-            org_id=org.get("id")
-            org_name=org.get("name") or "Unnamed organization"
-            reported_count=org.get("channelCount")
-            app.logger.info(f"🏢 Buffer organization: {org_name} ({org_id}) reported channelCount={reported_count}")
-            org_channels=buffer_get_channels(api_key,org_id)
-            app.logger.info(f"📡 Buffer returned {len(org_channels)} channel(s) for {org_name}")
+            org_id = org.get("id")
+            org_name = org.get("name") or "Unnamed organization"
+            if not org_id:
+                app.logger.warning("Buffer organization without an ID: %s", org)
+                continue
+
+            try:
+                org_channels = buffer_get_channels(api_key, org_id)
+            except Exception as exc:
+                app.logger.exception(
+                    "Buffer channel discovery failed for organization %s (%s): %s",
+                    org_name,
+                    org_id,
+                    exc,
+                )
+                raise Exception(f"Could not load Buffer accounts for {org_name}: {exc}")
+
+            app.logger.info(
+                "Buffer automatic discovery: organization=%s channels=%s",
+                org_name,
+                len(org_channels),
+            )
+
             for ch in org_channels:
-                cur.execute("""
+                channel_id = ch.get("id")
+                if not channel_id or channel_id in seen_channel_ids:
+                    continue
+                seen_channel_ids.add(channel_id)
+
+                service = (ch.get("service") or "").lower()
+                display_name = ch.get("displayName") or ch.get("name") or channel_id
+
+                cur.execute(
+                    """
                     INSERT INTO buffer_channels
-                    (buffer_key_id,channel_id,name,display_name,service,external_link,is_disconnected,is_locked,updated_at)
+                    (buffer_key_id, channel_id, name, display_name, service,
+                     external_link, is_disconnected, is_locked, updated_at)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                     ON CONFLICT (buffer_key_id,channel_id) DO UPDATE SET
-                      name=EXCLUDED.name,display_name=EXCLUDED.display_name,
-                      service=EXCLUDED.service,external_link=EXCLUDED.external_link,
+                      name=EXCLUDED.name,
+                      display_name=EXCLUDED.display_name,
+                      service=EXCLUDED.service,
+                      external_link=EXCLUDED.external_link,
                       is_disconnected=EXCLUDED.is_disconnected,
-                      is_locked=EXCLUDED.is_locked,updated_at=NOW()
-                """,(buffer_key_id,ch["id"],ch.get("name"),ch.get("displayName"),ch.get("service"),ch.get("externalLink"),bool(ch.get("isDisconnected")),bool(ch.get("isLocked"))))
-                channels.append({"id":ch["id"],"name":ch.get("name"),"display_name":ch.get("displayName"),"service":ch.get("service"),"external_link":ch.get("externalLink"),"is_disconnected":bool(ch.get("isDisconnected")),"is_locked":bool(ch.get("isLocked"))})
-        conn.commit()
-        return channels
-    finally: conn.close()
+                      is_locked=EXCLUDED.is_locked,
+                      updated_at=NOW()
+                    """,
+                    (
+                        buffer_key_id,
+                        channel_id,
+                        ch.get("name"),
+                        display_name,
+                        service,
+                        ch.get("externalLink"),
+                        bool(ch.get("isDisconnected")),
+                        bool(ch.get("isLocked")),
+                    ),
+                )
 
-def publish_to_buffer(api_key, channel_id, text="", video_url=None, publish_now=True, scheduled_time=None, platform=None, title=None, youtube_category_id="22"):
-    service=(platform or "").lower(); mode="shareNow" if publish_now else ("customScheduled" if scheduled_time else "addToQueue")
-    post_input={"text":text or "","channelId":channel_id,"schedulingType":"automatic","mode":mode}
-    if scheduled_time: post_input["dueAt"]=scheduled_time
-    if video_url: post_input["assets"]=[{"video":{"url":video_url}}]
-    if service=="youtube": post_input["metadata"]={"youtube":{"title":title or (text or "New video")[:100],"categoryId":str(youtube_category_id or "22")}}
-    query="""
+                discovered.append(
+                    {
+                        "id": channel_id,
+                        "channel_id": channel_id,
+                        "name": ch.get("name"),
+                        "display_name": display_name,
+                        "service": service,
+                        "external_link": ch.get("externalLink"),
+                        "avatar": ch.get("avatar"),
+                        "is_disconnected": bool(ch.get("isDisconnected")),
+                        "is_locked": bool(ch.get("isLocked")),
+                    }
+                )
+
+        conn.commit()
+        app.logger.info(
+            "Buffer automatic discovery complete: %s organization(s), %s channel(s)",
+            len(orgs),
+            len(discovered),
+        )
+        return discovered
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def publish_to_buffer(api_key, channel_id, text="", video_url=None,
+                      publish_now=True, scheduled_time=None, platform=None,
+                      title=None, youtube_category_id="22"):
+    """Create a Buffer post for one discovered channel."""
+    if not channel_id:
+        raise Exception("Buffer channel_id is required")
+
+    service = (platform or "").lower()
+    if publish_now:
+        mode = "shareNow"
+    elif scheduled_time:
+        mode = "customScheduled"
+    else:
+        mode = "addToQueue"
+
+    post_input = {
+        "text": text or "",
+        "channelId": channel_id,
+        "schedulingType": "automatic",
+        "mode": mode,
+    }
+
+    if scheduled_time and mode == "customScheduled":
+        post_input["dueAt"] = scheduled_time
+
+    if video_url:
+        post_input["assets"] = [{"video": {"url": video_url}}]
+
+    if service == "youtube":
+        post_input["metadata"] = {
+            "youtube": {
+                "title": title or (text or "New video")[:100],
+                "categoryId": str(youtube_category_id or "22"),
+            }
+        }
+
+    query = """
       mutation CreatePost($input: CreatePostInput!) {
         createPost(input: $input) {
-          ... on PostActionSuccess { post { id text dueAt status } }
-          ... on MutationError { message }
+          ... on PostActionSuccess {
+            post {
+              id
+              text
+              dueAt
+              status
+            }
+          }
+          ... on MutationError {
+            message
+          }
         }
       }
     """
-    result=(buffer_graphql(api_key,query,{"input":post_input},120).get("createPost") or {})
+
+    result = (
+        buffer_graphql(api_key, query, {"input": post_input}, 120)
+        .get("createPost")
+        or {}
+    )
+
     if result.get("post"):
-        return {"success":True,"post":result["post"],"publisher_provider":"buffer","publisher_platform":service,"publisher_account_id":channel_id}
-    raise Exception(result.get("message","Buffer did not create the post"))
+        return {
+            "success": True,
+            "post": result["post"],
+            "publisher_provider": "buffer",
+            "publisher_platform": service,
+            "publisher_account_id": channel_id,
+        }
+
+    raise Exception(result.get("message", "Buffer did not create the post"))
+
 
 def get_buffer_key(buffer_key_id):
-    conn=get_db_connection()
-    if not conn: return None
+    conn = get_db_connection()
+    if not conn:
+        return None
     try:
-        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT * FROM buffer_keys WHERE id=%s AND is_active=TRUE",(buffer_key_id,)); return cur.fetchone()
-    finally: conn.close()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT * FROM buffer_keys WHERE id=%s AND is_active=TRUE",
+            (buffer_key_id,),
+        )
+        return cur.fetchone()
+    finally:
+        conn.close()
 
-def publish_via_pipeline(pipeline,video_url,text,publish_now=True,scheduled_time=None):
-    provider=(pipeline.get("publisher_provider") or "zernio").lower()
-    if provider=="buffer":
-        key=get_buffer_key(pipeline.get("buffer_key_id"))
-        if not key: return {"error":"Buffer key is missing or inactive"}
-        try: return publish_to_buffer(key["api_key"],pipeline.get("buffer_channel_id"),text,video_url,publish_now,scheduled_time,pipeline.get("buffer_platform"),text)
-        except Exception as e: return {"error":str(e)}
-    return publish_to_facebook(video_url=video_url,text=text,account_id=pipeline.get("facebook_account_id"),publish_now=publish_now,scheduled_time=scheduled_time,key_id=pipeline.get("zernio_key_id"))
+
+def publish_via_pipeline(pipeline, video_url, text, publish_now=True, scheduled_time=None):
+    provider = (pipeline.get("publisher_provider") or "zernio").lower()
+    if provider == "buffer":
+        key = get_buffer_key(pipeline.get("buffer_key_id"))
+        if not key:
+            return {"error": "Buffer key is missing or inactive"}
+        channel_id = pipeline.get("buffer_channel_id")
+        if not channel_id:
+            return {"error": "Buffer channel is not configured for this pipeline"}
+        try:
+            return publish_to_buffer(
+                key["api_key"],
+                channel_id,
+                text,
+                video_url,
+                publish_now,
+                scheduled_time,
+                pipeline.get("buffer_platform"),
+                text,
+            )
+        except Exception as e:
+            return {"error": str(e)}
+    return publish_to_facebook(
+        video_url=video_url,
+        text=text,
+        account_id=pipeline.get("facebook_account_id"),
+        publish_now=publish_now,
+        scheduled_time=scheduled_time,
+        key_id=pipeline.get("zernio_key_id"),
+    )
 
 # ============== ZERNIO (FACEBOOK) INTEGRATION ==============
 
@@ -5723,80 +5940,276 @@ def get_all_caption_status():
 
 # ============== BUFFER API ROUTES ==============
 
-@app.route('/api/buffer/keys',methods=['GET'])
+@app.route('/api/buffer/keys', methods=['GET'])
 def get_buffer_keys():
-    conn=get_db_connection()
-    if not conn: return jsonify({"error":"Database connection failed"}),500
+    """Return saved Buffer API keys plus their automatically discovered channels."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
     try:
-        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT id,name,is_active,created_at,updated_at FROM buffer_keys ORDER BY created_at DESC"); keys=cur.fetchall()
-        for k in keys:
-            cur.execute("""SELECT channel_id AS id,name,display_name,service,external_link,is_disconnected,is_locked FROM buffer_channels WHERE buffer_key_id=%s ORDER BY service,display_name,name""",(k["id"],)); k["channels"]=cur.fetchall(); k["channel_count"]=len(k["channels"])
-        return jsonify({"status":"success","keys":keys})
-    except Exception as e: return jsonify({"error":str(e)}),500
-    finally: conn.close()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id, name, is_active, created_at, updated_at
+            FROM buffer_keys
+            ORDER BY created_at DESC
+            """
+        )
+        keys = cur.fetchall()
 
-@app.route('/api/buffer/keys',methods=['POST'])
-def create_buffer_key():
-    data=request.get_json(silent=True) or {}; api_key=(data.get("api_key") or "").strip(); name=(data.get("name") or "Buffer Key").strip()
-    if not api_key: return jsonify({"error":"Buffer API key is required"}),400
-    conn=get_db_connection()
-    if not conn: return jsonify({"error":"Database connection failed"}),500
-    try:
-        orgs=buffer_get_organizations(api_key)
-        if not orgs: return jsonify({"error":"Buffer key is valid but has no organizations"}),400
-        cur=conn.cursor(); cur.execute("INSERT INTO buffer_keys(name,api_key) VALUES(%s,%s) RETURNING id",(name,api_key)); key_id=cur.fetchone()[0]; conn.commit(); conn.close()
-        channels=sync_buffer_channels(key_id,api_key); return jsonify({"status":"success","key_id":str(key_id),"channels":channels,"message":f"Buffer key added with {len(channels)} channels"})
+        for key in keys:
+            cur.execute(
+                """
+                SELECT
+                    channel_id AS id,
+                    channel_id,
+                    name,
+                    display_name,
+                    service,
+                    external_link,
+                    is_disconnected,
+                    is_locked,
+                    updated_at
+                FROM buffer_channels
+                WHERE buffer_key_id=%s
+                ORDER BY service, display_name, name
+                """,
+                (key["id"],),
+            )
+            channels = cur.fetchall()
+            key["channels"] = channels
+            key["channel_count"] = len(channels)
+
+        return jsonify({"status": "success", "keys": keys})
     except Exception as e:
-        try: conn.rollback()
-        except: pass
-        try: conn.close()
-        except: pass
-        return jsonify({"error":str(e)}),400
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
-@app.route('/api/buffer/keys/<key_id>',methods=['DELETE'])
+
+@app.route('/api/buffer/keys', methods=['POST'])
+def create_buffer_key():
+    """Save a Buffer API key and automatically discover all its accounts."""
+    data = request.get_json(silent=True) or {}
+    api_key = (data.get("api_key") or "").strip()
+    name = (data.get("name") or "Buffer Account").strip()
+
+    if not api_key:
+        return jsonify({"error": "Buffer API key is required"}), 400
+
+    # Validate and discover BEFORE saving. This prevents dead/invalid keys from
+    # being inserted into the local database.
+    try:
+        organizations = buffer_get_organizations(api_key)
+        if not organizations:
+            return jsonify({
+                "error": "Buffer key is valid but no organizations were returned by Buffer."
+            }), 400
+    except Exception as e:
+        return jsonify({"error": f"Could not validate Buffer API key: {e}"}), 400
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    key_id = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO buffer_keys(name, api_key)
+            VALUES(%s,%s)
+            ON CONFLICT (api_key) DO UPDATE SET
+                name=EXCLUDED.name,
+                is_active=TRUE,
+                updated_at=NOW()
+            RETURNING id
+            """,
+            (name, api_key),
+        )
+        key_id = cur.fetchone()[0]
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 400
+    finally:
+        conn.close()
+
+    try:
+        channels = sync_buffer_channels(key_id, api_key)
+        return jsonify({
+            "status": "success",
+            "key_id": str(key_id),
+            "organization_count": len(organizations),
+            "channels": channels,
+            "channel_count": len(channels),
+            "message": (
+                f"Buffer connected. Automatically discovered "
+                f"{len(channels)} social account(s) across "
+                f"{len(organizations)} organization(s)."
+            ),
+        })
+    except Exception as e:
+        # The key was saved, but discovery failed. Keep the key so the user can
+        # retry refresh without having to enter it again.
+        return jsonify({
+            "status": "partial",
+            "key_id": str(key_id),
+            "error": f"Buffer key was saved, but automatic account discovery failed: {e}",
+        }), 400
+
+
+@app.route('/api/buffer/keys/<key_id>', methods=['DELETE'])
 def delete_buffer_key(key_id):
-    conn=get_db_connection()
-    if not conn: return jsonify({"error":"Database connection failed"}),500
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
     try:
-        cur=conn.cursor(); cur.execute("DELETE FROM buffer_keys WHERE id=%s",(key_id,)); deleted=cur.rowcount; conn.commit(); return jsonify({"status":"success","deleted":deleted})
-    except Exception as e: conn.rollback(); return jsonify({"error":str(e)}),500
-    finally: conn.close()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM buffer_keys WHERE id=%s", (key_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        return jsonify({"status": "success", "deleted": deleted})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
-@app.route('/api/buffer/keys/<key_id>/refresh',methods=['POST'])
+
+@app.route('/api/buffer/keys/<key_id>/refresh', methods=['POST'])
 def refresh_buffer_key(key_id):
-    conn=get_db_connection()
-    if not conn: return jsonify({"error":"Database connection failed"}),500
+    """Re-discover Buffer accounts automatically using the saved API key."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
     try:
-        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT api_key FROM buffer_keys WHERE id=%s",(key_id,)); row=cur.fetchone()
-    finally: conn.close()
-    if not row: return jsonify({"error":"Buffer key not found"}),404
-    try:
-        channels=sync_buffer_channels(key_id,row["api_key"]); return jsonify({"status":"success","channels":channels,"count":len(channels)})
-    except Exception as e: return jsonify({"error":str(e)}),400
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT api_key FROM buffer_keys WHERE id=%s AND is_active=TRUE",
+            (key_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
 
-@app.route('/api/buffer/channels',methods=['GET'])
+    if not row:
+        return jsonify({"error": "Buffer key not found or inactive"}), 404
+
+    try:
+        organizations = buffer_get_organizations(row["api_key"])
+        channels = sync_buffer_channels(key_id, row["api_key"])
+        return jsonify({
+            "status": "success",
+            "organization_count": len(organizations),
+            "channels": channels,
+            "count": len(channels),
+            "message": f"Automatically discovered {len(channels)} social account(s).",
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route('/api/buffer/channels', methods=['GET'])
 def get_buffer_channels():
-    conn=get_db_connection()
-    if not conn: return jsonify({"error":"Database connection failed"}),500
+    """Return all automatically discovered active Buffer social accounts."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
     try:
-        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("""SELECT c.id,c.buffer_key_id AS key_id,k.name AS key_name,c.channel_id,c.name,c.display_name,c.service,c.external_link,c.is_disconnected,c.is_locked FROM buffer_channels c JOIN buffer_keys k ON k.id=c.buffer_key_id WHERE k.is_active=TRUE ORDER BY c.service,c.display_name,c.name"""); return jsonify({"status":"success","channels":cur.fetchall()})
-    except Exception as e: return jsonify({"error":str(e)}),500
-    finally: conn.close()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT
+                c.id,
+                c.buffer_key_id AS key_id,
+                k.name AS key_name,
+                c.channel_id,
+                c.name,
+                c.display_name,
+                c.service,
+                c.external_link,
+                c.is_disconnected,
+                c.is_locked
+            FROM buffer_channels c
+            JOIN buffer_keys k ON k.id=c.buffer_key_id
+            WHERE k.is_active=TRUE
+            ORDER BY c.service, c.display_name, c.name
+            """
+        )
+        return jsonify({"status": "success", "channels": cur.fetchall()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
-@app.route('/api/publish/manual',methods=['POST'])
+
+@app.route('/api/publish/manual', methods=['POST'])
 def publish_manual_unified():
-    data=request.get_json(silent=True) or {}; provider=(data.get("provider") or "buffer").lower(); text=data.get("text",""); video_url=data.get("video_url"); scheduled_time=data.get("scheduled_time"); publish_now=not bool(scheduled_time)
+    data = request.get_json(silent=True) or {}
+    provider = (data.get("provider") or "buffer").lower()
+    text = data.get("text", "")
+    video_url = data.get("video_url")
+    scheduled_time = data.get("scheduled_time")
+    publish_now = not bool(scheduled_time)
+
     try:
-        if provider=="buffer":
-            channel_id=data.get("channel_id")
-            if not channel_id: return jsonify({"error":"channel_id is required"}),400
-            conn=get_db_connection(); cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT k.api_key,c.service FROM buffer_channels c JOIN buffer_keys k ON k.id=c.buffer_key_id WHERE c.channel_id=%s AND k.is_active=TRUE LIMIT 1",(channel_id,)); row=cur.fetchone(); conn.close()
-            if not row: return jsonify({"error":"Buffer channel not found or key inactive"}),404
-            return jsonify(publish_to_buffer(row["api_key"],channel_id,text,video_url,publish_now,scheduled_time,row["service"],data.get("title")))
-        if provider=="zernio":
-            return jsonify(publish_to_facebook(video_url=video_url,text=text,account_id=data.get("account_id"),publish_now=publish_now,scheduled_time=scheduled_time,key_id=data.get("key_id")))
-        return jsonify({"error":f"Unsupported provider: {provider}"}),400
-    except Exception as e: return jsonify({"error":str(e)}),400
+        if provider == "buffer":
+            channel_id = data.get("channel_id")
+            if not channel_id:
+                return jsonify({"error": "channel_id is required"}), 400
+
+            conn = get_db_connection()
+            if not conn:
+                return jsonify({"error": "Database connection failed"}), 500
+            try:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(
+                    """
+                    SELECT k.api_key, c.service
+                    FROM buffer_channels c
+                    JOIN buffer_keys k ON k.id=c.buffer_key_id
+                    WHERE c.channel_id=%s
+                      AND k.is_active=TRUE
+                    LIMIT 1
+                    """,
+                    (channel_id,),
+                )
+                row = cur.fetchone()
+            finally:
+                conn.close()
+
+            if not row:
+                return jsonify({"error": "Buffer channel not found or key inactive"}), 404
+
+            return jsonify(
+                publish_to_buffer(
+                    row["api_key"],
+                    channel_id,
+                    text,
+                    video_url,
+                    publish_now,
+                    scheduled_time,
+                    row["service"],
+                    data.get("title"),
+                )
+            )
+
+        if provider == "zernio":
+            return jsonify(
+                publish_to_facebook(
+                    video_url=video_url,
+                    text=text,
+                    account_id=data.get("account_id"),
+                    publish_now=publish_now,
+                    scheduled_time=scheduled_time,
+                    key_id=data.get("key_id"),
+                )
+            )
+
+        return jsonify({"error": f"Unsupported provider: {provider}"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 # ============== PIPELINE API ROUTES ==============
 

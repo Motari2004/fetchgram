@@ -5418,7 +5418,7 @@ function showToast(message, type = 'info') {
 // anything already defined above it).
 // ============================================================
 
-let bufferAccounts = [];      // [{id, name, channels:[{channel_id, service, display_name}]}]
+let bufferAccounts = [];      // Buffer API keys with automatically discovered channels
 let bufferChannelsFlat = [];  // flattened for the composer dropdown
 
 // ---------------------------------------------------------------
@@ -5439,8 +5439,17 @@ async function loadBufferAccounts() {
             return;
         }
 
-        bufferAccounts = data.keys || [];
-        if (badge) badge.textContent = `${bufferAccounts.length} accounts`;
+        bufferAccounts = (data.keys || []).map(acc => ({
+            ...acc,
+            channels: (acc.channels || []).map(ch => ({
+                ...ch,
+                id: ch.id || ch.channel_id,
+                channel_id: ch.channel_id || ch.id,
+                display_name: ch.display_name || ch.name || ch.channel_id || ch.id,
+                service: (ch.service || '').toLowerCase(),
+            })),
+        }));
+        if (badge) badge.textContent = `${bufferAccounts.length} keys`;
 
         bufferChannelsFlat = [];
         bufferAccounts.forEach(acc => {
@@ -5475,7 +5484,7 @@ function renderBufferAccounts(accounts) {
                 <div style="font-size: 32px; margin-bottom: 12px;">🧩</div>
                 <strong>No Buffer accounts connected</strong>
                 <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-                    Connect a Buffer API token to post to Twitter, YouTube, or TikTok.
+                    Add a Buffer API key and your connected social accounts will be discovered automatically.
                 </p>
             </div>
         `;
