@@ -5420,6 +5420,433 @@ function showToast(message, type = 'info') {
     }, 3000);
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ============================================================
+// buffer_platforms.js
+// Paste this whole block at the bottom of your existing script.js
+// (after the Zernio keys section, before the final init calls,
+// is a fine place — it only *adds* listeners, it doesn't touch
+// anything already defined above it).
+// ============================================================
+
+let bufferAccounts = [];      // [{id, name, channels:[{channel_id, service, display_name}]}]
+let bufferChannelsFlat = [];  // flattened for the composer dropdown
+
+// ---------------------------------------------------------------
+// LOAD / RENDER BUFFER ACCOUNTS
+// ---------------------------------------------------------------
+
+async function loadBufferAccounts() {
+    const list = document.getElementById('buffer-accounts-list');
+    const badge = document.getElementById('buffer-accounts-count');
+    if (!list) return;
+
+    try {
+        const res = await fetch('/api/buffer/accounts', { credentials: 'same-origin' });
+        const data = await res.json();
+
+        if (data.status !== 'success') {
+            list.innerHTML = `<div class="empty-state">❌ ${data.error || 'Failed to load accounts'}</div>`;
+            return;
+        }
+
+        bufferAccounts = data.accounts || [];
+        if (badge) badge.textContent = `${bufferAccounts.length} accounts`;
+
+        bufferChannelsFlat = [];
+        bufferAccounts.forEach(acc => {
+            (acc.channels || []).forEach(ch => {
+                bufferChannelsFlat.push({
+                    account_id: acc.id,
+                    account_name: acc.name,
+                    channel_id: ch.channel_id,
+                    service: ch.service,
+                    display_name: ch.display_name || ch.channel_id,
+                });
+            });
+        });
+
+        renderBufferAccounts(bufferAccounts);
+        populateBufferComposerChannels();
+        populatePipelineBufferChannels();
+
+    } catch (error) {
+        console.error('Failed to load Buffer accounts:', error);
+        list.innerHTML = `<div class="empty-state">❌ ${error.message}</div>`;
+    }
+}
+
+function renderBufferAccounts(accounts) {
+    const list = document.getElementById('buffer-accounts-list');
+    if (!list) return;
+
+    if (!accounts || accounts.length === 0) {
+        list.innerHTML = `
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">🧩</div>
+                <strong>No Buffer accounts connected</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    Connect a Buffer API token to post to Twitter, YouTube, or TikTok.
+                </p>
+            </div>
+        `;
+        return;
+    }
+
+    const serviceIcon = { twitter: '🐦', youtube: '▶️', tiktok: '🎵', facebook: '📘', instagram: '📸' };
+
+    let html = `<div class="zernio-keys-grid">`;
+    accounts.forEach(acc => {
+        const channels = acc.channels || [];
+        html += `
+            <div class="zernio-key-card">
+                <div class="zernio-key-header">
+                    <div class="zernio-key-name">
+                        <span class="key-icon">🟢</span>
+                        <span class="key-title">${escapeHtml(acc.name)}</span>
+                        <span class="key-account-count-badge">${channels.length} channel${channels.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div class="zernio-key-actions">
+                        <button class="btn btn-sm btn-ghost sync-buffer-account-btn" data-id="${acc.id}" title="Re-sync channels">🔄</button>
+                        <button class="btn btn-sm btn-danger delete-buffer-account-btn" data-id="${acc.id}" data-name="${escapeHtml(acc.name)}" title="Disconnect">🗑️</button>
+                    </div>
+                </div>
+                <div class="zernio-key-body">
+                    <div class="key-accounts-list">
+                        ${channels.map(ch => `
+                            <div class="key-account-item">
+                                <span class="account-icon">${serviceIcon[ch.service] || '🔗'}</span>
+                                <span class="account-name">${escapeHtml(ch.display_name || ch.channel_id)}</span>
+                                <span class="account-id">${escapeHtml(ch.service)}</span>
+                                <span class="account-status">✅</span>
+                            </div>
+                        `).join('') || '<span style="color:var(--text-muted);font-size:13px;">No channels found</span>'}
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    html += `</div>`;
+    list.innerHTML = html;
+
+    list.querySelectorAll('.delete-buffer-account-btn').forEach(btn => {
+        btn.addEventListener('click', () => deleteBufferAccount(btn.dataset.id, btn.dataset.name));
+    });
+    list.querySelectorAll('.sync-buffer-account-btn').forEach(btn => {
+        btn.addEventListener('click', () => syncBufferAccount(btn.dataset.id, btn));
+    });
+}
+
+async function deleteBufferAccount(accountId, name) {
+    if (!confirm(`Disconnect Buffer account "${name}"? Pipelines using its channels will start failing until reassigned.`)) return;
+    try {
+        const res = await fetch(`/api/buffer/accounts/${accountId}`, { method: 'DELETE', credentials: 'same-origin' });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(`✅ Disconnected "${name}"`, 'success');
+            loadBufferAccounts();
+        } else {
+            showToast(`❌ ${data.error || 'Failed to disconnect'}`, 'error');
+        }
+    } catch (error) {
+        showToast(`❌ ${error.message}`, 'error');
+    }
+}
+
+async function syncBufferAccount(accountId, btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳';
+    try {
+        const res = await fetch(`/api/buffer/accounts/${accountId}/sync`, { method: 'POST', credentials: 'same-origin' });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(`✅ Synced ${data.channels_synced} channels`, 'success');
+            loadBufferAccounts();
+        } else {
+            showToast(`❌ ${data.error || 'Sync failed'}`, 'error');
+        }
+    } catch (error) {
+        showToast(`❌ ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄';
+    }
+}
+
+// ---------------------------------------------------------------
+// ADD BUFFER ACCOUNT MODAL
+// ---------------------------------------------------------------
+
+document.getElementById('add-buffer-account-btn')?.addEventListener('click', () => {
+    document.getElementById('add-buffer-account-modal').hidden = false;
+    document.getElementById('add-buffer-account-status').style.display = 'none';
+    document.getElementById('buffer-account-name').value = '';
+    document.getElementById('buffer-account-key').value = '';
+});
+
+document.getElementById('add-buffer-account-modal-close')?.addEventListener('click', () => {
+    document.getElementById('add-buffer-account-modal').hidden = true;
+});
+
+document.getElementById('add-buffer-account-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) e.target.hidden = true;
+});
+
+document.getElementById('save-buffer-account-btn')?.addEventListener('click', async function () {
+    const name = document.getElementById('buffer-account-name').value.trim();
+    const apiKey = document.getElementById('buffer-account-key').value.trim();
+    const status = document.getElementById('add-buffer-account-status');
+
+    if (!apiKey) {
+        status.textContent = '❌ Please paste your Buffer API token';
+        status.className = 'status-message error';
+        status.style.display = 'block';
+        return;
+    }
+
+    this.disabled = true;
+    this.textContent = '⏳ Connecting...';
+    status.style.display = 'none';
+
+    try {
+        const res = await fetch('/api/buffer/accounts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ name: name || undefined, api_key: apiKey }),
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+            status.textContent = `✅ ${data.message}`;
+            status.className = 'status-message success';
+            status.style.display = 'block';
+            setTimeout(() => {
+                document.getElementById('add-buffer-account-modal').hidden = true;
+                loadBufferAccounts();
+            }, 1200);
+        } else {
+            status.textContent = `❌ ${data.error || 'Failed to connect'}`;
+            status.className = 'status-message error';
+            status.style.display = 'block';
+        }
+    } catch (error) {
+        status.textContent = `❌ ${error.message}`;
+        status.className = 'status-message error';
+        status.style.display = 'block';
+    } finally {
+        this.disabled = false;
+        this.textContent = 'Connect';
+    }
+});
+
+// ---------------------------------------------------------------
+// MANUAL COMPOSER (Twitter / YouTube / TikTok, one-off post)
+// ---------------------------------------------------------------
+
+function populateBufferComposerChannels() {
+    const serviceSelect = document.getElementById('buffer-composer-service');
+    const channelSelect = document.getElementById('buffer-composer-channel');
+    if (!serviceSelect || !channelSelect) return;
+
+    function refresh() {
+        const service = serviceSelect.value;
+        const matches = bufferChannelsFlat.filter(c => c.service === service);
+
+        channelSelect.innerHTML = '';
+        if (matches.length === 0) {
+            channelSelect.innerHTML = `<option value="">No ${service} channels connected</option>`;
+            return;
+        }
+        matches.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = JSON.stringify({ account_id: c.account_id, channel_id: c.channel_id, service: c.service });
+            opt.textContent = `${c.display_name} (${c.account_name})`;
+            channelSelect.appendChild(opt);
+        });
+
+        document.getElementById('buffer-youtube-fields').hidden = service !== 'youtube';
+        document.getElementById('buffer-tiktok-fields').hidden = service !== 'tiktok';
+    }
+
+    serviceSelect.onchange = refresh;
+    refresh();
+}
+
+document.getElementById('buffer-composer-publish-btn')?.addEventListener('click', async function () {
+    const service = document.getElementById('buffer-composer-service').value;
+    const channelRaw = document.getElementById('buffer-composer-channel').value;
+    const text = document.getElementById('buffer-composer-text').value.trim();
+    const status = document.getElementById('buffer-composer-status');
+
+    if (!channelRaw) {
+        status.textContent = '❌ Please select a channel';
+        status.className = 'status-message error';
+        status.style.display = 'block';
+        return;
+    }
+
+    const channel = JSON.parse(channelRaw);
+
+    // Reuse the Instagram video you already fetched, same as the Facebook composer.
+    const videoUrl = window.currentVideoUrl || null;
+
+    if (service !== 'twitter' && !videoUrl) {
+        status.textContent = '❌ No video loaded. Fetch an Instagram video first.';
+        status.className = 'status-message error';
+        status.style.display = 'block';
+        return;
+    }
+
+    let extra = {};
+    if (service === 'youtube') {
+        extra = {
+            title: document.getElementById('buffer-yt-title').value.trim() || (text || 'Untitled video').slice(0, 100),
+            privacy: document.getElementById('buffer-yt-privacy').value,
+            description: text,
+        };
+    } else if (service === 'tiktok') {
+        extra = {
+            privacy_level: document.getElementById('buffer-tt-privacy').value,
+            allow_comment: document.getElementById('buffer-tt-allow-comment').checked,
+            allow_duet: document.getElementById('buffer-tt-allow-duet').checked,
+            allow_stitch: document.getElementById('buffer-tt-allow-stitch').checked,
+            disclose_branded_content: document.getElementById('buffer-tt-branded').checked,
+        };
+    }
+
+    this.disabled = true;
+    this.innerHTML = '<span class="btn-spinner"></span> Publishing...';
+    status.style.display = 'none';
+
+    try {
+        const res = await fetch('/api/buffer/post', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                account_id: channel.account_id,
+                channel_id: channel.channel_id,
+                service: channel.service,
+                text: text,
+                video_url: service === 'twitter' ? null : videoUrl,
+                extra: extra,
+            }),
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+            status.textContent = `✅ Published to ${service}!`;
+            status.className = 'status-message success';
+            status.style.display = 'block';
+        } else {
+            status.textContent = `❌ ${data.error || 'Failed to publish'}`;
+            status.className = 'status-message error';
+            status.style.display = 'block';
+        }
+    } catch (error) {
+        status.textContent = `❌ ${error.message}`;
+        status.className = 'status-message error';
+        status.style.display = 'block';
+    } finally {
+        this.disabled = false;
+        this.innerHTML = '<span class="btn-content">🚀 Publish Now</span>';
+    }
+});
+
+// ---------------------------------------------------------------
+// PIPELINE CREATE FORM — platform switching
+// ---------------------------------------------------------------
+
+function populatePipelineBufferChannels() {
+    const select = document.getElementById('pipeline-buffer-channel');
+    if (!select) return;
+
+    const platform = document.getElementById('pipeline-platform')?.value || 'facebook';
+    const service = platform.replace('buffer_', '');
+    const matches = bufferChannelsFlat.filter(c => c.service === service);
+
+    select.innerHTML = '';
+    if (matches.length === 0) {
+        select.innerHTML = `<option value="">No ${service} channels connected</option>`;
+        return;
+    }
+    matches.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = JSON.stringify({ account_id: c.account_id, channel_id: c.channel_id });
+        opt.textContent = `${c.display_name} (${c.account_name})`;
+        select.appendChild(opt);
+    });
+}
+
+document.getElementById('pipeline-platform')?.addEventListener('change', function () {
+    const isFacebook = this.value === 'facebook';
+    const fbField = document.getElementById('pipeline-facebook-field');
+    const bufferField = document.getElementById('pipeline-buffer-field');
+    if (fbField) fbField.hidden = !isFacebook;
+    if (bufferField) bufferField.hidden = isFacebook;
+    if (!isFacebook) populatePipelineBufferChannels();
+});
+
+// ---------------------------------------------------------------
+// EXTEND createPipelineBtn to send the new platform fields.
+// Your existing createPipelineBtn listener in script.js already
+// reads name/username/accountId/dailyLimit — add this small patch
+// right before the fetch('/api/pipelines', ...) call inside it:
+//
+//     const platform = document.getElementById('pipeline-platform')?.value || 'facebook';
+//     let bufferAccountId = null, bufferChannelId = null;
+//     if (platform !== 'facebook') {
+//         const raw = document.getElementById('pipeline-buffer-channel')?.value;
+//         if (raw) {
+//             const parsed = JSON.parse(raw);
+//             bufferAccountId = parsed.account_id;
+//             bufferChannelId = parsed.channel_id;
+//         }
+//     }
+//
+// ...then add platform, buffer_account_id, buffer_channel_id to the
+// JSON.stringify(...) body of that fetch call.
+// ---------------------------------------------------------------
+
+// ---------------------------------------------------------------
+// INIT
+// ---------------------------------------------------------------
+
+document.getElementById('refresh-buffer-accounts-btn')?.addEventListener('click', loadBufferAccounts);
+
+document.addEventListener('DOMContentLoaded', function () {
+    loadBufferAccounts();
+});
+
+
+
+
+
+
+
+
+
+
 // ==================== INITIALIZE ====================
 
 document.addEventListener('DOMContentLoaded', function() {

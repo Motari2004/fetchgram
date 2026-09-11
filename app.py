@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from buffer_platforms import buffer_bp, init_buffer_tables, publish_via_buffer  
+from buffer_platforms import buffer_bp, init_buffer_tables, publish_via_buffer   # pyright: ignore[reportMissingImports]
 
 
 
