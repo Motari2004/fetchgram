@@ -67,6 +67,20 @@ def get_db_connection():
         app.logger.error(f"Database connection error: {e}")
         return None
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def init_db():
     conn = get_db_connection()
     if not conn:
@@ -342,6 +356,39 @@ def init_db():
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
         
         # ============================================================
+        # FIX: Ensure UNIQUE(buffer_key_id, channel_id) constraint
+        # exists on buffer_channels — required for ON CONFLICT
+        # ============================================================
+        
+        # Remove duplicate rows that would block the unique constraint
+        cur.execute("""
+            DELETE FROM buffer_channels a
+            USING buffer_channels b
+            WHERE a.id > b.id
+              AND a.buffer_key_id IS NOT DISTINCT FROM b.buffer_key_id
+              AND a.channel_id = b.channel_id;
+        """)
+        
+        # Add the constraint if it doesn't already exist
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = 'buffer_channels'::regclass
+                      AND contype = 'u'
+                      AND conname = 'buffer_channels_buffer_key_id_channel_id_key'
+                ) THEN
+                    ALTER TABLE buffer_channels
+                        ADD CONSTRAINT buffer_channels_buffer_key_id_channel_id_key
+                        UNIQUE (buffer_key_id, channel_id);
+                END IF;
+            END
+            $$;
+        """)
+        
+        # ============================================================
         # INDEXES
         # ============================================================
         
@@ -399,6 +446,25 @@ def init_db():
     finally:
         cur.close()
         conn.close()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Initialize database on startup
 init_db()
