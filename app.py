@@ -248,52 +248,6 @@ def init_db():
         
         # Add zernio_key_id to pipelines
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
-        # Multi-provider publishing columns
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'zernio';")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'facebook';")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_key_id UUID;")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_id TEXT;")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS bluesky_account_id UUID;")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS youtube_title TEXT;")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS youtube_category_id TEXT DEFAULT '22';")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS youtube_privacy TEXT DEFAULT 'public';")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS youtube_notify_subscribers BOOLEAN DEFAULT TRUE;")
-
-        # Buffer API keys
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS buffer_keys (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name TEXT NOT NULL,
-                api_key_encrypted TEXT NOT NULL,
-                is_active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-        """)
-
-        # Direct Bluesky accounts (credentials encrypted at rest)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS bluesky_accounts (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name TEXT NOT NULL,
-                identifier TEXT NOT NULL,
-                password_encrypted TEXT NOT NULL,
-                handle TEXT,
-                did TEXT,
-                is_active BOOLEAN DEFAULT TRUE,
-                last_tested TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                UNIQUE(identifier)
-            );
-        """)
-
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'zernio';")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'facebook';")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS external_post_id TEXT;")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS external_post_url TEXT;")
-        cur.execute("ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'zernio';")
-        cur.execute("ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'facebook';")
         
         # ========== NEW: APP SETTINGS TABLE ==========
         cur.execute("""
@@ -346,13 +300,6 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_api_key ON zernio_keys(api_key);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_provider_platform ON pipelines(provider, platform);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_buffer_key_id ON pipelines(buffer_key_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_buffer_channel_id ON pipelines(buffer_channel_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_bluesky_account_id ON pipelines(bluesky_account_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_active ON buffer_keys(is_active);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_bluesky_accounts_active ON bluesky_accounts(is_active);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_posted_reels_provider_platform ON posted_reels(provider, platform);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);")
         
         conn.commit()
@@ -1835,24 +1782,6 @@ def decrypt_credentials(encrypted_data):
         app.logger.error(f"Decryption failed: {e}")
         return None
 
-def encrypt_secret(value):
-    """Encrypt a long-lived secret such as Buffer API keys or Bluesky passwords."""
-    try:
-        key = get_encryption_key()
-        return base64.urlsafe_b64encode(Fernet(key).encrypt(str(value).encode())).decode()
-    except Exception as e:
-        app.logger.error(f"Secret encryption failed: {e}")
-        return None
-
-def decrypt_secret(value):
-    try:
-        key = get_encryption_key()
-        decoded = base64.urlsafe_b64decode(value)
-        return Fernet(key).decrypt(decoded).decode()
-    except Exception as e:
-        app.logger.error(f"Secret decryption failed: {e}")
-        return None
-
 def write_netscape_cookies(cookie_data, filepath):
     with open(filepath, 'w') as f:
         f.write("# Netscape HTTP Cookie File\n")
@@ -2240,7 +2169,7 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# ============== BUFFER + DIRECT BLUESKY INTEGRATIONS ==============\n\nBUFFER_API_URL = "https://api.buffer.com"\n\n\ndef get_buffer_key_record(key_id=None):\n    conn = get_db_connection()\n    if not conn:\n        return None\n    cur = None\n    try:\n        cur = conn.cursor(cursor_factory=RealDictCursor)\n        if key_id:\n            cur.execute("SELECT * FROM buffer_keys WHERE id = %s AND is_active = TRUE", (key_id,))\n        else:\n            cur.execute("SELECT * FROM buffer_keys WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 1")\n        return cur.fetchone()\n    except Exception as e:\n        app.logger.error(f"Buffer key lookup failed: {e}")\n        return None\n    finally:\n        if cur: cur.close()\n        conn.close()\n\n\ndef buffer_graphql(api_key, query, variables=None):\n    headers = {\n        "Content-Type": "application/json",\n        "Authorization": f"Bearer {api_key}",\n    }\n    response = requests.post(\n        BUFFER_API_URL,\n        headers=headers,\n        json={"query": query, "variables": variables or {}},\n        timeout=60,\n    )\n    try:\n        body = response.json()\n    except ValueError:\n        body = {}\n    if response.status_code >= 400:\n        raise Exception(body.get("message") or body.get("error") or response.text[:500])\n    if body.get("errors"):\n        raise Exception("; ".join(e.get("message", "Buffer GraphQL error") for e in body["errors"]))\n    return body.get("data") or {}\n\n\ndef list_buffer_channels(api_key, service=None):\n    data = buffer_graphql(api_key, """\n      query {\n        account {\n          id\n          organizations { id name }\n        }\n      }\n    """)\n    channels = []\n    for org in data.get("account", {}).get("organizations", []) or []:\n        try:\n            ch_data = buffer_graphql(\n                api_key,\n                """query GetChannels($input: ChannelsInput!) {\n                    channels(input: $input) {\n                        id name service avatar displayName isDisconnected type\n                    }\n                }""",\n                {"input": {"organizationId": org["id"]}},\n            )\n            for c in ch_data.get("channels", []) or []:\n                if c.get("isDisconnected"):\n                    continue\n                if service and c.get("service") != service:\n                    continue\n                channels.append({**c, "organizationId": org["id"], "organizationName": org.get("name")})\n        except Exception as e:\n            app.logger.warning(f"Buffer org {org.get('id')} channel lookup failed: {e}")\n    return channels\n\n\ndef publish_to_buffer(channel_id, text, video_url=None, platform="tiktok", key_id=None,\n                      title=None, description=None, privacy="public", category_id="22",\n                      notify_subscribers=True, mode="shareNow", due_at=None, thumbnail_offset=1000):\n    key = get_buffer_key_record(key_id)\n    if not key:\n        return {"error": "No active Buffer API key configured"}\n    api_key = decrypt_secret(key["api_key_encrypted"])\n    if not api_key:\n        return {"error": "Could not decrypt Buffer API key"}\n    if not channel_id:\n        return {"error": "Buffer channel_id is required"}\n    if not video_url or not str(video_url).startswith("http"):\n        return {"error": "A public video URL is required"}\n\n    platform = (platform or "tiktok").lower()\n    if platform not in ("tiktok", "youtube", "twitter"):\n        return {"error": f"Unsupported Buffer platform: {platform}"}\n\n    if platform == "youtube":\n        post_text = (description or title or text or "")[:5000]\n    else:\n        post_text = (text or "")[:10000]\n\n    assets = [{"video": {\n        "url": video_url,\n        "metadata": {"thumbnailOffset": int(thumbnail_offset or 1000)}\n    }}]\n\n    input_data = {\n        "channelId": channel_id,\n        "text": post_text,\n        "schedulingType": "automatic",\n        "mode": mode or "shareNow",\n        "assets": assets,\n    }\n\n    if due_at:\n        input_data["dueAt"] = due_at\n\n    if platform == "youtube":\n        input_data["metadata"] = {"youtube": {\n            "title": (title or post_text or "YouTube video")[:100],\n            "privacy": privacy if privacy in ("public", "unlisted", "private") else "public",\n            "categoryId": str(category_id or "22"),\n            "notifySubscribers": bool(notify_subscribers),\n            "madeForKids": False,\n        }}\n\n    try:\n        data = buffer_graphql(api_key, """\n          mutation CreatePost($input: CreatePostInput!) {\n            createPost(input: $input) {\n              ... on PostActionSuccess {\n                post { id text status dueAt shareMode externalLink }\n              }\n              ... on MutationError { message }\n            }\n          }\n        """, {"input": input_data})\n        result = data.get("createPost") or {}\n        if result.get("message"):\n            return {"error": result["message"]}\n        return {"post": result.get("post"), "buffer_key_id": str(key["id"]), "already_posted": False}\n    except Exception as e:\n        return {"error": str(e)}\n\n\ndef get_bluesky_account_record(account_id=None):\n    conn = get_db_connection()\n    if not conn:\n        return None\n    cur = None\n    try:\n        cur = conn.cursor(cursor_factory=RealDictCursor)\n        if account_id:\n            cur.execute("SELECT * FROM bluesky_accounts WHERE id = %s AND is_active = TRUE", (account_id,))\n        else:\n            cur.execute("SELECT * FROM bluesky_accounts WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 1")\n        return cur.fetchone()\n    except Exception as e:\n        app.logger.error(f"Bluesky account lookup failed: {e}")\n        return None\n    finally:\n        if cur: cur.close()\n        conn.close()\n\n\ndef post_to_bluesky_account(video_url, text, account_id=None):\n    account = get_bluesky_account_record(account_id)\n    if not account:\n        return {"error": "No active Bluesky account configured"}\n    password = decrypt_secret(account["password_encrypted"])\n    if not password:\n        return {"error": "Could not decrypt Bluesky account password"}\n    try:\n        session_data = create_bluesky_session(account["identifier"], password)\n        result = upload_video_to_bluesky(session_data, video_url, text)\n        uri = result.get("uri", "")\n        post_id = uri.split("/")[-1] if uri else ""\n        handle = session_data.get("handle") or account.get("handle") or account["identifier"]\n        return {\n            "success": True,\n            "post_uri": uri,\n            "post_cid": result.get("cid"),\n            "post_id": post_id,\n            "post_url": f"https://bsky.app/profile/{handle}/post/{post_id}" if post_id else None,\n            "account_id": str(account["id"]),\n        }\n    except Exception as e:\n        return {"error": str(e)}\n\n\ndef publish_destination(video_url, text, pipeline, scheduled_time=None):\n    """Unified publisher used by pipelines. Facebook stays on Zernio; TikTok/YouTube/Twitter use Buffer; Bluesky posts directly."""\n    provider = (pipeline.get("provider") or "zernio").lower()\n    platform = (pipeline.get("platform") or "facebook").lower()\n\n    if provider == "zernio" and platform == "facebook":\n        return publish_to_facebook(\n            video_url=video_url,\n            text=text,\n            account_id=pipeline.get("facebook_account_id"),\n            publish_now=not bool(scheduled_time),\n            scheduled_time=scheduled_time,\n            key_id=pipeline.get("zernio_key_id"),\n        )\n\n    if provider == "buffer":\n        mode = "shareNow" if not scheduled_time else "addToQueue"\n        return publish_to_buffer(\n            channel_id=pipeline.get("buffer_channel_id"),\n            text=text,\n            video_url=video_url,\n            platform=platform,\n            key_id=pipeline.get("buffer_key_id"),\n            title=pipeline.get("youtube_title") or text[:100],\n            description=text,\n            privacy=pipeline.get("youtube_privacy") or "public",\n            category_id=pipeline.get("youtube_category_id") or "22",\n            notify_subscribers=pipeline.get("youtube_notify_subscribers", True),\n            mode=mode,\n            due_at=scheduled_time,\n        )\n\n    if provider == "bluesky" and platform == "bluesky":\n        return post_to_bluesky_account(video_url, text, pipeline.get("bluesky_account_id"))\n\n    return {"error": f"Unsupported destination: provider={provider}, platform={platform}"}\n\n\n# ============== BUFFER API ROUTES ==============\n\n@app.route('/api/buffer/keys', methods=['GET'])\ndef get_buffer_keys():\n    conn = get_db_connection()\n    if not conn:\n        return jsonify({"error": "Database connection failed"}), 500\n    cur = None\n    try:\n        cur = conn.cursor(cursor_factory=RealDictCursor)\n        cur.execute("""SELECT id, name, is_active, created_at, updated_at FROM buffer_keys ORDER BY created_at DESC""")\n        keys = cur.fetchall()\n        for k in keys:\n            k["id"] = str(k["id"])\n        return jsonify({"status": "success", "keys": keys})\n    except Exception as e:\n        return jsonify({"error": str(e)}), 500\n    finally:\n        if cur: cur.close()\n        conn.close()\n\n@app.route('/api/buffer/keys', methods=['POST'])\ndef add_buffer_key():\n    data = request.get_json(silent=True) or {}\n    name = (data.get("name") or "Buffer Key").strip()\n    api_key = (data.get("api_key") or "").strip()\n    if not api_key:\n        return jsonify({"error": "api_key is required"}), 400\n    encrypted = encrypt_secret(api_key)\n    if not encrypted:\n        return jsonify({"error": "Could not encrypt API key"}), 500\n    # Validate before saving by querying account.\n    try:\n        buffer_graphql(api_key, "query { account { id } }")\n    except Exception as e:\n        return jsonify({"error": f"Invalid Buffer API key: {e}"}), 401\n    conn = get_db_connection(); cur = None\n    try:\n        cur = conn.cursor()\n        cur.execute("""INSERT INTO buffer_keys(name, api_key_encrypted) VALUES(%s,%s) RETURNING id""", (name, encrypted))\n        key_id = cur.fetchone()[0]\n        conn.commit()\n        return jsonify({"status": "success", "key_id": str(key_id), "message": "Buffer key added"})\n    except Exception as e:\n        if conn: conn.rollback()\n        return jsonify({"error": str(e)}), 500\n    finally:\n        if cur: cur.close()\n        if conn: conn.close()\n\n@app.route('/api/buffer/keys/<key_id>', methods=['DELETE'])\ndef delete_buffer_key(key_id):\n    conn = get_db_connection(); cur = None\n    try:\n        cur = conn.cursor()\n        cur.execute("DELETE FROM buffer_keys WHERE id = %s RETURNING id", (key_id,))\n        row = cur.fetchone(); conn.commit()\n        if not row: return jsonify({"error": "Buffer key not found"}), 404\n        return jsonify({"status": "success", "message": "Buffer key deleted"})\n    except Exception as e:\n        if conn: conn.rollback()\n        return jsonify({"error": str(e)}), 500\n    finally:\n        if cur: cur.close()\n        if conn: conn.close()\n\n@app.route('/api/buffer/channels', methods=['GET'])\ndef get_buffer_channels():\n    key_id = request.args.get('key_id')\n    service = request.args.get('service')\n    key = get_buffer_key_record(key_id)\n    if not key:\n        return jsonify({"error": "No active Buffer key found"}), 404\n    api_key = decrypt_secret(key["api_key_encrypted"])\n    if not api_key:\n        return jsonify({"error": "Could not decrypt Buffer key"}), 500\n    try:\n        channels = list_buffer_channels(api_key, service=service)\n        return jsonify({"status": "success", "channels": channels, "key_id": str(key["id"])})\n    except Exception as e:\n        return jsonify({"error": str(e)}), 500\n\n@app.route('/api/buffer/publish', methods=['POST'])\ndef buffer_publish_route():\n    data = request.get_json(silent=True) or {}\n    result = publish_to_buffer(\n        channel_id=data.get("channel_id"),\n        text=data.get("text", ""),\n        video_url=data.get("video_url"),\n        platform=data.get("platform", "tiktok"),\n        key_id=data.get("key_id"),\n        title=data.get("title"),\n        description=data.get("description"),\n        privacy=data.get("privacy", "public"),\n        category_id=data.get("category_id", "22"),\n        notify_subscribers=data.get("notify_subscribers", True),\n        mode=data.get("mode", "shareNow"),\n        due_at=data.get("due_at"),\n        thumbnail_offset=data.get("thumbnail_offset", 1000),\n    )\n    return jsonify(result), (200 if not result.get("error") else 500)\n\n# ============== BLUESKY MULTI-ACCOUNT ROUTES ==============\n\n@app.route('/api/bluesky/accounts', methods=['GET'])\ndef list_bluesky_accounts():\n    conn = get_db_connection(); cur = None\n    try:\n        cur = conn.cursor(cursor_factory=RealDictCursor)\n        cur.execute("""SELECT id, name, identifier, handle, did, is_active, last_tested, created_at FROM bluesky_accounts ORDER BY created_at DESC""")\n        rows = cur.fetchall()\n        for row in rows: row["id"] = str(row["id"])\n        return jsonify({"status": "success", "accounts": rows})\n    except Exception as e:\n        return jsonify({"error": str(e)}), 500\n    finally:\n        if cur: cur.close()\n        if conn: conn.close()\n\n@app.route('/api/bluesky/accounts', methods=['POST'])\ndef add_bluesky_account():\n    data = request.get_json(silent=True) or {}\n    name = (data.get("name") or data.get("identifier") or "Bluesky Account").strip()\n    identifier = (data.get("identifier") or "").strip()\n    password = (data.get("password") or "").strip()\n    if not identifier or not password:\n        return jsonify({"error": "identifier and password are required"}), 400\n    try:\n        session_data = create_bluesky_session(identifier, password)\n    except Exception as e:\n        return jsonify({"error": f"Bluesky login failed: {e}"}), 401\n    encrypted = encrypt_secret(password)\n    if not encrypted:\n        return jsonify({"error": "Could not encrypt Bluesky password"}), 500\n    conn = get_db_connection(); cur = None\n    try:\n        cur = conn.cursor()\n        cur.execute("""\n            INSERT INTO bluesky_accounts(name, identifier, password_encrypted, handle, did, last_tested)\n            VALUES(%s,%s,%s,%s,%s,NOW())\n            ON CONFLICT(identifier) DO UPDATE SET\n              name=EXCLUDED.name, password_encrypted=EXCLUDED.password_encrypted,\n              handle=EXCLUDED.handle, did=EXCLUDED.did, last_tested=NOW(),\n              is_active=TRUE, updated_at=NOW()\n            RETURNING id\n        """, (name, identifier, encrypted, session_data.get("handle"), session_data.get("did")))\n        account_id = cur.fetchone()[0]; conn.commit()\n        return jsonify({"status": "success", "account_id": str(account_id), "handle": session_data.get("handle"), "did": session_data.get("did")})\n    except Exception as e:\n        if conn: conn.rollback()\n        return jsonify({"error": str(e)}), 500\n    finally:\n        if cur: cur.close()\n        if conn: conn.close()\n\n@app.route('/api/bluesky/accounts/<account_id>', methods=['DELETE'])\ndef delete_bluesky_account(account_id):\n    conn = get_db_connection(); cur = None\n    try:\n        cur = conn.cursor(); cur.execute("DELETE FROM bluesky_accounts WHERE id=%s RETURNING id", (account_id,)); row=cur.fetchone(); conn.commit()\n        if not row: return jsonify({"error":"Bluesky account not found"}),404\n        return jsonify({"status":"success","message":"Bluesky account deleted"})\n    except Exception as e:\n        if conn: conn.rollback()\n        return jsonify({"error":str(e)}),500\n    finally:\n        if cur: cur.close()\n        if conn: conn.close()\n\n@app.route('/api/bluesky/accounts/<account_id>/test', methods=['POST'])\ndef test_bluesky_account(account_id):\n    account=get_bluesky_account_record(account_id)\n    if not account: return jsonify({"error":"Account not found"}),404\n    password=decrypt_secret(account["password_encrypted"])\n    if not password: return jsonify({"error":"Could not decrypt account password"}),500\n    try:\n        data=create_bluesky_session(account["identifier"],password)\n        conn=get_db_connection(); cur=conn.cursor(); cur.execute("UPDATE bluesky_accounts SET handle=%s,did=%s,last_tested=NOW(),updated_at=NOW() WHERE id=%s",(data.get("handle"),data.get("did"),account_id)); conn.commit(); cur.close(); conn.close()\n        return jsonify({"status":"success","handle":data.get("handle"),"did":data.get("did")})\n    except Exception as e:\n        return jsonify({"error":str(e)}),401\n\n@app.route('/api/bluesky/publish', methods=['POST'])\ndef bluesky_publish_direct():\n    data=request.get_json(silent=True) or {}\n    result=post_to_bluesky_account(data.get("video_url"), data.get("text","Check out this video! 🎬"), data.get("account_id"))\n    return jsonify(result),(200 if not result.get("error") else 500)\n\n# ============== ZERNIO (FACEBOOK) INTEGRATION ==============
+# ============== ZERNIO (FACEBOOK) INTEGRATION ==============
 
 def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None, key_id=None):
     """
@@ -2837,7 +2766,9 @@ def get_unposted_reels(profile_username, pipeline_id, limit=10):
         cur.close()
         conn.close()
 
-def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=None, facebook_post_id=None, facebook_post_url=None, status='success', error_message=None, provider='zernio', platform='facebook', external_post_id=None, external_post_url=None):
+def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=None, 
+                        facebook_post_id=None, facebook_post_url=None, 
+                        status='success', error_message=None):
     conn = get_db_connection()
     if not conn:
         return False
@@ -2846,9 +2777,9 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
         cur.execute("""
             INSERT INTO posted_reels (
                 pipeline_id, reel_url, direct_video_url, caption,
-                facebook_post_id, facebook_post_url, status, error_message, provider, platform, external_post_id, external_post_url
+                facebook_post_id, facebook_post_url, status, error_message
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (pipeline_id, reel_url) DO UPDATE SET
                 direct_video_url = EXCLUDED.direct_video_url,
                 caption = EXCLUDED.caption,
@@ -2856,13 +2787,9 @@ def mark_reel_as_posted(pipeline_id, reel_url, direct_video_url=None, caption=No
                 facebook_post_url = EXCLUDED.facebook_post_url,
                 status = EXCLUDED.status,
                 error_message = EXCLUDED.error_message,
-                provider = EXCLUDED.provider,
-                platform = EXCLUDED.platform,
-                external_post_id = EXCLUDED.external_post_id,
-                external_post_url = EXCLUDED.external_post_url,
                 posted_at = NOW()
         """, (pipeline_id, reel_url, direct_video_url, caption, 
-              facebook_post_id, facebook_post_url, status, error_message, provider, platform, external_post_id, external_post_url))
+              facebook_post_id, facebook_post_url, status, error_message))
         if status == 'success':
             cur.execute("SELECT COUNT(*) FROM posted_reels WHERE pipeline_id = %s AND status = 'success'", (pipeline_id,))
             total_posted = cur.fetchone()[0]
@@ -3255,31 +3182,6 @@ def set_scheduled_post_status(post_id, status, error_message=None):
 
 # ============== UPDATED RUN_PIPELINE - WITH PIPELINE & POST TRACKING ==============
 
-def acquire_destination_publisher_lock(destination):
-    """Advisory lock scoped to a provider/platform/account/channel destination."""
-    conn=get_db_connection()
-    if not conn: return None,None,False
-    cur=None
-    try:
-        cur=conn.cursor(); cur.execute("SELECT pg_try_advisory_lock(hashtextextended(%s,0))",(f"publisher:{destination}"[:2000],)); acquired=bool(cur.fetchone()[0])
-        return conn,cur,acquired
-    except Exception:
-        if cur: cur.close()
-        conn.close(); return None,None,False
-
-def release_destination_publisher_lock(conn,cur):
-    if not conn or not cur: return
-    try:
-        # PostgreSQL advisory locks are session-scoped. Unlocking by the same
-        # connection is sufficient; callers already close the connection after this.
-        conn.commit()
-    except Exception: pass
-    finally:
-        try: cur.close()
-        except Exception: pass
-        try: conn.close()
-        except Exception: pass
-
 def acquire_global_publisher_lock():
     """Acquire a session-level advisory lock used to serialize external Facebook publishes."""
     conn = get_db_connection()
@@ -3329,101 +3231,281 @@ def release_global_publisher_lock(conn, cur):
 
 
 def run_pipeline(pipeline_id):
-    """Run due posts with destination-aware publishing and atomic duplicate protection."""
+    """Run due posts strictly one-at-a-time with DB claim + duplicate protection."""
     recover_stale_processing_posts()
-    conn=get_db_connection()
-    if not conn: return {"error":"Database connection failed"}
-    cur=None
+
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Database connection failed"}
+    cur = None
     try:
-        cur=conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM pipelines WHERE id=%s",(pipeline_id,)); pipeline=cur.fetchone()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM pipelines WHERE id = %s", (pipeline_id,))
+        pipeline = cur.fetchone()
     finally:
-        if cur: cur.close()
+        if cur:
+            cur.close()
         conn.close()
-    if not pipeline: return {"error":"Pipeline not found"}
-    if not pipeline['is_active']: return {"error":"Pipeline is inactive"}
 
-    due_posts=claim_due_posts(limit=5,pipeline_id=pipeline_id)
+    if not pipeline:
+        return {"error": "Pipeline not found"}
+    if not pipeline['is_active']:
+        return {"error": "Pipeline is inactive"}
+
+    due_posts = claim_due_posts(limit=5, pipeline_id=pipeline_id)
     if not due_posts:
-        log_pipeline_run(pipeline_id,0,0,'completed')
-        return {"message":"No due posts","posted":0,"failed":0,"total":0}
+        log_pipeline_run(pipeline_id, 0, 0, 'completed')
+        return {"message": "No due posts", "posted": 0, "failed": 0, "total": 0}
 
-    provider=(pipeline.get('provider') or 'zernio').lower()
-    platform=(pipeline.get('platform') or 'facebook').lower()
-    destination=f"{provider}:{platform}:{pipeline.get('buffer_channel_id') or pipeline.get('bluesky_account_id') or pipeline.get('facebook_account_id') or ''}"
-    posted_count=failed_count=0
+    posted_count = 0
+    failed_count = 0
 
     for claimed in due_posts:
-        scheduled_post_id=claimed['id']; reel_url=claimed.get('reel_url')
+        scheduled_post_id = claimed['id']
+        reel_url = claimed.get('reel_url')
         if not reel_url:
-            set_scheduled_post_status(scheduled_post_id,'failed','Missing reel URL'); failed_count+=1; continue
-        lock_conn=get_db_connection(); lock_cur=None; lock_acquired=False
-        if not lock_conn:
-            mark_processing_post_retryable(scheduled_post_id,'Database connection unavailable while acquiring duplicate lock'); failed_count+=1; continue
-        try:
-            lock_cur=lock_conn.cursor(); lock_cur.execute("SELECT pg_try_advisory_lock(hashtextextended(%s,0))",(_post_lock_key(pipeline_id,reel_url),)); lock_acquired=bool(lock_cur.fetchone()[0])
-            if not lock_acquired:
-                mark_processing_post_retryable(scheduled_post_id,'Another worker is processing this reel'); continue
-            existing=get_successfully_posted(pipeline_id,reel_url)
-            if existing:
-                finalize_duplicate_scheduled_post(scheduled_post_id,f"Duplicate prevented; existing {platform} post {existing.get('external_post_id') or existing.get('facebook_post_id') or 'already exists'}")
-                posted_count+=1; continue
-            try:
-                direct_video_url=get_direct_video_url(reel_url,pipeline_id=pipeline_id,post_id=scheduled_post_id,profile_username=pipeline.get('profile_username'))
-                if not direct_video_url:
-                    mark_processing_post_retryable(scheduled_post_id,'Video URL not ready; retry on next scheduler run'); continue
-                caption=(claimed.get('caption') or '').strip()
-                if not caption:
-                    caption=(get_caption_for_reel(reel_url=reel_url,profile_username=pipeline.get('profile_username'),pipeline_id=pipeline_id) or '').strip()
-                if not caption:
-                    mark_processing_post_retryable(scheduled_post_id,'Caption not ready; retry on next scheduler run'); continue
-                conn2=get_db_connection()
-                if conn2:
-                    c2=conn2.cursor()
-                    try:
-                        c2.execute("UPDATE scheduled_posts SET direct_video_url=%s,caption=%s,provider=%s,platform=%s,updated_at=NOW() WHERE id=%s AND status='processing'",(direct_video_url,caption,provider,platform,scheduled_post_id)); conn2.commit()
-                    finally:
-                        c2.close(); conn2.close()
-                existing=get_successfully_posted(pipeline_id,reel_url)
-                if existing:
-                    finalize_duplicate_scheduled_post(scheduled_post_id,'Duplicate prevented immediately before external publish'); posted_count+=1; continue
+            set_scheduled_post_status(scheduled_post_id, 'failed', 'Missing reel URL')
+            failed_count += 1
+            continue
 
-                app.logger.info(f"📤 {provider.upper()} → {platform.upper()} | {reel_url[:70]}")
-                pub_conn,pub_cur,pub_acquired=acquire_destination_publisher_lock(destination)
-                if not pub_acquired:
-                    mark_processing_post_retryable(scheduled_post_id,f'Another {destination} publish is currently in progress'); continue
+        # DB-level advisory lock protects against different scheduled rows for
+        # the same reel being published concurrently.
+        lock_conn = get_db_connection()
+        lock_cur = None
+        lock_acquired = False
+        if not lock_conn:
+            app.logger.error(f"❌ Could not acquire DB lock connection for post {scheduled_post_id}")
+            mark_processing_post_retryable(
+                scheduled_post_id,
+                'Database connection unavailable while acquiring duplicate lock'
+            )
+            failed_count += 1
+            continue
+        try:
+            lock_cur = lock_conn.cursor()
+            lock_cur.execute(
+                "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))",
+                (_post_lock_key(pipeline_id, reel_url),)
+            )
+            lock_acquired = bool(lock_cur.fetchone()[0])
+
+            if not lock_acquired:
+                app.logger.warning(
+                    f"⏭️ Duplicate lock busy; returning post {scheduled_post_id} to pending"
+                )
+                mark_processing_post_retryable(
+                    scheduled_post_id,
+                    'Another worker is processing this reel'
+                )
+                continue
+
+            # Check again after acquiring the lock. This catches duplicate
+            # scheduled rows that have different scheduled_post IDs.
+            existing = get_successfully_posted(pipeline_id, reel_url)
+            if existing:
+                app.logger.warning(
+                    f"♻️ DUPLICATE BLOCKED before Facebook publish: {reel_url[:70]}..."
+                )
+                finalize_duplicate_scheduled_post(
+                    scheduled_post_id,
+                    f"Duplicate prevented; existing Facebook post {existing.get('facebook_post_id') or 'already exists'}"
+                )
+                posted_count += 1
+                continue
+
+            try:
+                app.logger.info(
+                    f"\n{'=' * 70}\n"
+                    f"🎬 PIPELINE {pipeline_id} | POST {scheduled_post_id}\n"
+                    f"🔒 CLAIMED + LOCKED\n"
+                    f"1️⃣ VIDEO FIRST (fresh): {reel_url[:70]}\n"
+                    f"{'=' * 70}"
+                )
+
+                direct_video_url = get_direct_video_url(
+                    reel_url,
+                    pipeline_id=pipeline_id,
+                    post_id=scheduled_post_id,
+                    profile_username=pipeline.get('profile_username')
+                )
+
+                if not direct_video_url:
+                    app.logger.warning(
+                        f"🛑 VIDEO NOT READY for {reel_url[:60]} — retrying later"
+                    )
+                    mark_processing_post_retryable(
+                        scheduled_post_id,
+                        'Video URL not ready; retry on next scheduler run'
+                    )
+                    continue
+
+                update_conn = get_db_connection()
+                if update_conn:
+                    update_cur = None
+                    try:
+                        update_cur = update_conn.cursor()
+                        update_cur.execute("""
+                            UPDATE scheduled_posts
+                            SET direct_video_url = %s, updated_at = NOW()
+                            WHERE id = %s AND status = 'processing'
+                        """, (direct_video_url, scheduled_post_id))
+                        update_conn.commit()
+                    except Exception as e:
+                        update_conn.rollback()
+                        app.logger.warning(f"⚠️ Failed saving video URL: {e}")
+                    finally:
+                        if update_cur:
+                            update_cur.close()
+                        update_conn.close()
+
+                caption = claimed.get('caption') or ''
+                if not caption.strip():
+                    caption = get_caption_for_reel(
+                        reel_url=reel_url,
+                        profile_username=pipeline.get('profile_username'),
+                        pipeline_id=pipeline_id
+                    )
+
+                if not caption or not caption.strip():
+                    app.logger.warning(
+                        f"🛑 CAPTION NOT READY for {reel_url[:60]} — retrying later"
+                    )
+                    mark_processing_post_retryable(
+                        scheduled_post_id,
+                        'Caption not ready; retry on next scheduler run'
+                    )
+                    continue
+
+                caption = caption.strip()
+
+                caption_conn = get_db_connection()
+                if caption_conn:
+                    caption_cur = None
+                    try:
+                        caption_cur = caption_conn.cursor()
+                        caption_cur.execute("""
+                            UPDATE scheduled_posts
+                            SET caption = %s, direct_video_url = %s, updated_at = NOW()
+                            WHERE id = %s AND status = 'processing'
+                        """, (caption, direct_video_url, scheduled_post_id))
+                        caption_conn.commit()
+                    except Exception as e:
+                        caption_conn.rollback()
+                        app.logger.warning(f"⚠️ Failed saving caption: {e}")
+                    finally:
+                        if caption_cur:
+                            caption_cur.close()
+                        caption_conn.close()
+
+                # Final duplicate check immediately before external publish.
+                existing = get_successfully_posted(pipeline_id, reel_url)
+                if existing:
+                    app.logger.warning(
+                        f"♻️ DUPLICATE BLOCKED immediately before publish: {reel_url[:70]}..."
+                    )
+                    finalize_duplicate_scheduled_post(
+                        scheduled_post_id,
+                        f"Duplicate prevented; existing Facebook post {existing.get('facebook_post_id') or 'already exists'}"
+                    )
+                    posted_count += 1
+                    continue
+
+                app.logger.info("3️⃣ FACEBOOK — acquiring global publisher lock")
+                publish_lock_conn, publish_lock_cur, publish_lock_acquired = acquire_global_publisher_lock()
+                if not publish_lock_acquired:
+                    app.logger.info("⏳ Another post is currently being published; returning this post to pending")
+                    mark_processing_post_retryable(
+                        scheduled_post_id,
+                        'Another Facebook publish is currently in progress'
+                    )
+                    continue
+
                 try:
-                    result=publish_destination(direct_video_url,caption,pipeline)
+                    app.logger.info("3️⃣ FACEBOOK — publishing exactly once")
+                    result = publish_to_facebook(
+                        video_url=direct_video_url,
+                        text=caption,
+                        account_id=pipeline['facebook_account_id'],
+                        publish_now=True,
+                        key_id=pipeline.get('zernio_key_id')
+                    )
                 finally:
-                    release_destination_publisher_lock(pub_conn,pub_cur)
+                    release_global_publisher_lock(publish_lock_conn, publish_lock_cur)
 
                 if result and not result.get('error'):
-                    post_obj=result.get('post') or {}
-                    external_id=result.get('post_id') or post_obj.get('id') or post_obj.get('_id')
-                    external_url=result.get('post_url') or post_obj.get('externalLink')
-                    if provider=='zernio':
-                        for plat in post_obj.get('platforms',[]):
-                            if plat.get('platform')==platform:
-                                external_url=external_url or plat.get('publishedUrl'); external_id=external_id or plat.get('_id')
-                    mark_reel_as_posted(pipeline_id=pipeline_id,reel_url=reel_url,direct_video_url=direct_video_url,caption=caption,facebook_post_id=external_id if platform=='facebook' else None,facebook_post_url=external_url if platform=='facebook' else None,status='success',error_message=None,provider=provider,platform=platform,external_post_id=external_id,external_post_url=external_url)
-                    set_scheduled_post_status(scheduled_post_id,'posted'); posted_count+=1
-                    app.logger.info(f"🎉 POSTED {provider}/{platform}: {reel_url[:70]}")
+                    already_posted = result.get('already_posted', False)
+                    post_result_id = result.get('post', {}).get('_id') or result.get('post_id')
+                    post_url = None
+                    for platform in result.get('post', {}).get('platforms', []):
+                        if platform.get('platform') == 'facebook':
+                            post_url = platform.get('publishedUrl')
+                            break
+
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline_id,
+                        reel_url=reel_url,
+                        direct_video_url=direct_video_url,
+                        caption=caption,
+                        facebook_post_id=post_result_id,
+                        facebook_post_url=post_url,
+                        status='success',
+                        error_message='Already posted (dedup)' if already_posted else None
+                    )
+                    set_scheduled_post_status(scheduled_post_id, 'posted')
+                    posted_count += 1
+
+                    app.logger.info(
+                        f"{'♻️ DEDUPLICATED' if already_posted else '🎉 POSTED'}: {reel_url[:70]}..."
+                    )
                 else:
-                    err=(result or {}).get('error','Unknown publish error')
-                    mark_reel_as_posted(pipeline_id=pipeline_id,reel_url=reel_url,direct_video_url=direct_video_url,caption=caption,status='failed',error_message=str(err),provider=provider,platform=platform)
-                    set_scheduled_post_status(scheduled_post_id,'failed',str(err)); failed_count+=1
+                    error_msg = result.get('error', 'Unknown error') if result else 'Unknown error'
+                    app.logger.error(f"❌ Facebook publish failed: {error_msg}")
+                    mark_reel_as_posted(
+                        pipeline_id=pipeline_id,
+                        reel_url=reel_url,
+                        direct_video_url=direct_video_url,
+                        caption=caption,
+                        status='failed',
+                        error_message=str(error_msg)
+                    )
+                    set_scheduled_post_status(scheduled_post_id, 'failed', str(error_msg))
+                    failed_count += 1
+
             except Exception as e:
-                app.logger.exception(e); mark_processing_post_retryable(scheduled_post_id,str(e)); failed_count+=1
+                app.logger.error(f"❌ Error processing scheduled post {scheduled_post_id}: {e}")
+                app.logger.exception(e)
+                # A failed worker should be retryable unless the row was already
+                # finalized by another safe path.
+                mark_processing_post_retryable(scheduled_post_id, str(e))
+                failed_count += 1
+
         finally:
             if lock_acquired and lock_cur:
                 try:
-                    lock_cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))",(_post_lock_key(pipeline_id,reel_url),)); lock_conn.commit()
-                except Exception: pass
-            if lock_cur: lock_cur.close()
+                    lock_cur.execute(
+                        "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                        (_post_lock_key(pipeline_id, reel_url),)
+                    )
+                    lock_conn.commit()
+                except Exception as e:
+                    app.logger.warning(f"⚠️ Failed releasing duplicate lock: {e}")
+            if lock_cur:
+                lock_cur.close()
             lock_conn.close()
-    update_pipeline_stats(pipeline_id,0,0)
-    status='completed' if failed_count==0 else 'partial'; log_pipeline_run(pipeline_id,posted_count,failed_count,status)
-    return {"message":f"Pipeline completed for {provider}/{platform}","posted":posted_count,"failed":failed_count,"total":len(due_posts)}
+
+    try:
+        update_pipeline_stats(pipeline_id, 0, 0)
+    except Exception as e:
+        app.logger.warning(f"⚠️ Failed updating pipeline stats: {e}")
+
+    run_status = 'completed' if failed_count == 0 else 'partial'
+    log_pipeline_run(pipeline_id, posted_count, failed_count, run_status)
+    return {
+        "message": "Pipeline completed with atomic claiming and duplicate protection",
+        "posted": posted_count,
+        "failed": failed_count,
+        "total": len(due_posts)
+    }
 
 
 def run_all_active_pipelines():
@@ -3477,25 +3559,6 @@ def run_all_active_pipelines():
 
 
 # ============== ROUTES ==============
-
-# ============== HEALTH / ROUTE DISCOVERY ==============
-@app.route("/api/health", methods=["GET"])
-def api_health():
-    return jsonify({
-        "status": "ok",
-        "service": "Fetchgram",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "database": bool(get_db_connection()),
-    })
-
-@app.route("/api/routes", methods=["GET"])
-def api_routes():
-    routes = []
-    for rule in app.url_map.iter_rules():
-        methods = sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"})
-        routes.append({"path": str(rule), "methods": methods})
-    routes.sort(key=lambda x: x["path"])
-    return jsonify({"status": "success", "count": len(routes), "routes": routes})
 
 @app.route("/")
 def index():
@@ -5375,31 +5438,176 @@ def webhook_caption():
 # ============== PROCESS POST WITH CAPTION (NEW FLOW) ==============
 
 def process_post_with_caption(post, caption):
-    """Legacy caption webhook compatibility.
-
-    The webhook stores the caption only. The destination-aware scheduler is the
-    single publisher now, preventing the old Facebook-only webhook path from
-    accidentally posting a Buffer/Bluesky pipeline or racing the scheduler.
+    """
+    Process a scheduled post that now has a caption.
+    This publishes the post to Facebook.
     """
     try:
-        scheduled_id = post.get('scheduled_id')
-        pipeline_id = post.get('pipeline_id')
-        if not scheduled_id or not pipeline_id:
+        # ✅ Use the correct IDs from aliases
+        scheduled_id = post.get('scheduled_id')  # This is the SCHEDULED post ID
+        pipeline_id = post.get('pipeline_id')    # This is the PIPELINE ID
+
+        app.logger.info(f"📤 Processing post with caption")
+        app.logger.info(f"   Scheduled ID: {scheduled_id}")
+        app.logger.info(f"   Pipeline ID: {pipeline_id}")
+
+        if not scheduled_id:
+            app.logger.error("❌ No scheduled_id found in post")
             return
+
+        # This legacy/webhook path must never publish a row already claimed by
+        # the main scheduler. Only transition pending -> processing here.
+        claim_conn = get_db_connection()
+        claim_cur = None
+        claimed_here = False
+        try:
+            claim_cur = claim_conn.cursor()
+            claim_cur.execute("""
+                UPDATE scheduled_posts
+                SET status = 'processing', updated_at = NOW()
+                WHERE id = %s AND status = 'pending'
+                RETURNING id
+            """, (scheduled_id,))
+            claimed_here = bool(claim_cur.fetchone())
+            claim_conn.commit()
+        except Exception:
+            try: claim_conn.rollback()
+            except Exception: pass
+        finally:
+            if claim_cur: claim_cur.close()
+            claim_conn.close()
+
+        if not claimed_here:
+            app.logger.info(
+                f"⏭️ Legacy caption publisher skipped {scheduled_id}: already claimed/handled."
+            )
+            return
+
+        # ============================================================
+        # STEP 1: ALWAYS fetch a FRESH video URL — no cache, no DB.
+        # The URL stored on the scheduled post may be an expired
+        # fdown.vn signed link from a previous run.
+        # ============================================================
+        app.logger.info(
+            f"📥 Fetching FRESH video URL for post {scheduled_id}..."
+        )
+        direct_video_url = get_direct_video_url(
+            post['reel_url'],
+            pipeline_id=pipeline_id,
+            post_id=scheduled_id,
+            profile_username=post.get('profile_username')
+        )
+
+        if not direct_video_url:
+            app.logger.error(
+                f"❌ No fresh video URL for post {scheduled_id} — "
+                f"leaving it pending for retry"
+            )
+            # Do NOT mark as failed. The post remains in whatever
+            # status it had so a later run can retry with a live URL.
+            return
+
+        app.logger.info(f"🎬✅ Fresh video URL: {direct_video_url[:60]}...")
+
+        # ============================================================
+        # STEP 2: Publish to Facebook (video + caption ready)
+        # ============================================================
+        key_id = post.get('zernio_key_id')
+
+        app.logger.info(f"📤 Publishing to Facebook with key: {key_id}")
+
+        result = publish_to_facebook(
+            video_url=direct_video_url,
+            text=caption,
+            account_id=post['facebook_account_id'],
+            publish_now=True,
+            key_id=key_id
+        )
+
         conn = get_db_connection()
         if not conn:
+            app.logger.error("❌ No database connection")
             return
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            UPDATE scheduled_posts
-            SET caption=%s, updated_at=NOW()
-            WHERE id=%s AND status IN ('pending','processing')
-        """, (caption, scheduled_id))
-        conn.commit()
-        cur.close(); conn.close()
-        app.logger.info(f"📝 Caption saved for scheduled post {scheduled_id}; destination scheduler will publish it.")
+
+        cur = conn.cursor()
+
+        # ---------- Success OR idempotent "already posted" ----------
+        if result and not result.get('error'):
+            already_posted = result.get('already_posted', False)
+
+            post_result_id = (
+                result.get('post', {}).get('_id')
+                or result.get('post_id')
+            )
+            post_url = None
+            for platform in result.get('post', {}).get('platforms', []):
+                if platform.get('platform') == 'facebook':
+                    post_url = platform.get('publishedUrl')
+                    break
+
+            mark_reel_as_posted(
+                pipeline_id=pipeline_id,
+                reel_url=post['reel_url'],
+                direct_video_url=direct_video_url,
+                caption=caption,
+                facebook_post_id=post_result_id,
+                facebook_post_url=post_url,
+                status='success',
+                error_message=(
+                    'Already posted (dedup)' if already_posted else None
+                )
+            )
+
+            # ✅ CRITICAL: Update scheduled_posts using scheduled_id
+            cur.execute("""
+                UPDATE scheduled_posts
+                SET status = 'posted', posted_at = NOW(), updated_at = NOW()
+                WHERE id = %s
+            """, (scheduled_id,))
+            conn.commit()
+
+            if already_posted:
+                app.logger.info(
+                    f"♻️ Post {scheduled_id} already existed on Facebook "
+                    f"(existingPostId={post_result_id})"
+                )
+            else:
+                app.logger.info(
+                    f"✅ Post {scheduled_id} published and marked as posted!"
+                )
+
+        # ---------- Genuine failure ----------
+        else:
+            error_msg = (
+                result.get('error', 'Unknown error')
+                if result else 'Unknown error'
+            )
+            app.logger.error(f"❌ Facebook publish failed: {error_msg}")
+
+            mark_reel_as_posted(
+                pipeline_id=pipeline_id,
+                reel_url=post['reel_url'],
+                direct_video_url=direct_video_url,
+                caption=caption,
+                status='failed',
+                error_message=str(error_msg)
+            )
+
+            cur.execute("""
+                UPDATE scheduled_posts
+                SET status = 'failed', error_message = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (str(error_msg), scheduled_id))
+            conn.commit()
+
+        update_pipeline_stats(pipeline_id, 0, 0)
+        cur.close()
+        conn.close()
+
     except Exception as e:
-        app.logger.error(f"❌ Legacy caption handler error: {e}")
+        app.logger.error(f"❌ Error processing post from webhook: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
 
 # ============== CAPTION STATUS ROUTES ==============
 
@@ -5446,16 +5654,7 @@ def get_pipelines():
                 p.total_posted,
                 p.created_at,
                 p.updated_at,
-                p.zernio_key_id,
-                p.provider,
-                p.platform,
-                p.buffer_key_id,
-                p.buffer_channel_id,
-                p.bluesky_account_id,
-                p.youtube_title,
-                p.youtube_category_id,
-                p.youtube_privacy,
-                p.youtube_notify_subscribers
+                p.zernio_key_id
             FROM pipelines p
             ORDER BY p.created_at DESC
         """)
@@ -5544,83 +5743,67 @@ def get_pipelines():
 @app.route('/api/pipelines', methods=['POST'])
 def create_pipeline():
     data = request.get_json(silent=True) or {}
-    name = (data.get('name') or '').strip()
-    profile_username = (data.get('profile_username') or '').strip()
-    provider = (data.get('provider') or 'zernio').lower()
-    platform = (data.get('platform') or ('facebook' if provider == 'zernio' else provider)).lower()
-    daily_limit = int(data.get('daily_limit', 2) or 2)
-    facebook_account_id = data.get('facebook_account_id') or ''
-    zernio_key_id = data.get('zernio_key_id') or None
-    buffer_key_id = data.get('buffer_key_id') or None
-    buffer_channel_id = data.get('buffer_channel_id') or None
-    bluesky_account_id = data.get('bluesky_account_id') or None
-    youtube_title = data.get('youtube_title') or None
-    youtube_category_id = data.get('youtube_category_id') or '22'
-    youtube_privacy = data.get('youtube_privacy') or 'public'
-    youtube_notify_subscribers = bool(data.get('youtube_notify_subscribers', True))
-
-    if not name or not profile_username:
-        return jsonify({"error": "name and profile_username are required"}), 400
-    if provider == 'zernio' and platform == 'facebook' and not facebook_account_id:
-        return jsonify({"error": "facebook_account_id is required for Facebook pipelines"}), 400
-    if provider == 'buffer' and (platform not in ('tiktok','youtube','twitter') or not buffer_key_id or not buffer_channel_id):
-        return jsonify({"error": "Buffer pipelines require buffer_key_id and buffer_channel_id"}), 400
-    if provider == 'bluesky' and (platform != 'bluesky' or not bluesky_account_id):
-        return jsonify({"error": "Bluesky pipelines require a Bluesky account"}), 400
-
+    name = data.get('name')
+    profile_username = data.get('profile_username')
+    facebook_account_id = data.get('facebook_account_id')
+    daily_limit = data.get('daily_limit', 2)
+    zernio_key_id = data.get('zernio_key_id')  # Optional: assign a specific key
+    
+    if not name or not profile_username or not facebook_account_id:
+        return jsonify({"error": "name, profile_username, and facebook_account_id are required"}), 400
+    
     conn = get_db_connection()
-    if not conn: return jsonify({"error": "Database connection failed"}), 500
-    cur = None
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO pipelines
-              (id,name,profile_username,facebook_account_id,daily_limit,is_active,zernio_key_id,
-               provider,platform,buffer_key_id,buffer_channel_id,bluesky_account_id,
-               youtube_title,youtube_category_id,youtube_privacy,youtube_notify_subscribers)
-            VALUES(gen_random_uuid(),%s,%s,%s,%s,TRUE,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            RETURNING id
-        """, (name,profile_username,facebook_account_id,daily_limit,zernio_key_id,provider,platform,
-              buffer_key_id,buffer_channel_id,bluesky_account_id,youtube_title,youtube_category_id,
-              youtube_privacy,youtube_notify_subscribers))
-        pipeline_id=cur.fetchone()[0]; conn.commit()
-        return jsonify({"status":"success","message":"Pipeline created","pipeline_id":str(pipeline_id)})
+            INSERT INTO pipelines (id, name, profile_username, facebook_account_id, daily_limit, is_active, zernio_key_id)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE, %s) RETURNING id
+        """, (name, profile_username, facebook_account_id, daily_limit, zernio_key_id))
+        pipeline_id = cur.fetchone()[0]
+        conn.commit()
+        return jsonify({"status": "success", "message": "Pipeline created", "pipeline_id": pipeline_id})
     except Exception as e:
-        if conn: conn.rollback()
-        return jsonify({"error":str(e)}),500
+        return jsonify({"error": str(e)}), 500
     finally:
-        if cur: cur.close()
+        cur.close()
         conn.close()
 
 @app.route('/api/pipelines/<pipeline_id>', methods=['PUT'])
 def update_pipeline(pipeline_id):
     data = request.get_json(silent=True) or {}
     conn = get_db_connection()
-    if not conn: return jsonify({"error":"Database connection failed"}),500
-    cur=None
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
     try:
-        updates=[]; params=[]
-        mapping={
-            'name':'name','profile_username':'profile_username','facebook_account_id':'facebook_account_id',
-            'daily_limit':'daily_limit','is_active':'is_active','zernio_key_id':'zernio_key_id',
-            'provider':'provider','platform':'platform','buffer_key_id':'buffer_key_id',
-            'buffer_channel_id':'buffer_channel_id','bluesky_account_id':'bluesky_account_id',
-            'youtube_title':'youtube_title','youtube_category_id':'youtube_category_id',
-            'youtube_privacy':'youtube_privacy','youtube_notify_subscribers':'youtube_notify_subscribers'
-        }
-        for key,col in mapping.items():
-            if key in data:
-                updates.append(f"{col} = %s"); params.append(data[key])
-        if not updates: return jsonify({"error":"No fields to update"}),400
-        updates.append("updated_at = NOW()"); params.append(pipeline_id)
-        cur=conn.cursor(); cur.execute(f"UPDATE pipelines SET {', '.join(updates)} WHERE id=%s",params)
-        if cur.rowcount==0: return jsonify({"error":"Pipeline not found"}),404
-        conn.commit(); return jsonify({"status":"success","message":"Pipeline updated"})
+        updates = []
+        params = []
+        if 'name' in data:
+            updates.append("name = %s"); params.append(data['name'])
+        if 'profile_username' in data:
+            updates.append("profile_username = %s"); params.append(data['profile_username'])
+        if 'facebook_account_id' in data:
+            updates.append("facebook_account_id = %s"); params.append(data['facebook_account_id'])
+        if 'daily_limit' in data:
+            updates.append("daily_limit = %s"); params.append(data['daily_limit'])
+        if 'is_active' in data:
+            updates.append("is_active = %s"); params.append(data['is_active'])
+        if 'zernio_key_id' in data:
+            updates.append("zernio_key_id = %s"); params.append(data['zernio_key_id'])
+        if not updates:
+            return jsonify({"error": "No fields to update"}), 400
+        updates.append("updated_at = NOW()")
+        params.append(pipeline_id)
+        cur = conn.cursor()
+        cur.execute(f"UPDATE pipelines SET {', '.join(updates)} WHERE id = %s", params)
+        conn.commit()
+        return jsonify({"status": "success", "message": "Pipeline updated"})
     except Exception as e:
-        if conn: conn.rollback()
-        return jsonify({"error":str(e)}),500
+        return jsonify({"error": str(e)}), 500
     finally:
-        if cur: cur.close()
+        cur.close()
         conn.close()
 
 @app.route('/api/pipelines/<pipeline_id>/run', methods=['POST'])
