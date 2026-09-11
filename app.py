@@ -258,7 +258,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS buffer_keys (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 name TEXT NOT NULL, api_key TEXT NOT NULL UNIQUE,
-                organization_id TEXT, usage_count INTEGER DEFAULT 0,
+                usage_count INTEGER DEFAULT 0,
                 is_active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -268,12 +268,11 @@ def init_db():
         # CREATE TABLE IF NOT EXISTS does not add columns to an already-existing table.
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS name TEXT;")
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS api_key TEXT;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS organization_id TEXT;")
+        
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS usage_count INTEGER DEFAULT 0;")
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS organization_id TEXT;")
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS name TEXT;")
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS display_name TEXT;")
         cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS service TEXT;")
@@ -287,7 +286,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS buffer_channels (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 buffer_key_id UUID REFERENCES buffer_keys(id) ON DELETE CASCADE,
-                organization_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
                 name TEXT, display_name TEXT, service TEXT NOT NULL,
                 external_link TEXT, is_disconnected BOOLEAN DEFAULT FALSE,
                 is_locked BOOLEAN DEFAULT FALSE,
@@ -296,7 +295,7 @@ def init_db():
                 UNIQUE(buffer_key_id, channel_id)
             );
         """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_active ON buffer_keys(is_active);")
+        # Buffer does not persist organization_id; it is only used transiently\n        # when querying Buffer's channel API. Remove legacy columns from older schemas.\n        cur.execute("ALTER TABLE buffer_keys DROP COLUMN IF EXISTS organization_id;")\n        cur.execute("ALTER TABLE buffer_channels DROP COLUMN IF EXISTS organization_id;")\n\n        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_active ON buffer_keys(is_active);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_channels_key ON buffer_channels(buffer_key_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_channels_service ON buffer_channels(service);")
         cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_provider TEXT DEFAULT 'zernio';")
@@ -2266,15 +2265,15 @@ def sync_buffer_channels(buffer_key_id, api_key):
             for ch in buffer_get_channels(api_key,org["id"]):
                 cur.execute("""
                     INSERT INTO buffer_channels
-                    (buffer_key_id,organization_id,channel_id,name,display_name,service,external_link,is_disconnected,is_locked,updated_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                    (buffer_key_id,channel_id,name,display_name,service,external_link,is_disconnected,is_locked,updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                     ON CONFLICT (buffer_key_id,channel_id) DO UPDATE SET
-                      organization_id=EXCLUDED.organization_id,name=EXCLUDED.name,display_name=EXCLUDED.display_name,
+                      name=EXCLUDED.name,display_name=EXCLUDED.display_name,
                       service=EXCLUDED.service,external_link=EXCLUDED.external_link,is_disconnected=EXCLUDED.is_disconnected,
                       is_locked=EXCLUDED.is_locked,updated_at=NOW()
-                """,(buffer_key_id,org["id"],ch["id"],ch.get("name"),ch.get("displayName"),ch.get("service"),ch.get("externalLink"),bool(ch.get("isDisconnected")),bool(ch.get("isLocked"))))
-                channels.append({"id":ch["id"],"organization_id":org["id"],"name":ch.get("name"),"display_name":ch.get("displayName"),"service":ch.get("service"),"external_link":ch.get("externalLink"),"is_disconnected":bool(ch.get("isDisconnected")),"is_locked":bool(ch.get("isLocked"))})
-        cur.execute("UPDATE buffer_keys SET organization_id=COALESCE(%s,organization_id),updated_at=NOW() WHERE id=%s",(first_org,buffer_key_id)); conn.commit()
+                """,(buffer_key_id,ch["id"],ch.get("name"),ch.get("displayName"),ch.get("service"),ch.get("externalLink"),bool(ch.get("isDisconnected")),bool(ch.get("isLocked"))))
+                channels.append({"id":ch["id"],"name":ch.get("name"),"display_name":ch.get("displayName"),"service":ch.get("service"),"external_link":ch.get("externalLink"),"is_disconnected":bool(ch.get("isDisconnected")),"is_locked":bool(ch.get("isLocked"))})
+        conn.commit()
         return channels
     finally: conn.close()
 
@@ -5778,7 +5777,7 @@ def get_buffer_keys():
     conn=get_db_connection()
     if not conn: return jsonify({"error":"Database connection failed"}),500
     try:
-        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT id,name,organization_id,is_active,created_at,updated_at FROM buffer_keys ORDER BY created_at DESC"); keys=cur.fetchall()
+        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT id,name,is_active,created_at,updated_at FROM buffer_keys ORDER BY created_at DESC"); keys=cur.fetchall()
         for k in keys:
             cur.execute("""SELECT channel_id AS id,name,display_name,service,external_link,is_disconnected,is_locked FROM buffer_channels WHERE buffer_key_id=%s ORDER BY service,display_name,name""",(k["id"],)); k["channels"]=cur.fetchall(); k["channel_count"]=len(k["channels"])
         return jsonify({"status":"success","keys":keys})
@@ -5794,7 +5793,7 @@ def create_buffer_key():
     try:
         orgs=buffer_get_organizations(api_key)
         if not orgs: return jsonify({"error":"Buffer key is valid but has no organizations"}),400
-        cur=conn.cursor(); cur.execute("INSERT INTO buffer_keys(name,api_key,organization_id) VALUES(%s,%s,%s) RETURNING id",(name,api_key,orgs[0]["id"])); key_id=cur.fetchone()[0]; conn.commit(); conn.close()
+        cur=conn.cursor(); cur.execute("INSERT INTO buffer_keys(name,api_key) VALUES(%s,%s) RETURNING id",(name,api_key)); key_id=cur.fetchone()[0]; conn.commit(); conn.close()
         channels=sync_buffer_channels(key_id,api_key); return jsonify({"status":"success","key_id":str(key_id),"channels":channels,"message":f"Buffer key added with {len(channels)} channels"})
     except Exception as e:
         try: conn.rollback()
