@@ -2124,6 +2124,7 @@ function showDirectUrl(url, item) {
   
   showBlueskySection();
   showZernioSection();
+  showTikTokSection();
 }
 
 function formatDuration(seconds) {
@@ -2863,6 +2864,7 @@ initSession().then(() => {
     checkZernioStatus();
     loadZernioAccounts();
     loadPipelines();
+    loadBufferKeys();
     setTimeout(autoLoadScrapedResults, 1000);
 });
 
@@ -5430,3 +5432,375 @@ document.addEventListener('DOMContentLoaded', function() {
     
     initManualScheduler();
 });
+
+
+
+
+
+
+// ==================== BUFFER KEYS (TIKTOK) ====================
+
+let bufferKeys = [];
+
+async function loadBufferKeys() {
+    const container = document.getElementById('buffer-keys-list');
+    const badge = document.getElementById('buffer-keys-count');
+    if (!container) return;
+
+    try {
+        const res = await fetch('/api/buffer/keys', { credentials: 'same-origin' });
+        const data = await res.json();
+
+        if (data.status === 'success') {
+            bufferKeys = data.keys || [];
+            if (badge) badge.textContent = `${data.total} keys`;
+            renderBufferKeys(bufferKeys);
+        } else {
+            container.innerHTML = `<div class="empty-state">❌ ${data.error || 'Failed to load keys'}</div>`;
+        }
+    } catch (err) {
+        console.error('loadBufferKeys:', err);
+        container.innerHTML = `<div class="empty-state">❌ ${err.message}</div>`;
+    }
+}
+
+function renderBufferKeys(keys) {
+    const container = document.getElementById('buffer-keys-list');
+    if (!container) return;
+
+    if (!keys || keys.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">🎵</div>
+                <strong>No Buffer keys added</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    Add your Buffer API key to start posting to TikTok.
+                </p>
+                <button id="empty-add-buffer-key-btn" class="btn btn-sm btn-primary" style="margin-top: 12px;">➕ Add Key</button>
+            </div>`;
+        document.getElementById('empty-add-buffer-key-btn')?.addEventListener('click', () => {
+            document.getElementById('add-buffer-key-modal').hidden = false;
+        });
+        return;
+    }
+
+    let html = `<div class="zernio-keys-grid">`;
+    keys.forEach(key => {
+        const channels = key.channels || [];
+        const isActive = key.is_active;
+        html += `
+            <div class="zernio-key-card ${isActive ? '' : 'inactive'}">
+                <div class="zernio-key-header">
+                    <div class="zernio-key-name">
+                        <span class="key-icon">${isActive ? '🟢' : '🔴'}</span>
+                        <span class="key-title">${escapeHtml(key.name)}</span>
+                        <span class="key-status-badge ${isActive ? 'active' : 'inactive'}">
+                            ${isActive ? 'Active' : 'Inactive'}
+                        </span>
+                        <span class="key-account-count-badge">
+                            ${channels.length} channel${channels.length !== 1 ? 's' : ''}
+                        </span>
+                    </div>
+                    <div class="zernio-key-actions">
+                        <button class="btn btn-sm btn-ghost toggle-buffer-key-btn"
+                                data-id="${key.id}" data-active="${isActive}" title="Toggle">${isActive ? '⏸' : '▶'}</button>
+                        <button class="btn btn-sm btn-danger delete-buffer-key-btn"
+                                data-id="${key.id}" data-name="${escapeHtml(key.name)}">🗑️</button>
+                    </div>
+                </div>
+                <div class="zernio-key-body">
+                    <div class="key-detail">
+                        <span class="key-label">API Key:</span>
+                        <span class="key-value key-masked">${key.api_key_masked || '***'}</span>
+                    </div>
+                    <div class="key-accounts-section">
+                        <div class="key-detail" style="border-bottom: none; font-weight: 600;">
+                            <span class="key-label">TikTok Channels:</span>
+                            <span class="key-value" style="color: var(--accent);">${channels.length}</span>
+                        </div>
+                        ${channels.length ? `
+                            <div class="key-accounts-list">
+                                ${channels.map(c => `
+                                    <div class="key-account-item">
+                                        <span class="account-icon">🎵</span>
+                                        <span class="account-name">${escapeHtml(c.name || c.id)}</span>
+                                        <span class="account-id">${escapeHtml(c.id)}</span>
+                                        <span class="account-status">✅</span>
+                                    </div>`).join('')}
+                            </div>` : `
+                            <div class="key-accounts-empty">
+                                <span style="color: var(--text-muted); font-size: 13px;">No TikTok channels</span>
+                            </div>`}
+                    </div>
+                </div>
+            </div>`;
+    });
+    html += `</div>`;
+    container.innerHTML = html;
+
+    document.querySelectorAll('.delete-buffer-key-btn').forEach(btn =>
+        btn.addEventListener('click', () => deleteBufferKey(btn.dataset.id, btn.dataset.name)));
+    document.querySelectorAll('.toggle-buffer-key-btn').forEach(btn =>
+        btn.addEventListener('click', () => toggleBufferKey(btn.dataset.id, btn.dataset.active === 'true')));
+}
+
+// --- Add key modal ---
+document.getElementById('add-buffer-key-btn')?.addEventListener('click', () => {
+    document.getElementById('add-buffer-key-modal').hidden = false;
+    document.getElementById('add-buffer-key-status').style.display = 'none';
+    document.getElementById('buffer-key-api').value = '';
+    document.getElementById('buffer-key-name').value = '';
+});
+
+document.getElementById('add-buffer-key-modal-close')?.addEventListener('click', () => {
+    document.getElementById('add-buffer-key-modal').hidden = true;
+});
+
+document.getElementById('add-buffer-key-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) e.target.hidden = true;
+});
+
+document.getElementById('save-buffer-key-btn')?.addEventListener('click', async function () {
+    const apiKey = document.getElementById('buffer-key-api').value.trim();
+    const name = document.getElementById('buffer-key-name').value.trim();
+    const status = document.getElementById('add-buffer-key-status');
+
+    if (!apiKey) {
+        status.textContent = '❌ Please enter your Buffer API key';
+        status.className = 'status-message error';
+        status.style.display = 'block';
+        return;
+    }
+
+    this.disabled = true;
+    this.textContent = '⏳ Checking key...';
+    status.style.display = 'none';
+
+    try {
+        const res = await fetch('/api/buffer/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ api_key: apiKey, name })
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+            status.textContent = `✅ ${data.message}`;
+            status.className = 'status-message success';
+            status.style.display = 'block';
+
+            await loadBufferKeys();
+            await loadTikTokChannels();
+
+            setTimeout(() => {
+                document.getElementById('add-buffer-key-modal').hidden = true;
+            }, 1500);
+        } else {
+            status.textContent = `❌ ${data.error || 'Failed to add key'}`;
+            status.className = 'status-message error';
+            status.style.display = 'block';
+        }
+    } catch (err) {
+        status.textContent = `❌ ${err.message}`;
+        status.className = 'status-message error';
+        status.style.display = 'block';
+    } finally {
+        this.disabled = false;
+        this.textContent = 'Save Key';
+    }
+});
+
+async function deleteBufferKey(keyId, keyName) {
+    if (!confirm(`Delete Buffer key "${keyName}"?`)) return;
+    try {
+        const res = await fetch(`/api/buffer/keys/${keyId}`, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(`✅ Buffer key "${keyName}" deleted`, 'success');
+            await loadBufferKeys();
+            await loadTikTokChannels();
+        } else {
+            showToast(`❌ ${data.error || 'Failed to delete'}`, 'error');
+        }
+    } catch (err) {
+        showToast(`❌ ${err.message}`, 'error');
+    }
+}
+
+async function toggleBufferKey(keyId, currentActive) {
+    try {
+        const res = await fetch(`/api/buffer/keys/${keyId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ is_active: !currentActive })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(`✅ Key ${!currentActive ? 'activated' : 'deactivated'}`, 'success');
+            await loadBufferKeys();
+            await loadTikTokChannels();
+        } else {
+            showToast(`❌ ${data.error}`, 'error');
+        }
+    } catch (err) {
+        showToast(`❌ ${err.message}`, 'error');
+    }
+}
+
+document.getElementById('refresh-buffer-keys-btn')?.addEventListener('click', async function () {
+    this.disabled = true;
+    this.textContent = '⏳';
+    await loadBufferKeys();
+    await loadTikTokChannels();
+    this.disabled = false;
+    this.textContent = '🔄 Refresh';
+});
+
+
+// ==================== TIKTOK POSTING ====================
+
+function showTikTokSection() {
+    const section = document.getElementById('tiktok-section');
+    if (!section) return;
+    section.hidden = false;
+    loadTikTokChannels();
+}
+
+function showTikTokStatus(message, type) {
+    const el = document.getElementById('tiktok-status');
+    if (!el) return;
+    el.textContent = message;
+    el.className = 'status-message ' + (type || '');
+    el.hidden = false;
+    if (type === 'success' || type === 'info') {
+        setTimeout(() => { el.hidden = true; }, 8000);
+    }
+}
+
+async function loadTikTokChannels() {
+    const select = document.getElementById('tiktok-channel-select');
+    const badge = document.getElementById('tiktok-status-badge');
+    if (!select) return;
+
+    try {
+        const res = await fetch('/api/buffer/channels', { credentials: 'same-origin' });
+        const data = await res.json();
+
+        if (data.status !== 'success') throw new Error(data.error || 'Failed to load channels');
+
+        select.innerHTML = '';
+        const channels = data.channels || [];
+
+        if (channels.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'No TikTok channels — add a Buffer key';
+            opt.disabled = true;
+            opt.selected = true;
+            select.appendChild(opt);
+            if (badge) badge.textContent = '⚠️ No channels';
+            return;
+        }
+
+        channels.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.id;
+            opt.textContent = `${c.name} (${c.key_name})`;
+            opt.dataset.keyId = c.key_id;
+            select.appendChild(opt);
+        });
+
+        if (badge) badge.textContent = `✅ ${channels.length} channel(s)`;
+    } catch (err) {
+        console.error('loadTikTokChannels:', err);
+        if (badge) badge.textContent = '❌ Error';
+    }
+}
+
+document.getElementById('tiktok-text')?.addEventListener('input', function () {
+    const counter = document.getElementById('tiktok-char-count');
+    if (counter) {
+        counter.textContent = `${this.value.length}/150`;
+        counter.style.color = this.value.length > 150 ? 'var(--error)' : 'var(--text-muted)';
+    }
+});
+
+document.getElementById('refresh-tiktok-btn')?.addEventListener('click', function () {
+    this.disabled = true;
+    this.textContent = '⏳';
+    loadTikTokChannels().finally(() => {
+        this.disabled = false;
+        this.textContent = '🔄';
+    });
+});
+
+document.getElementById('tiktok-post-btn')?.addEventListener('click', async function () {
+    const select = document.getElementById('tiktok-channel-select');
+    const channelId = select?.value;
+    const keyId = select?.selectedOptions?.[0]?.dataset?.keyId || null;
+    const text = document.getElementById('tiktok-text')?.value.trim();
+    const mode = document.getElementById('tiktok-mode')?.value || 'addToQueue';
+    const thumbOffset = Number(document.getElementById('tiktok-thumb-offset')?.value || 1000);
+
+    if (!currentVideoUrl) {
+        showTikTokStatus('❌ No video loaded. Fetch a video first.', 'error');
+        return;
+    }
+    if (!channelId) {
+        showTikTokStatus('❌ Select a TikTok channel.', 'error');
+        return;
+    }
+    if (!text || text.length > 150) {
+        showTikTokStatus('❌ Caption must be 1–150 characters.', 'error');
+        return;
+    }
+
+    this.disabled = true;
+    this.innerHTML = '<span class="btn-spinner"></span> Posting...';
+    showTikTokStatus('⏳ Sending video to Buffer/TikTok...', 'info');
+
+    try {
+        const res = await fetch('/api/tiktok/post', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                channelId,
+                videoUrl: currentVideoUrl,
+                text,
+                mode,
+                thumbnailOffset: thumbOffset,
+                key_id: keyId,
+            }),
+        });
+        const data = await res.json();
+
+        if (res.ok && data.status === 'success' && data.post) {
+            showTikTokStatus(
+                `✅ Posted! ID: ${data.post.id || 'N/A'} · Status: ${data.post.status || 'unknown'}`,
+                'success'
+            );
+        } else {
+            showTikTokStatus(`❌ ${data.error || 'Failed to post to TikTok'}`, 'error');
+        }
+    } catch (err) {
+        showTikTokStatus(`❌ ${err.message}`, 'error');
+    } finally {
+        this.disabled = false;
+        this.innerHTML = `
+            <span class="btn-content">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Post to TikTok
+            </span>`;
+    }
+});
+
+console.log('✅ Buffer/TikTok integration loaded');
