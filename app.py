@@ -264,6 +264,25 @@ def init_db():
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
         """)
+        # Safe migrations for existing installations.
+        # CREATE TABLE IF NOT EXISTS does not add columns to an already-existing table.
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS name TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS api_key TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS organization_id TEXT;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS usage_count INTEGER DEFAULT 0;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS organization_id TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS name TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS display_name TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS service TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS external_link TEXT;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS is_disconnected BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS is_locked BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS buffer_channels (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
