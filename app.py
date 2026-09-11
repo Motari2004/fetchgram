@@ -18,14 +18,6 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from buffer_platforms import buffer_bp, init_buffer_tables, publish_via_buffer   # pyright: ignore[reportMissingImports]
-
-
-
-
-
-
-
 
 # Load .env file manually if it exists (for local development)
 try:
@@ -48,7 +40,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production' or bool(os.environ.get('VERCEL'))
 CORS(app, supports_credentials=True)
 
-app.register_blueprint(buffer_bp) 
+
 
 # ============== COOKIE EXTRACTOR CONFIGURATION ==============
 COOKIE_EXTRACTOR_URL = os.environ.get('COOKIE_EXTRACTOR_URL', 'https://profilecookieextractor.onrender.com')
@@ -256,6 +248,44 @@ def init_db():
         
         # Add zernio_key_id to pipelines
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS publisher_provider TEXT DEFAULT 'zernio';")
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS source_mode TEXT DEFAULT 'scraped';")
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_key_id UUID;")
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_id TEXT;")
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_name TEXT;")
+        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_platform TEXT;")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS buffer_keys (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name TEXT NOT NULL, api_key TEXT NOT NULL UNIQUE,
+                organization_id TEXT, usage_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS buffer_channels (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                buffer_key_id UUID REFERENCES buffer_keys(id) ON DELETE CASCADE,
+                organization_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+                name TEXT, display_name TEXT, service TEXT NOT NULL,
+                external_link TEXT, is_disconnected BOOLEAN DEFAULT FALSE,
+                is_locked BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(buffer_key_id, channel_id)
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_active ON buffer_keys(is_active);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_channels_key ON buffer_channels(buffer_key_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_channels_service ON buffer_channels(service);")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_provider TEXT DEFAULT 'zernio';")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_account_id TEXT;")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_platform TEXT;")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_post_id TEXT;")
+        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_post_url TEXT;")
+
         
         # ========== NEW: APP SETTINGS TABLE ==========
         cur.execute("""
@@ -322,9 +352,6 @@ def init_db():
 
 # Initialize database on startup
 init_db()
-
-init_buffer_tables()
-
 
 # ============== APP SETTINGS MANAGER ==============
 
@@ -2180,6 +2207,93 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+
+# ============== BUFFER INTEGRATION ==============
+
+BUFFER_API_URL = "https://api.buffer.com"
+
+def buffer_graphql(api_key, query, variables=None, timeout=60):
+    headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"}
+    response=requests.post(BUFFER_API_URL,headers=headers,json={"query":query,"variables":variables or {}},timeout=timeout)
+    try: body=response.json()
+    except ValueError: body={"errors":[{"message":response.text[:500]}]}
+    if response.status_code>=400:
+        raise Exception(body.get("errors",[{"message":f"Buffer HTTP {response.status_code}"}])[0].get("message"))
+    if body.get("errors"):
+        raise Exception("; ".join(str(e.get("message","Buffer GraphQL error")) for e in body["errors"]))
+    return body.get("data") or {}
+
+def buffer_get_organizations(api_key):
+    data=buffer_graphql(api_key,"""query GetOrganizations { account { organizations { id name } } }""")
+    return data.get("account",{}).get("organizations",[])
+
+def buffer_get_channels(api_key, organization_id):
+    data=buffer_graphql(api_key,"""
+        query GetChannels($organizationId: ID!) {
+          channels(input: { organizationId: $organizationId }) {
+            id name displayName service avatar externalLink isDisconnected isLocked
+          }
+        }
+    """,{"organizationId":organization_id})
+    return data.get("channels",[])
+
+def sync_buffer_channels(buffer_key_id, api_key):
+    orgs=buffer_get_organizations(api_key); conn=get_db_connection()
+    if not conn: raise Exception("Database connection failed")
+    channels=[]
+    try:
+        cur=conn.cursor(); first_org=orgs[0]["id"] if orgs else None
+        for org in orgs:
+            for ch in buffer_get_channels(api_key,org["id"]):
+                cur.execute("""
+                    INSERT INTO buffer_channels
+                    (buffer_key_id,organization_id,channel_id,name,display_name,service,external_link,is_disconnected,is_locked,updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                    ON CONFLICT (buffer_key_id,channel_id) DO UPDATE SET
+                      organization_id=EXCLUDED.organization_id,name=EXCLUDED.name,display_name=EXCLUDED.display_name,
+                      service=EXCLUDED.service,external_link=EXCLUDED.external_link,is_disconnected=EXCLUDED.is_disconnected,
+                      is_locked=EXCLUDED.is_locked,updated_at=NOW()
+                """,(buffer_key_id,org["id"],ch["id"],ch.get("name"),ch.get("displayName"),ch.get("service"),ch.get("externalLink"),bool(ch.get("isDisconnected")),bool(ch.get("isLocked"))))
+                channels.append({"id":ch["id"],"organization_id":org["id"],"name":ch.get("name"),"display_name":ch.get("displayName"),"service":ch.get("service"),"external_link":ch.get("externalLink"),"is_disconnected":bool(ch.get("isDisconnected")),"is_locked":bool(ch.get("isLocked"))})
+        cur.execute("UPDATE buffer_keys SET organization_id=COALESCE(%s,organization_id),updated_at=NOW() WHERE id=%s",(first_org,buffer_key_id)); conn.commit()
+        return channels
+    finally: conn.close()
+
+def publish_to_buffer(api_key, channel_id, text="", video_url=None, publish_now=True, scheduled_time=None, platform=None, title=None, youtube_category_id="22"):
+    service=(platform or "").lower(); mode="shareNow" if publish_now else ("customScheduled" if scheduled_time else "addToQueue")
+    post_input={"text":text or "","channelId":channel_id,"schedulingType":"automatic","mode":mode}
+    if scheduled_time: post_input["dueAt"]=scheduled_time
+    if video_url: post_input["assets"]=[{"video":{"url":video_url}}]
+    if service=="youtube": post_input["metadata"]={"youtube":{"title":title or (text or "New video")[:100],"categoryId":str(youtube_category_id or "22")}}
+    query="""
+      mutation CreatePost($input: CreatePostInput!) {
+        createPost(input: $input) {
+          ... on PostActionSuccess { post { id text dueAt status } }
+          ... on MutationError { message }
+        }
+      }
+    """
+    result=(buffer_graphql(api_key,query,{"input":post_input},120).get("createPost") or {})
+    if result.get("post"):
+        return {"success":True,"post":result["post"],"publisher_provider":"buffer","publisher_platform":service,"publisher_account_id":channel_id}
+    raise Exception(result.get("message","Buffer did not create the post"))
+
+def get_buffer_key(buffer_key_id):
+    conn=get_db_connection()
+    if not conn: return None
+    try:
+        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT * FROM buffer_keys WHERE id=%s AND is_active=TRUE",(buffer_key_id,)); return cur.fetchone()
+    finally: conn.close()
+
+def publish_via_pipeline(pipeline,video_url,text,publish_now=True,scheduled_time=None):
+    provider=(pipeline.get("publisher_provider") or "zernio").lower()
+    if provider=="buffer":
+        key=get_buffer_key(pipeline.get("buffer_key_id"))
+        if not key: return {"error":"Buffer key is missing or inactive"}
+        try: return publish_to_buffer(key["api_key"],pipeline.get("buffer_channel_id"),text,video_url,publish_now,scheduled_time,pipeline.get("buffer_platform"),text)
+        except Exception as e: return {"error":str(e)}
+    return publish_to_facebook(video_url=video_url,text=text,account_id=pipeline.get("facebook_account_id"),publish_now=publish_now,scheduled_time=scheduled_time,key_id=pipeline.get("zernio_key_id"))
+
 # ============== ZERNIO (FACEBOOK) INTEGRATION ==============
 
 def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None, key_id=None):
@@ -3421,35 +3535,26 @@ def run_pipeline(pipeline_id):
                     posted_count += 1
                     continue
 
-                platform = pipeline.get('platform') or 'facebook'
+                app.logger.info("3️⃣ FACEBOOK — acquiring global publisher lock")
+                publish_lock_conn, publish_lock_cur, publish_lock_acquired = acquire_global_publisher_lock()
+                if not publish_lock_acquired:
+                    app.logger.info("⏳ Another post is currently being published; returning this post to pending")
+                    mark_processing_post_retryable(
+                        scheduled_post_id,
+                        'Another Facebook publish is currently in progress'
+                    )
+                    continue
 
-                if platform in ('buffer_twitter', 'buffer_youtube', 'buffer_tiktok'):
-                    app.logger.info(f"3️⃣ BUFFER ({platform}) — publishing exactly once")
-                    pipeline_for_buffer = dict(pipeline)
-                    pipeline_for_buffer['reel_url'] = reel_url
-                    result = publish_via_buffer(pipeline_for_buffer, direct_video_url, caption)
-                else:
-                    app.logger.info("3️⃣ FACEBOOK — acquiring global publisher lock")
-                    publish_lock_conn, publish_lock_cur, publish_lock_acquired = acquire_global_publisher_lock()
-                    if not publish_lock_acquired:
-                        app.logger.info("⏳ Another post is currently being published; returning this post to pending")
-                        mark_processing_post_retryable(
-                            scheduled_post_id,
-                            'Another Facebook publish is currently in progress'
-                        )
-                        continue
-
-                    try:
-                        app.logger.info("3️⃣ FACEBOOK — publishing exactly once")
-                        result = publish_to_facebook(
-                            video_url=direct_video_url,
-                            text=caption,
-                            account_id=pipeline['facebook_account_id'],
-                            publish_now=True,
-                            key_id=pipeline.get('zernio_key_id')
-                        )
-                    finally:
-                        release_global_publisher_lock(publish_lock_conn, publish_lock_cur)
+                try:
+                    app.logger.info("3️⃣ FACEBOOK — publishing exactly once")
+                    result = publish_via_pipeline(
+                        pipeline=pipeline,
+                        video_url=direct_video_url,
+                        text=caption,
+                        publish_now=True
+                    )
+                finally:
+                    release_global_publisher_lock(publish_lock_conn, publish_lock_cur)
 
                 if result and not result.get('error'):
                     already_posted = result.get('already_posted', False)
@@ -5535,20 +5640,13 @@ def process_post_with_caption(post, caption):
 
         app.logger.info(f"📤 Publishing to Facebook with key: {key_id}")
 
-        platform = post.get('platform') or 'facebook'
-        if platform in ('buffer_twitter', 'buffer_youtube', 'buffer_tiktok'):
-            post_for_buffer = dict(post)
-            post_for_buffer['id'] = scheduled_id
-            post_for_buffer['reel_url'] = post['reel_url']
-            result = publish_via_buffer(post_for_buffer, direct_video_url, caption)
-        else:
-            result = publish_to_facebook(
-                video_url=direct_video_url,
-                text=caption,
-                account_id=post['facebook_account_id'],
-                publish_now=True,
-                key_id=key_id
-            )
+        result = publish_to_facebook(
+            video_url=direct_video_url,
+            text=caption,
+            account_id=post['facebook_account_id'],
+            publish_now=True,
+            key_id=key_id
+        )
 
         conn = get_db_connection()
         if not conn:
@@ -5653,6 +5751,84 @@ def get_caption_status_dual(reel_url):
 def get_all_caption_status():
     return jsonify({"status": "success", "total": len(CAPTION_FETCH_STATUS), "statuses": CAPTION_FETCH_STATUS})
 
+
+# ============== BUFFER API ROUTES ==============
+
+@app.route('/api/buffer/keys',methods=['GET'])
+def get_buffer_keys():
+    conn=get_db_connection()
+    if not conn: return jsonify({"error":"Database connection failed"}),500
+    try:
+        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT id,name,organization_id,is_active,created_at,updated_at FROM buffer_keys ORDER BY created_at DESC"); keys=cur.fetchall()
+        for k in keys:
+            cur.execute("""SELECT channel_id AS id,name,display_name,service,external_link,is_disconnected,is_locked FROM buffer_channels WHERE buffer_key_id=%s ORDER BY service,display_name,name""",(k["id"],)); k["channels"]=cur.fetchall(); k["channel_count"]=len(k["channels"])
+        return jsonify({"status":"success","keys":keys})
+    except Exception as e: return jsonify({"error":str(e)}),500
+    finally: conn.close()
+
+@app.route('/api/buffer/keys',methods=['POST'])
+def create_buffer_key():
+    data=request.get_json(silent=True) or {}; api_key=(data.get("api_key") or "").strip(); name=(data.get("name") or "Buffer Key").strip()
+    if not api_key: return jsonify({"error":"Buffer API key is required"}),400
+    conn=get_db_connection()
+    if not conn: return jsonify({"error":"Database connection failed"}),500
+    try:
+        orgs=buffer_get_organizations(api_key)
+        if not orgs: return jsonify({"error":"Buffer key is valid but has no organizations"}),400
+        cur=conn.cursor(); cur.execute("INSERT INTO buffer_keys(name,api_key,organization_id) VALUES(%s,%s,%s) RETURNING id",(name,api_key,orgs[0]["id"])); key_id=cur.fetchone()[0]; conn.commit(); conn.close()
+        channels=sync_buffer_channels(key_id,api_key); return jsonify({"status":"success","key_id":str(key_id),"channels":channels,"message":f"Buffer key added with {len(channels)} channels"})
+    except Exception as e:
+        try: conn.rollback()
+        except: pass
+        try: conn.close()
+        except: pass
+        return jsonify({"error":str(e)}),400
+
+@app.route('/api/buffer/keys/<key_id>',methods=['DELETE'])
+def delete_buffer_key(key_id):
+    conn=get_db_connection()
+    if not conn: return jsonify({"error":"Database connection failed"}),500
+    try:
+        cur=conn.cursor(); cur.execute("DELETE FROM buffer_keys WHERE id=%s",(key_id,)); deleted=cur.rowcount; conn.commit(); return jsonify({"status":"success","deleted":deleted})
+    except Exception as e: conn.rollback(); return jsonify({"error":str(e)}),500
+    finally: conn.close()
+
+@app.route('/api/buffer/keys/<key_id>/refresh',methods=['POST'])
+def refresh_buffer_key(key_id):
+    conn=get_db_connection()
+    if not conn: return jsonify({"error":"Database connection failed"}),500
+    try:
+        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT api_key FROM buffer_keys WHERE id=%s",(key_id,)); row=cur.fetchone()
+    finally: conn.close()
+    if not row: return jsonify({"error":"Buffer key not found"}),404
+    try:
+        channels=sync_buffer_channels(key_id,row["api_key"]); return jsonify({"status":"success","channels":channels,"count":len(channels)})
+    except Exception as e: return jsonify({"error":str(e)}),400
+
+@app.route('/api/buffer/channels',methods=['GET'])
+def get_buffer_channels():
+    conn=get_db_connection()
+    if not conn: return jsonify({"error":"Database connection failed"}),500
+    try:
+        cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("""SELECT c.id,c.buffer_key_id AS key_id,k.name AS key_name,c.channel_id,c.name,c.display_name,c.service,c.external_link,c.is_disconnected,c.is_locked FROM buffer_channels c JOIN buffer_keys k ON k.id=c.buffer_key_id WHERE k.is_active=TRUE ORDER BY c.service,c.display_name,c.name"""); return jsonify({"status":"success","channels":cur.fetchall()})
+    except Exception as e: return jsonify({"error":str(e)}),500
+    finally: conn.close()
+
+@app.route('/api/publish/manual',methods=['POST'])
+def publish_manual_unified():
+    data=request.get_json(silent=True) or {}; provider=(data.get("provider") or "buffer").lower(); text=data.get("text",""); video_url=data.get("video_url"); scheduled_time=data.get("scheduled_time"); publish_now=not bool(scheduled_time)
+    try:
+        if provider=="buffer":
+            channel_id=data.get("channel_id")
+            if not channel_id: return jsonify({"error":"channel_id is required"}),400
+            conn=get_db_connection(); cur=conn.cursor(cursor_factory=RealDictCursor); cur.execute("SELECT k.api_key,c.service FROM buffer_channels c JOIN buffer_keys k ON k.id=c.buffer_key_id WHERE c.channel_id=%s AND k.is_active=TRUE LIMIT 1",(channel_id,)); row=cur.fetchone(); conn.close()
+            if not row: return jsonify({"error":"Buffer channel not found or key inactive"}),404
+            return jsonify(publish_to_buffer(row["api_key"],channel_id,text,video_url,publish_now,scheduled_time,row["service"],data.get("title")))
+        if provider=="zernio":
+            return jsonify(publish_to_facebook(video_url=video_url,text=text,account_id=data.get("account_id"),publish_now=publish_now,scheduled_time=scheduled_time,key_id=data.get("key_id")))
+        return jsonify({"error":f"Unsupported provider: {provider}"}),400
+    except Exception as e: return jsonify({"error":str(e)}),400
+
 # ============== PIPELINE API ROUTES ==============
 
 @app.route('/api/pipelines', methods=['GET'])
@@ -5681,10 +5857,12 @@ def get_pipelines():
                 p.created_at,
                 p.updated_at,
                 p.zernio_key_id,
-                p.platform,
-                p.buffer_account_id,
+                p.publisher_provider,
+                p.source_mode,
+                p.buffer_key_id,
                 p.buffer_channel_id,
-                p.platform_options
+                p.buffer_channel_name,
+                p.buffer_platform
             FROM pipelines p
             ORDER BY p.created_at DESC
         """)
@@ -5775,41 +5953,35 @@ def create_pipeline():
     data = request.get_json(silent=True) or {}
     name = data.get('name')
     profile_username = data.get('profile_username')
-    daily_limit = data.get('daily_limit', 2)
-    platform = data.get('platform', 'facebook')
-
     facebook_account_id = data.get('facebook_account_id') or ''
+    daily_limit = data.get('daily_limit', 2)
     zernio_key_id = data.get('zernio_key_id')
-    buffer_account_id = data.get('buffer_account_id')
+    publisher_provider = (data.get('publisher_provider') or 'zernio').lower()
+    source_mode = (data.get('source_mode') or 'scraped').lower()
+    buffer_key_id = data.get('buffer_key_id')
     buffer_channel_id = data.get('buffer_channel_id')
-    platform_options = data.get('platform_options', {})
+    buffer_channel_name = data.get('buffer_channel_name')
+    buffer_platform = data.get('buffer_platform')
 
     if not name or not profile_username:
         return jsonify({"error": "name and profile_username are required"}), 400
-
-    if platform == 'facebook' and not facebook_account_id:
-        return jsonify({"error": "facebook_account_id is required for platform=facebook"}), 400
-    if platform in ('buffer_twitter', 'buffer_youtube', 'buffer_tiktok') and not (buffer_account_id and buffer_channel_id):
-        return jsonify({"error": "buffer_account_id and buffer_channel_id are required for Buffer platforms"}), 400
-
+    if publisher_provider == 'zernio' and not facebook_account_id:
+        return jsonify({"error": "facebook_account_id is required for Zernio pipelines"}), 400
+    if publisher_provider == 'buffer' and (not buffer_key_id or not buffer_channel_id):
+        return jsonify({"error": "buffer_key_id and buffer_channel_id are required for Buffer pipelines"}), 400
+    
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
-
+    
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO pipelines (
-                id, name, profile_username, facebook_account_id, daily_limit,
-                is_active, zernio_key_id, platform, buffer_account_id,
-                buffer_channel_id, platform_options
-            )
-            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (
-            name, profile_username, facebook_account_id, daily_limit, zernio_key_id,
-            platform, buffer_account_id, buffer_channel_id, json.dumps(platform_options)
-        ))
+            INSERT INTO pipelines (id, name, profile_username, facebook_account_id, daily_limit, is_active,
+                zernio_key_id, publisher_provider, source_mode, buffer_key_id, buffer_channel_id, buffer_channel_name, buffer_platform)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (name, profile_username, facebook_account_id, daily_limit, zernio_key_id,
+              publisher_provider, source_mode, buffer_key_id, buffer_channel_id, buffer_channel_name, buffer_platform))
         pipeline_id = cur.fetchone()[0]
         conn.commit()
         return jsonify({"status": "success", "message": "Pipeline created", "pipeline_id": pipeline_id})
@@ -5840,6 +6012,18 @@ def update_pipeline(pipeline_id):
             updates.append("is_active = %s"); params.append(data['is_active'])
         if 'zernio_key_id' in data:
             updates.append("zernio_key_id = %s"); params.append(data['zernio_key_id'])
+        if 'publisher_provider' in data:
+            updates.append("publisher_provider = %s"); params.append((data['publisher_provider'] or 'zernio').lower())
+        if 'source_mode' in data:
+            updates.append("source_mode = %s"); params.append((data['source_mode'] or 'scraped').lower())
+        if 'buffer_key_id' in data:
+            updates.append("buffer_key_id = %s"); params.append(data['buffer_key_id'])
+        if 'buffer_channel_id' in data:
+            updates.append("buffer_channel_id = %s"); params.append(data['buffer_channel_id'])
+        if 'buffer_channel_name' in data:
+            updates.append("buffer_channel_name = %s"); params.append(data['buffer_channel_name'])
+        if 'buffer_platform' in data:
+            updates.append("buffer_platform = %s"); params.append(data['buffer_platform'])
         if not updates:
             return jsonify({"error": "No fields to update"}), 400
         updates.append("updated_at = NOW()")

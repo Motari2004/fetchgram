@@ -2392,8 +2392,8 @@ function renderPipelines(pipelines) {
             <span class="pipeline-value">@${escapeHtml(p.profile_username)}</span>
           </div>
           <div class="pipeline-detail">
-            <span class="pipeline-label">Facebook:</span>
-            <span class="pipeline-value">${escapeHtml(p.facebook_page_name || p.facebook_account_id)}</span>
+            <span class="pipeline-label">Publisher:</span>
+            <span class="pipeline-value">${p.publisher_provider === 'buffer' ? `Buffer · ${escapeHtml((p.buffer_platform || 'channel').toUpperCase())} · ${escapeHtml(p.buffer_channel_name || p.buffer_channel_id || '')}` : `Zernio · Facebook · ${escapeHtml(p.facebook_page_name || p.facebook_account_id)}`}</span>
           </div>
           <div class="pipeline-detail">
             <span class="pipeline-label">Daily Limit:</span>
@@ -2752,62 +2752,32 @@ async function togglePipeline(pipelineId, currentActive) {
 // ==================== CREATE PIPELINE ====================
 
 createPipelineBtn?.addEventListener('click', async function() {
-    const name = pipelineName?.value.trim();
-    const username = pipelineUsername?.value.trim();
-    const accountSelect = pipelineFacebookAccount;
-    const accountId = accountSelect?.value;
-    const dailyLimit = parseInt(pipelineDailyLimit?.value) || 2;
-    
-    // ✅ Get the key ID from the selected option
-    const selectedOption = accountSelect?.options[accountSelect.selectedIndex];
-    const zernioKeyId = selectedOption?.dataset?.keyId || null;
-    const keyName = selectedOption?.dataset?.keyName || 'Unknown';
-    
-    if (!name || !username || !accountId) {
-        showPipelinesStatus('❌ Please fill in all fields', 'error');
-        return;
+    const name=pipelineName?.value.trim(), username=pipelineUsername?.value.trim();
+    const platform=document.getElementById('pipeline-platform')?.value || 'facebook';
+    const sourceMode='scraped';
+    const dailyLimit=parseInt(pipelineDailyLimit?.value)||2;
+    let body={name,profile_username:username,daily_limit:dailyLimit,source_mode:sourceMode};
+    if(platform==='facebook'){
+        const select=pipelineFacebookAccount, accountId=select?.value;
+        const opt=select?.options[select.selectedIndex];
+        if(!accountId){showPipelinesStatus('❌ Select a Facebook account','error');return;}
+        body.publisher_provider='zernio'; body.facebook_account_id=accountId; body.zernio_key_id=opt?.dataset?.keyId||null;
+    } else {
+        const raw=document.getElementById('pipeline-buffer-channel')?.value;
+        if(!raw){showPipelinesStatus('❌ Select a Buffer channel','error');return;}
+        const ch=JSON.parse(raw);
+        body.publisher_provider='buffer'; body.buffer_key_id=ch.key_id; body.buffer_channel_id=ch.channel_id;
+        body.buffer_channel_name=ch.display_name; body.buffer_platform=ch.service;
     }
-    
-    if (!zernioKeyId) {
-        showPipelinesStatus('⚠️ Please select an account with a valid Zernio key', 'error');
-        return;
-    }
-    
-    console.log(`🔑 Creating pipeline with key: ${keyName} (${zernioKeyId})`);
-    
-    this.disabled = true;
-    this.textContent = 'Creating...';
-    
-    try {
-        const response = await fetch('/api/pipelines', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({
-                name,
-                profile_username: username,
-                facebook_account_id: accountId,
-                daily_limit: dailyLimit,
-                zernio_key_id: zernioKeyId  // ✅ Send the key ID!
-            })
-        });
-        const data = await response.json();
-        
-        if (response.ok) {
-            showPipelinesStatus(`✅ Pipeline "${name}" created with ${keyName}!`, 'success');
-            if (pipelineName) pipelineName.value = '';
-            if (pipelineUsername) pipelineUsername.value = '';
-            if (pipelineDailyLimit) pipelineDailyLimit.value = '2';
-            loadPipelines();
-        } else {
-            showPipelinesStatus(`❌ ${data.error || 'Failed to create pipeline'}`, 'error');
-        }
-    } catch (error) {
-        showPipelinesStatus(`❌ Error: ${error.message}`, 'error');
-    } finally {
-        this.disabled = false;
-        this.textContent = 'Create Pipeline';
-    }
+    if(!name||!username){showPipelinesStatus('❌ Enter pipeline name and profile username','error');return;}
+    this.disabled=true; this.textContent='Creating...';
+    try{
+      const response=await fetch('/api/pipelines',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});
+      const data=await response.json();
+      if(response.ok){showPipelinesStatus(`✅ Pipeline "${name}" created`,'success'); if(pipelineName)pipelineName.value=''; if(pipelineUsername)pipelineUsername.value=''; loadPipelines();}
+      else showPipelinesStatus(`❌ ${data.error||'Failed to create pipeline'}`,'error');
+    }catch(e){showPipelinesStatus(`❌ ${e.message}`,'error');}
+    finally{this.disabled=false;this.textContent='Create Pipeline';}
 });
 
 // ==================== AUTO-LOAD ON PAGE LOAD ====================
@@ -5461,7 +5431,7 @@ async function loadBufferAccounts() {
     if (!list) return;
 
     try {
-        const res = await fetch('/api/buffer/accounts', { credentials: 'same-origin' });
+        const res = await fetch('/api/buffer/keys', { credentials: 'same-origin' });
         const data = await res.json();
 
         if (data.status !== 'success') {
@@ -5469,14 +5439,14 @@ async function loadBufferAccounts() {
             return;
         }
 
-        bufferAccounts = data.accounts || [];
+        bufferAccounts = data.keys || [];
         if (badge) badge.textContent = `${bufferAccounts.length} accounts`;
 
         bufferChannelsFlat = [];
         bufferAccounts.forEach(acc => {
             (acc.channels || []).forEach(ch => {
                 bufferChannelsFlat.push({
-                    account_id: acc.id,
+                    account_id: acc.id, key_id: acc.id,
                     account_name: acc.name,
                     channel_id: ch.channel_id,
                     service: ch.service,
@@ -5559,7 +5529,7 @@ function renderBufferAccounts(accounts) {
 async function deleteBufferAccount(accountId, name) {
     if (!confirm(`Disconnect Buffer account "${name}"? Pipelines using its channels will start failing until reassigned.`)) return;
     try {
-        const res = await fetch(`/api/buffer/accounts/${accountId}`, { method: 'DELETE', credentials: 'same-origin' });
+        const res = await fetch(`/api/buffer/keys/${accountId}`, { method: 'DELETE', credentials: 'same-origin' });
         const data = await res.json();
         if (res.ok) {
             showToast(`✅ Disconnected "${name}"`, 'success');
@@ -5576,7 +5546,7 @@ async function syncBufferAccount(accountId, btn) {
     btn.disabled = true;
     btn.textContent = '⏳';
     try {
-        const res = await fetch(`/api/buffer/accounts/${accountId}/sync`, { method: 'POST', credentials: 'same-origin' });
+        const res = await fetch(`/api/buffer/keys/${accountId}/refresh`, { method: 'POST', credentials: 'same-origin' });
         const data = await res.json();
         if (res.ok) {
             showToast(`✅ Synced ${data.channels_synced} channels`, 'success');
@@ -5628,7 +5598,7 @@ document.getElementById('save-buffer-account-btn')?.addEventListener('click', as
     status.style.display = 'none';
 
     try {
-        const res = await fetch('/api/buffer/accounts', {
+        const res = await fetch('/api/buffer/keys', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
@@ -5697,80 +5667,19 @@ document.getElementById('buffer-composer-publish-btn')?.addEventListener('click'
     const channelRaw = document.getElementById('buffer-composer-channel').value;
     const text = document.getElementById('buffer-composer-text').value.trim();
     const status = document.getElementById('buffer-composer-status');
-
-    if (!channelRaw) {
-        status.textContent = '❌ Please select a channel';
-        status.className = 'status-message error';
-        status.style.display = 'block';
-        return;
-    }
-
+    if (!channelRaw) { status.textContent='❌ Select a Buffer channel'; status.className='status-message error'; status.style.display='block'; return; }
     const channel = JSON.parse(channelRaw);
-
-    // Reuse the Instagram video you already fetched, same as the Facebook composer.
-    const videoUrl = window.currentVideoUrl || null;
-
-    if (service !== 'twitter' && !videoUrl) {
-        status.textContent = '❌ No video loaded. Fetch an Instagram video first.';
-        status.className = 'status-message error';
-        status.style.display = 'block';
-        return;
-    }
-
-    let extra = {};
-    if (service === 'youtube') {
-        extra = {
-            title: document.getElementById('buffer-yt-title').value.trim() || (text || 'Untitled video').slice(0, 100),
-            privacy: document.getElementById('buffer-yt-privacy').value,
-            description: text,
-        };
-    } else if (service === 'tiktok') {
-        extra = {
-            privacy_level: document.getElementById('buffer-tt-privacy').value,
-            allow_comment: document.getElementById('buffer-tt-allow-comment').checked,
-            allow_duet: document.getElementById('buffer-tt-allow-duet').checked,
-            allow_stitch: document.getElementById('buffer-tt-allow-stitch').checked,
-            disclose_branded_content: document.getElementById('buffer-tt-branded').checked,
-        };
-    }
-
-    this.disabled = true;
-    this.innerHTML = '<span class="btn-spinner"></span> Publishing...';
-    status.style.display = 'none';
-
+    const videoUrl = document.getElementById('buffer-composer-video-url')?.value.trim() || window.currentVideoUrl || null;
+    if (service !== 'twitter' && !videoUrl) { status.textContent='❌ Fetch an Instagram video first for TikTok/YouTube'; status.className='status-message error'; status.style.display='block'; return; }
+    const title = document.getElementById('buffer-yt-title')?.value.trim() || text.slice(0,100);
+    this.disabled=true; this.textContent='Publishing...'; status.style.display='none';
     try {
-        const res = await fetch('/api/buffer/post', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({
-                account_id: channel.account_id,
-                channel_id: channel.channel_id,
-                service: channel.service,
-                text: text,
-                video_url: service === 'twitter' ? null : videoUrl,
-                extra: extra,
-            }),
-        });
-        const data = await res.json();
-
-        if (res.ok) {
-            status.textContent = `✅ Published to ${service}!`;
-            status.className = 'status-message success';
-            status.style.display = 'block';
-        } else {
-            status.textContent = `❌ ${data.error || 'Failed to publish'}`;
-            status.className = 'status-message error';
-            status.style.display = 'block';
-        }
-    } catch (error) {
-        status.textContent = `❌ ${error.message}`;
-        status.className = 'status-message error';
-        status.style.display = 'block';
-    } finally {
-        this.disabled = false;
-        this.innerHTML = '<span class="btn-content">🚀 Publish Now</span>';
-    }
+      const res=await fetch('/api/publish/manual',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({provider:'buffer',channel_id:channel.channel_id,text,video_url:service==='twitter'?null:videoUrl,title})});
+      const data=await res.json();
+      status.textContent=res.ok ? `✅ Published to ${service}` : `❌ ${data.error || 'Failed to publish'}`;
+      status.className=res.ok?'status-message success':'status-message error'; status.style.display='block';
+    } catch(e) { status.textContent=`❌ ${e.message}`; status.className='status-message error'; status.style.display='block'; }
+    finally { this.disabled=false; this.textContent='🚀 Publish Now'; }
 });
 
 // ---------------------------------------------------------------
@@ -5782,7 +5691,7 @@ function populatePipelineBufferChannels() {
     if (!select) return;
 
     const platform = document.getElementById('pipeline-platform')?.value || 'facebook';
-    const service = platform.replace('buffer_', '');
+    const service = platform === 'facebook' ? 'facebook' : platform.replace('buffer_', '');
     const matches = bufferChannelsFlat.filter(c => c.service === service);
 
     select.innerHTML = '';
@@ -5792,7 +5701,7 @@ function populatePipelineBufferChannels() {
     }
     matches.forEach(c => {
         const opt = document.createElement('option');
-        opt.value = JSON.stringify({ account_id: c.account_id, channel_id: c.channel_id });
+        opt.value = JSON.stringify({ key_id: c.key_id || c.account_id, channel_id: c.channel_id, display_name: c.display_name, service: c.service });
         opt.textContent = `${c.display_name} (${c.account_name})`;
         select.appendChild(opt);
     });
@@ -5800,10 +5709,10 @@ function populatePipelineBufferChannels() {
 
 document.getElementById('pipeline-platform')?.addEventListener('change', function () {
     const isFacebook = this.value === 'facebook';
-    const fbField = document.getElementById('pipeline-facebook-field');
-    const bufferField = document.getElementById('pipeline-buffer-field');
-    if (fbField) fbField.hidden = !isFacebook;
-    if (bufferField) bufferField.hidden = isFacebook;
+    const fbField=document.getElementById('pipeline-facebook-field');
+    const bufferField=document.getElementById('pipeline-buffer-field');
+    if (fbField) fbField.hidden=!isFacebook;
+    if (bufferField) bufferField.hidden=isFacebook;
     if (!isFacebook) populatePipelineBufferChannels();
 });
 
