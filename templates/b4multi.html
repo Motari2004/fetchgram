@@ -1,0 +1,1150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fetchgram — Premium Instagram Downloader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<!-- Premium Background Effects -->
+<div class="bg-effects">
+  <div class="gradient-blob blob-1"></div>
+  <div class="gradient-blob blob-2"></div>
+  <div class="gradient-blob blob-3"></div>
+</div>
+
+<div class="wrap">
+
+  <!-- Premium Header -->
+  <header class="topbar">
+    <div class="mark">
+      <div class="mark-icon">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect x="2" y="2" width="24" height="24" rx="8" stroke="currentColor" stroke-width="2"/>
+          <path d="M8 14L12 18L20 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M18 14H22M18 10H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <span class="mark-name">fetchgram</span>
+      <span class="mark-badge">PRO</span>
+    </div>
+    <div class="topbar-actions">
+      <span class="topbar-note">⚡ Premium</span>
+    </div>
+  </header>
+
+  <main class="hero">
+
+    <!-- Hero Section -->
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span>✨ Premium Video Downloader</span>
+      </div>
+      <h1>Download Instagram videos <br /><span class="gradient-text">in seconds</span></h1>
+      <p class="lede">Paste any Instagram reel, post, or IGTV link and get a direct download URL — no account, no watermark, no limits.</p>
+    </div>
+
+    <!-- Status Cards -->
+    <div class="status-grid">
+      <!-- Instagram Status -->
+      <div class="status-card" id="instagram-status-card">
+        <div class="status-card-header">
+          <span class="status-icon" id="instagram-indicator">⚪</span>
+          <span class="status-label">Instagram Auth</span>
+        </div>
+        <div class="status-card-body">
+          <span class="status-text" id="instagram-status-text">Not connected</span>
+          <span class="status-sub" id="instagram-username-display"></span>
+        </div>
+        <div class="status-card-actions">
+          <button id="clear-cookie-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
+        </div>
+      </div>
+
+      <!-- Bluesky Status -->
+      <div class="status-card" id="bluesky-status-card">
+        <div class="status-card-header">
+          <span class="status-icon" id="bluesky-indicator">⚪</span>
+          <span class="status-label">Bluesky</span>
+        </div>
+        <div class="status-card-body">
+          <span class="status-text" id="bluesky-status-text">Not connected</span>
+          <span class="status-sub" id="bluesky-username-display"></span>
+        </div>
+        <div class="status-card-actions">
+          <button id="bluesky-toggle-btn" class="btn btn-sm btn-ghost">⚙️ Configure</button>
+          <button id="clear-bluesky-creds-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
+        </div>
+        <div id="saved-credentials-info" class="status-message success" hidden></div>
+      </div>
+    </div>
+
+    <!-- ============ COOKIE UPLOAD SECTION ============ -->
+    <div class="cookie-upload-section premium-card">
+      <div class="cookie-upload-header">
+        <div class="cookie-upload-title">
+          <span class="cookie-icon">🍪</span>
+          <h3>Upload Instagram Cookies</h3>
+        </div>
+        <span class="badge">Required for scraping</span>
+      </div>
+      
+      <div class="cookie-upload-body">
+        <p class="cookie-upload-desc">
+          Upload your <code>cookies.json</code> file exported from your browser. 
+          This is required for scraping Instagram profiles and downloading videos.
+        </p>
+        
+        <div class="cookie-upload-area">
+          <label for="cookie-file-input-main" class="cookie-upload-label">
+            <span class="upload-icon">📁</span>
+            <span id="cookie-file-label-text">Choose cookies.json</span>
+            <input type="file" id="cookie-file-input-main" accept=".json" />
+          </label>
+          <button id="upload-cookie-main-btn" class="btn btn-primary" disabled>
+            <span class="btn-content">⬆ Upload</span>
+          </button>
+          <button id="clear-cookie-main-btn" class="btn btn-danger" hidden>🗑️ Clear</button>
+        </div>
+        
+        <!-- ============ EXTRACT FROM BROWSERLESS BUTTON ============ -->
+        <div class="cookie-upload-actions" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px;">
+          <button id="extract-browserless-cookies-btn" class="btn btn-primary">
+            <span class="btn-content">🍪 Extract from Browserless</span>
+          </button>
+          <button id="refresh-status-btn" class="btn btn-sm btn-ghost">🔄 Refresh Status</button>
+        </div>
+        
+        <div id="cookie-upload-status" class="cookie-status-msg" hidden></div>
+        
+        <!-- Cookie Service Status -->
+        <div class="cookie-service-status" style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+          <span id="cookie-service-status">🔍 Checking cookie service...</span>
+        </div>
+        
+        <div class="cookie-upload-help">
+          <details>
+            <summary>📖 How to export cookies.json</summary>
+            <div class="help-content">
+              <ol>
+                <li>Install a cookie exporter extension like <strong>Cookie-Editor</strong> or <strong>Get cookies.txt LOCALLY</strong></li>
+                <li>Log into <a href="https://instagram.com" target="_blank">instagram.com</a> in your browser</li>
+                <li>Open the extension and click <strong>Export</strong> → <strong>Export as JSON</strong></li>
+                <li>Save the file as <code>cookies.json</code></li>
+              </ol>
+              <p class="help-note">⚠️ Treat this file like a password - never share it!</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SCRAPED REELS SECTION ============ -->
+    <div class="scraped-reels-section premium-card" id="scraped-reels-section">
+      <div class="scraped-reels-header">
+        <div class="scraped-reels-title">
+          <span class="scraped-icon">📊</span>
+          <h3>Scraped Reels from Profiles</h3>
+          <span class="badge" id="scraped-count-badge">Loading...</span>
+        </div>
+        <div class="scraped-reels-actions">
+          <button id="fetch-scraped-btn" class="btn btn-sm btn-primary">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Load Results
+          </button>
+          <button id="sync-captions-btn" class="btn btn-sm btn-success">🔄 Sync Captions</button>
+          <button id="clear-scraped-btn" class="btn btn-sm btn-danger" hidden>Clear</button>
+          <button id="export-scraped-btn" class="btn btn-sm btn-success" hidden>📥 Export</button>
+        </div>
+      </div>
+      
+      <!-- Status message for scraped reels -->
+      <div id="scraped-reels-status" class="status-message" hidden></div>
+      
+      <!-- Sync Controls -->
+      <div id="sync-controls" class="sync-controls" style="display: none; margin-top: 12px; padding: 12px; background: var(--bg-secondary); border-radius: var(--radius-sm);">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Select Profile:</label>
+          <select id="sync-username-select" class="input-field" style="flex: 1; min-width: 150px; padding: 8px 12px;">
+            <option value="">Loading profiles...</option>
+          </select>
+          <button id="sync-execute-btn" class="btn btn-sm btn-primary">
+            <span class="btn-content">🔄 Sync Captions</span>
+          </button>
+          <span id="sync-status" style="font-size: 12px; color: var(--text-muted);"></span>
+        </div>
+        <div id="sync-progress" style="display: none; margin-top: 8px;">
+          <div style="height: 4px; background: var(--bg-primary); border-radius: 2px; overflow: hidden;">
+            <div id="sync-progress-bar" style="width: 0%; height: 100%; background: var(--accent); transition: width 0.3s;"></div>
+          </div>
+          <span id="sync-progress-text" style="font-size: 11px; color: var(--text-muted);">0%</span>
+        </div>
+      </div>
+      
+      <!-- All Usernames Section -->
+      <div id="all-usernames-section" class="usernames-section" style="margin: 12px 0; padding: 12px; background: var(--bg-secondary); border-radius: var(--radius-sm);" hidden>
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-weight: 600; font-size: 13px;">👥 All Profiles in Database:</span>
+          <span id="all-usernames-list" style="font-size: 13px; color: var(--text-secondary);"></span>
+        </div>
+      </div>
+      
+      <!-- Stats Summary -->
+      <div id="scraped-stats" class="scraped-stats" hidden>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-profiles">0</span>
+          <span class="stat-label">Profiles</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-reels">0</span>
+          <span class="stat-label">Total Reels</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-success">0</span>
+          <span class="stat-label">Successful</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-errors">0</span>
+          <span class="stat-label">Errors</span>
+        </div>
+      </div>
+      
+      <!-- Results Grid - This is where the reels will be displayed -->
+      <div id="scraped-reels-content">
+        <div class="empty-state">
+          <div style="font-size: 32px; margin-bottom: 12px;">📭</div>
+          <strong>No scraped data found</strong>
+          <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+            Enter usernames below and click "Start Scraping" to begin.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SCRAPE PROFILES SECTION ============ -->
+    <div class="scrape-section premium-card">
+      <div class="scrape-header">
+        <div class="scrape-title">
+          <span class="scrape-icon">🔍</span>
+          <h3>Scrape Instagram Profiles for Reels</h3>
+        </div>
+        <span class="badge">Playwright</span>
+      </div>
+      <p class="scrape-desc">Enter Instagram usernames to scrape all their Reels URLs. This uses the Render scraper service. Results will be sent back to Vercel automatically.</p>
+      
+      <div class="scrape-input-area">
+        <div class="scrape-input-wrapper">
+          <span class="input-icon">@</span>
+          <textarea
+            id="scrape-usernames"
+            class="scrape-textarea"
+            placeholder="Enter usernames, one per line&#10;e.g.&#10;nasa&#10;natgeo&#10;nike"
+            rows="3"
+          ></textarea>
+        </div>
+        <div class="scrape-options">
+          <div class="scrape-option">
+            <label for="scrape-max-reels">Max Reels/Profile</label>
+            <input type="number" id="scrape-max-reels" value="10" min="1" max="200" />
+          </div>
+          <div class="scrape-option">
+            <label for="scrape-max-scrolls">Scroll Passes</label>
+            <input type="number" id="scrape-max-scrolls" value="5" min="1" max="30" />
+          </div>
+          <div class="scrape-option toggle-option">
+            <label class="toggle-label">
+              <input type="checkbox" id="scrape-headless" checked />
+              <span>Headless Mode</span>
+            </label>
+          </div>
+        </div>
+        <button id="start-scrape-btn" class="btn btn-primary btn-block">
+          <span class="btn-content">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Start Scraping
+          </span>
+        </button>
+        <div id="scrape-job-status" class="scrape-status" hidden></div>
+        <div id="scrape-job-progress" class="scrape-progress-bar" hidden>
+          <div class="progress-track">
+            <div class="progress-fill" id="scrape-progress-fill" style="width: 0%"></div>
+          </div>
+          <span class="progress-text" id="scrape-progress-text">Waiting...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ MAIN INPUT AREA ============ -->
+    <div class="input-area">
+      <form id="fetch-form">
+        <div class="input-wrapper">
+          <div class="input-icon">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M2 10C2 5.58172 5.58172 2 10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10Z" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M8 7L12 10L8 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <input
+            id="url-input"
+            type="url"
+            class="input-field"
+            placeholder="Paste Instagram reel URL here..."
+            autocomplete="off"
+          />
+          <button type="submit" id="fetch-btn" class="btn btn-primary">
+            <span class="btn-label">Fetch</span>
+            <span class="btn-spinner" hidden></span>
+          </button>
+        </div>
+      </form>
+      <div id="error-msg" class="error-msg" hidden></div>
+    </div>
+
+    <!-- Results Section -->
+    <section id="results" class="results" hidden></section>
+
+    <template id="result-template">
+      <div class="result-card premium-card">
+        <div class="result-thumb">
+          <img alt="" />
+          <div class="thumb-overlay">
+            <span class="thumb-badge">Video</span>
+          </div>
+        </div>
+        <div class="result-meta">
+          <p class="meta-title"></p>
+          <div class="meta-sub">
+            <span class="uploader"></span>
+            <span class="dot">·</span>
+            <span class="duration"></span>
+          </div>
+        </div>
+        <div class="result-actions">
+          <button class="dl-btn btn btn-primary btn-sm">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <!-- Direct URL Display -->
+    <div id="direct-url-section" class="url-section premium-card" hidden>
+      <div class="url-section-header">
+        <h3>📹 Direct Download URL</h3>
+        <span class="badge">Copiable</span>
+      </div>
+      <div class="url-display-wrapper">
+        <input type="text" id="direct-url-display" class="url-display" readonly />
+        <div class="url-actions">
+          <button id="copy-url-btn" class="btn btn-sm btn-ghost">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 5V3C5 2.46957 5.21071 1.96086 5.58579 1.58579C5.96086 1.21071 6.46957 1 7 1H13C13.5304 1 14.0391 1.21071 14.4142 1.58579C14.7893 1.96086 15 2.46957 15 3V9C15 9.53043 14.7893 10.0391 14.4142 10.4142C14.0391 10.7893 13.5304 11 13 11H11M3 15H9C9.53043 15 10.0391 14.7893 10.4142 14.4142C10.7893 14.0391 11 13.5304 11 13V7C11 6.46957 10.7893 5.96086 10.4142 5.58579C10.0391 5.21071 9.53043 5 9 5H3C2.46957 5 1.96086 5.21071 1.58579 5.58579C1.21071 5.96086 1 6.46957 1 7V13C1 13.5304 1.21071 14.0391 1.58579 14.4142C1.21071 14.7893 2.46957 15 3 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Copy
+          </button>
+          <button id="direct-download-btn" class="btn btn-sm btn-success">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1V11M8 11L5 8M8 11L11 8M14 11V13C14 13.5304 13.7893 14.0391 13.4142 14.4142C13.0391 14.7893 12.5304 15 12 15H4C3.46957 15 2.96086 14.7893 2.58579 14.4142C2.21071 14.0391 2 13.5304 2 13V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download
+          </button>
+        </div>
+      </div>
+      
+      <div class="video-preview" id="video-preview" hidden>
+        <video controls id="preview-video" class="preview-video"></video>
+        <div class="video-info" id="video-info">
+          <button id="video-download-btn" class="btn btn-success btn-block">⬇ Download Video</button>
+        </div>
+      </div>
+    </div>
+
+
+
+
+
+
+<!-- ============ ZERNIO (FACEBOOK) SECTION ============ -->
+<div id="zernio-section" class="zernio-section premium-card">
+  <div class="zernio-header">
+    <div class="zernio-header-left">
+      <span class="zernio-icon">📱</span>
+      <h3>Publish to Facebook</h3>
+    </div>
+    <div class="zernio-header-right">
+      <span class="badge" id="zernio-status-badge">Loading...</span>
+      <button id="refresh-zernio-btn" class="btn btn-sm btn-ghost" title="Refresh accounts">
+        🔄
+      </button>
+    </div>
+  </div>
+
+
+
+
+
+
+      <div class="zernio-body">
+        <div class="form-group">
+          <label>Select Account</label>
+          <select id="zernio-account-select" class="input-field">
+            <option value="">Loading accounts...</option>
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="zernio-text">Post Text</label>
+          <textarea id="zernio-text" class="zernio-textarea" rows="3" placeholder="What would you like to post?">Check out this video! 🎬</textarea>
+        </div>
+        
+        <div class="form-group">
+          <label for="zernio-schedule">Schedule Post (optional)</label>
+          <input type="datetime-local" id="zernio-schedule" class="input-field" />
+        </div>
+        
+        <div class="zernio-actions">
+          <button id="zernio-publish-btn" class="btn btn-primary">
+            <span class="btn-content">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Publish Now
+            </span>
+          </button>
+          <button id="zernio-schedule-btn" class="btn btn-ghost">
+            <span class="btn-content">📅 Schedule</span>
+          </button>
+        </div>
+
+
+
+
+
+
+
+
+
+
+
+        
+        
+        <div id="zernio-status" class="status-message" hidden></div>
+      </div>
+    </div>
+
+    <!-- ============ ZERNIO KEYS MANAGEMENT ============ -->
+    <div class="zernio-keys-section premium-card">
+        <div class="zernio-keys-header">
+            <div class="zernio-keys-title">
+                <span class="zernio-keys-icon">🔑</span>
+                <h3>Zernio API Keys</h3>
+                <span class="badge" id="zernio-keys-count">0 keys</span>
+            </div>
+            <div class="zernio-keys-actions">
+                <button id="add-zernio-key-btn" class="btn btn-sm btn-primary">➕ Add Key</button>
+                <button id="refresh-zernio-keys-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+            </div>
+        </div>
+        
+        <div id="zernio-keys-list">
+            <div class="loading-state">
+                <div class="loading-spinner"></div>
+                <p style="color: var(--text-muted); margin-top: 12px;">Loading keys...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ ADD ZERNIO KEY MODAL (SIMPLIFIED) ============ -->
+    <div id="add-zernio-key-modal" class="modal-overlay" hidden>
+        <div class="modal-content premium-card">
+            <div class="modal-header">
+                <h3>🔑 Add Zernio API Key</h3>
+                <button id="add-zernio-key-modal-close" class="modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">
+                    Enter your Zernio API key. Accounts linked to this key will be auto-discovered.
+                </p>
+                
+                <div class="form-group">
+                    <label for="zernio-key-api">API Key</label>
+                    <input type="text" id="zernio-key-api" class="input-field" placeholder="sk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                    <span style="font-size: 11px; color: var(--text-muted);">
+                        🔑 Found in your Zernio dashboard
+                    </span>
+                </div>
+                
+                <div class="form-group" style="margin-top: 16px;">
+                    <button id="save-zernio-key-btn" class="btn btn-primary btn-block">Save Key</button>
+                </div>
+                
+                <div id="add-zernio-key-status" class="status-message" hidden></div>
+            </div>
+        </div>
+    </div>
+
+
+
+
+
+
+
+
+
+<!-- ============ PIPELINES SECTION ============ -->
+<div class="pipelines-section premium-card" id="pipelines-section">
+    <div class="pipelines-header">
+        <div class="pipelines-title">
+            <span class="pipelines-icon">🤖</span>
+            <h3>Autonomous Posting Pipelines</h3>
+        </div>
+        <div class="pipelines-actions">
+            <button id="run-all-pipelines-btn" class="btn btn-sm btn-primary">▶ Run All</button>
+            <button id="refresh-pipelines-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+        </div>
+    </div>
+    
+    <div id="pipelines-status" class="status-message" hidden></div>
+    
+    <!-- Create Pipeline -->
+    <div class="pipeline-create">
+        <details>
+            <summary>➕ Create New Pipeline</summary>
+            <div class="pipeline-create-form">
+                <div class="form-group">
+                    <label>Pipeline Name</label>
+                    <input type="text" id="pipeline-name" class="input-field" placeholder="My Instagram Pipeline" />
+                </div>
+                <div class="form-group">
+                    <label>Profile Username</label>
+                    <input type="text" id="pipeline-username" class="input-field" placeholder="elenaajoyce" />
+                </div>
+                <div class="form-group">
+                    <label>Facebook Account ID</label>
+                    <select id="pipeline-facebook-account" class="input-field">
+                        <option value="">Select Facebook account...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Daily Post Limit</label>
+                    <input type="number" id="pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />
+                </div>
+                <button id="create-pipeline-btn" class="btn btn-primary">Create Pipeline</button>
+            </div>
+        </details>
+    </div>
+    
+    <!-- Pipelines List -->
+    <div id="pipelines-list">
+        <div class="empty-state">No pipelines created yet.</div>
+    </div>
+</div>
+
+
+
+
+<!-- ============ EDIT PIPELINE MODAL ============ -->
+<div id="edit-pipeline-modal" class="modal-overlay" hidden>
+    <div class="modal-content premium-card">
+        <div class="modal-header">
+            <h3>✏️ Edit Pipeline</h3>
+            <button id="edit-pipeline-modal-close" class="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <p class="modal-desc">Update your pipeline configuration.</p>
+            
+            <input type="hidden" id="edit-pipeline-id" />
+            
+            <div class="form-group">
+                <label for="edit-pipeline-name">Pipeline Name</label>
+                <input type="text" id="edit-pipeline-name" class="input-field" placeholder="My Pipeline" />
+            </div>
+            
+            <div class="form-group">
+                <label for="edit-pipeline-username">Profile Username</label>
+                <input type="text" id="edit-pipeline-username" class="input-field" placeholder="nasa" />
+            </div>
+            
+            <div class="form-group">
+                <label for="edit-pipeline-facebook-account">Facebook Account</label>
+                <select id="edit-pipeline-facebook-account" class="input-field">
+                    <option value="">Select Facebook account...</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="edit-pipeline-daily-limit">Daily Post Limit</label>
+                <input type="number" id="edit-pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />
+            </div>
+            
+            <!-- ✅ ZERNIO KEY INFO - Shows current key assigned to pipeline -->
+            <div class="form-group">
+                <label>🔑 Current Zernio Key</label>
+                <div id="edit-pipeline-key-info" style="padding: 8px 12px; background: var(--bg-secondary); border-radius: 4px; font-size: 13px; border-left: 3px solid var(--accent);" hidden></div>
+            </div>
+            
+            <div class="form-group checkbox-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="edit-pipeline-active" checked />
+                    <span>Active</span>
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <button id="save-pipeline-edit-btn" class="btn btn-primary btn-block">Save Changes</button>
+            </div>
+            
+            <div id="edit-pipeline-status" class="status-message" hidden></div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    <!-- ============ BLUESKY CONFIGURATION MODAL ============ -->
+    <div id="bluesky-modal" class="modal-overlay" hidden>
+      <div class="modal-content premium-card">
+        <div class="modal-header">
+          <h3>🚀 Connect Bluesky</h3>
+          <button id="bluesky-modal-close" class="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-desc">Connect your Bluesky account to post videos directly. Credentials are encrypted and remembered for 30 days.</p>
+          
+          <div class="form-group">
+            <label for="bluesky-identifier-modal">Bluesky Handle</label>
+            <input type="text" id="bluesky-identifier-modal" class="input-field" placeholder="username.bsky.social" />
+          </div>
+          
+          <div class="form-group">
+            <label for="bluesky-password-modal">Password <span class="label-hint">(App Password recommended)</span></label>
+            <input type="password" id="bluesky-password-modal" class="input-field" placeholder="Your Bluesky app password" />
+          </div>
+          
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="bluesky-remember-modal" checked />
+              <span>Remember my credentials (encrypted, 30 days)</span>
+            </label>
+          </div>
+          
+          <div class="form-group">
+            <button id="bluesky-save-btn" class="btn btn-primary btn-block">Save Connection</button>
+          </div>
+          
+          <div id="bluesky-modal-status" class="status-message" hidden></div>
+        </div>
+        <div class="modal-footer">
+          <small>🔐 Your credentials are encrypted and stored securely in your browser session.</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ BLUESKY POST SECTION ============ -->
+    <div id="bluesky-section" class="bluesky-section premium-card" hidden>
+      <div class="bluesky-header">
+        <div class="bluesky-header-left">
+          <span class="bluesky-icon">🦋</span>
+          <h3>Post to Bluesky</h3>
+        </div>
+        <span class="badge" id="bluesky-connected-badge" hidden>Connected</span>
+      </div>
+      
+      <div class="bluesky-body">
+        <div class="form-group">
+          <label for="bluesky-text">Caption</label>
+          <textarea id="bluesky-text" class="bluesky-textarea" rows="2" placeholder="What's on your mind?">Check out this video! 🎬</textarea>
+          <span class="char-count" id="char-count">0/300</span>
+        </div>
+        
+        <button id="bluesky-post-btn" class="btn btn-primary btn-block">
+          <span class="btn-content">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Post to Bluesky
+          </span>
+        </button>
+        
+        <div id="bluesky-status" class="status-message" hidden></div>
+        <div id="bluesky-post-url" class="post-url" hidden></div>
+      </div>
+    </div>
+
+    <!-- ============ DOWNLOAD PROGRESS ============ -->
+    <div id="download-progress" class="progress-section" hidden>
+      <div class="progress-header">
+        <span class="progress-label">Downloading...</span>
+        <span class="progress-percent" id="progress-text">0%</span>
+      </div>
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+      </div>
+    </div>
+
+
+
+
+
+
+
+
+<!-- ============ MANUAL SCHEDULER SECTION (12-HOUR FORMAT) ============ -->
+<div id="manual-scheduler-section" class="manual-scheduler premium-card">
+    <!-- Collapsible Header -->
+    <div class="manual-scheduler-header" onclick="toggleManualScheduler()">
+        <div class="manual-scheduler-title">
+            <span class="manual-scheduler-icon">📅</span>
+            <h3>Manual Post Scheduler</h3>
+            <span class="badge">12-Hour Format</span>
+            <span class="scheduler-badge" id="scheduler-post-count">0 posts</span>
+        </div>
+        <div class="manual-scheduler-actions">
+            <span class="scheduler-status" id="scheduler-status-indicator">▼ Click to Expand</span>
+            <button id="scheduler-toggle-btn" class="btn btn-sm btn-ghost">▼</button>
+        </div>
+    </div>
+    
+    <!-- Collapsible Body -->
+    <div class="manual-scheduler-body" id="manual-scheduler-body" style="display: none;">
+        <!-- Pipeline Selector -->
+        <div class="scheduler-pipeline-select">
+            <label for="scheduler-pipeline-select">Select Pipeline:</label>
+            <select id="scheduler-pipeline-select" class="input-field">
+                <option value="">Loading pipelines...</option>
+            </select>
+            <button id="load-unposted-btn" class="btn btn-sm btn-primary">📊 Load Reels</button>
+            <button id="refresh-unposted-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+        </div>
+        
+        <!-- Stats -->
+        <div id="scheduler-stats" class="scheduler-stats" hidden>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-total-reels">0</span>
+                <span class="stat-label">Total Unposted</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-scheduled-count">0</span>
+                <span class="stat-label">Scheduled</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-selected-count">0</span>
+                <span class="stat-label">Selected</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" id="scheduler-loaded-count">0</span>
+                <span class="stat-label">Loaded</span>
+            </div>
+        </div>
+        
+        <!-- Pagination Controls -->
+        <div id="scheduler-pagination" class="scheduler-pagination" hidden>
+            <div class="pagination-controls">
+                <button id="scheduler-prev-page" class="btn btn-sm btn-ghost" disabled>◀ Previous</button>
+                <span class="pagination-info" id="scheduler-page-info">Page 1 of 1</span>
+                <button id="scheduler-next-page" class="btn btn-sm btn-ghost" disabled>Next ▶</button>
+            </div>
+            <div class="pagination-right">
+                <div class="pagination-limit">
+                    <label>Show:</label>
+                    <select id="scheduler-page-limit" class="input-field">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <div class="pagination-search">
+                    <input type="text" id="scheduler-search" class="input-field" placeholder="🔍 Search reels..." />
+                </div>
+                <button id="clear-selection-btn" class="btn btn-sm btn-ghost">✕ Clear Selected</button>
+            </div>
+        </div>
+        
+        <!-- Reels List -->
+        <div id="scheduler-reels-list">
+            <div class="empty-state">
+                <div style="font-size: 32px; margin-bottom: 12px;">📭</div>
+                <strong>Select a pipeline and click "Load Reels"</strong>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
+                    Choose a pipeline above to see all unposted reels.
+                </p>
+            </div>
+        </div>
+        
+        <!-- Batch Actions with 12-Hour Time -->
+        <div id="scheduler-batch-actions" class="scheduler-batch-actions" hidden>
+            <div class="batch-time-input">
+                <label for="batch-start-date">Start Date:</label>
+                <input type="date" id="batch-start-date" class="input-field" />
+            </div>
+            
+            <div class="batch-time-input">
+                <label for="batch-start-time-12">Start Time (12-Hour):</label>
+                <div class="time-input-12">
+                    <select id="batch-start-hour" class="input-field time-select">
+                        <option value="12">12</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8" selected>8</option>
+                        <option value="9">9</option>
+                        <option value="10">10</option>
+                        <option value="11">11</option>
+                    </select>
+                    <span class="time-separator">:</span>
+                    <select id="batch-start-minute" class="input-field time-select">
+                        <!-- ✅ ALL 60 MINUTES -->
+                        <option value="00">00</option>
+                        <option value="01">01</option>
+                        <option value="02">02</option>
+                        <option value="03">03</option>
+                        <option value="04">04</option>
+                        <option value="05">05</option>
+                        <option value="06">06</option>
+                        <option value="07">07</option>
+                        <option value="08">08</option>
+                        <option value="09">09</option>
+                        <option value="10">10</option>
+                        <option value="11">11</option>
+                        <option value="12">12</option>
+                        <option value="13">13</option>
+                        <option value="14">14</option>
+                        <option value="15">15</option>
+                        <option value="16">16</option>
+                        <option value="17">17</option>
+                        <option value="18">18</option>
+                        <option value="19">19</option>
+                        <option value="20">20</option>
+                        <option value="21">21</option>
+                        <option value="22">22</option>
+                        <option value="23">23</option>
+                        <option value="24">24</option>
+                        <option value="25">25</option>
+                        <option value="26">26</option>
+                        <option value="27">27</option>
+                        <option value="28">28</option>
+                        <option value="29">29</option>
+                        <option value="30" selected>30</option>
+                        <option value="31">31</option>
+                        <option value="32">32</option>
+                        <option value="33">33</option>
+                        <option value="34">34</option>
+                        <option value="35">35</option>
+                        <option value="36">36</option>
+                        <option value="37">37</option>
+                        <option value="38">38</option>
+                        <option value="39">39</option>
+                        <option value="40">40</option>
+                        <option value="41">41</option>
+                        <option value="42">42</option>
+                        <option value="43">43</option>
+                        <option value="44">44</option>
+                        <option value="45">45</option>
+                        <option value="46">46</option>
+                        <option value="47">47</option>
+                        <option value="48">48</option>
+                        <option value="49">49</option>
+                        <option value="50">50</option>
+                        <option value="51">51</option>
+                        <option value="52">52</option>
+                        <option value="53">53</option>
+                        <option value="54">54</option>
+                        <option value="55">55</option>
+                        <option value="56">56</option>
+                        <option value="57">57</option>
+                        <option value="58">58</option>
+                        <option value="59">59</option>
+                    </select>
+                    <select id="batch-start-ampm" class="input-field time-select">
+                        <option value="AM">AM</option>
+                        <option value="PM" selected>PM</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="batch-time-input">
+                <label for="batch-interval">Interval (minutes):</label>
+                <input type="number" id="batch-interval" class="input-field" value="60" min="1" max="1440" />
+            </div>
+            
+            <div class="batch-time-input">
+                <label for="batch-time-range">Time Range:</label>
+                <div class="time-range-inputs">
+                    <select id="batch-range-start" class="input-field time-select">
+                        <option value="6">6:00 AM</option>
+                        <option value="7">7:00 AM</option>
+                        <option value="8" selected>8:00 AM</option>
+                        <option value="9">9:00 AM</option>
+                        <option value="10">10:00 AM</option>
+                        <option value="11">11:00 AM</option>
+                        <option value="12">12:00 PM</option>
+                        <option value="13">1:00 PM</option>
+                        <option value="14">2:00 PM</option>
+                        <option value="15">3:00 PM</option>
+                        <option value="16">4:00 PM</option>
+                        <option value="17">5:00 PM</option>
+                        <option value="18">6:00 PM</option>
+                        <option value="19">7:00 PM</option>
+                        <option value="20">8:00 PM</option>
+                        <option value="21">9:00 PM</option>
+                        <option value="22">10:00 PM</option>
+                        <option value="23">11:00 PM</option>
+                    </select>
+                    <span class="time-range-to">to</span>
+                    <select id="batch-range-end" class="input-field time-select">
+                        <option value="6">6:00 AM</option>
+                        <option value="7">7:00 AM</option>
+                        <option value="8">8:00 AM</option>
+                        <option value="9">9:00 AM</option>
+                        <option value="10">10:00 AM</option>
+                        <option value="11">11:00 AM</option>
+                        <option value="12">12:00 PM</option>
+                        <option value="13">1:00 PM</option>
+                        <option value="14">2:00 PM</option>
+                        <option value="15">3:00 PM</option>
+                        <option value="16">4:00 PM</option>
+                        <option value="17">5:00 PM</option>
+                        <option value="18">6:00 PM</option>
+                        <option value="19">7:00 PM</option>
+                        <option value="20" selected>8:00 PM</option>
+                        <option value="21">9:00 PM</option>
+                        <option value="22">10:00 PM</option>
+                        <option value="23">11:00 PM</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="batch-actions">
+                <button id="schedule-sequential-btn" class="btn btn-primary">⏱️ Schedule Sequential</button>
+                <button id="schedule-random-btn" class="btn btn-success">🎲 Schedule Random</button>
+                <button id="auto-schedule-all-btn" class="btn btn-primary">🎯 Auto-Schedule All</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- SINGLE SCHEDULE MODAL (12-HOUR) -->
+<div id="single-schedule-modal" class="modal-overlay" hidden>
+    <div class="modal-content premium-card">
+        <div class="modal-header">
+            <h3>📅 Schedule Post</h3>
+            <button class="modal-close single-schedule-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Reel URL</label>
+                <input type="text" id="single-schedule-url" class="input-field" readonly />
+            </div>
+            <div class="form-group">
+                <label>Caption</label>
+                <textarea id="single-schedule-caption" class="input-field" rows="2" placeholder="Enter caption..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Schedule Date</label>
+                <input type="date" id="single-schedule-date" class="input-field" />
+            </div>
+            <div class="form-group">
+                <label>Schedule Time (12-Hour)</label>
+                <div class="time-input-12">
+                    <select id="single-schedule-hour" class="input-field time-select">
+                        <option value="12">12</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8" selected>8</option>
+                        <option value="9">9</option>
+                        <option value="10">10</option>
+                        <option value="11">11</option>
+                    </select>
+                    <span class="time-separator">:</span>
+                    <select id="single-schedule-minute" class="input-field time-select">
+                        <!-- ✅ ALL 60 MINUTES -->
+                        <option value="00">00</option>
+                        <option value="01">01</option>
+                        <option value="02">02</option>
+                        <option value="03">03</option>
+                        <option value="04">04</option>
+                        <option value="05">05</option>
+                        <option value="06">06</option>
+                        <option value="07">07</option>
+                        <option value="08">08</option>
+                        <option value="09">09</option>
+                        <option value="10">10</option>
+                        <option value="11">11</option>
+                        <option value="12">12</option>
+                        <option value="13">13</option>
+                        <option value="14">14</option>
+                        <option value="15">15</option>
+                        <option value="16">16</option>
+                        <option value="17">17</option>
+                        <option value="18">18</option>
+                        <option value="19">19</option>
+                        <option value="20">20</option>
+                        <option value="21">21</option>
+                        <option value="22">22</option>
+                        <option value="23">23</option>
+                        <option value="24">24</option>
+                        <option value="25">25</option>
+                        <option value="26">26</option>
+                        <option value="27">27</option>
+                        <option value="28">28</option>
+                        <option value="29">29</option>
+                        <option value="30" selected>30</option>
+                        <option value="31">31</option>
+                        <option value="32">32</option>
+                        <option value="33">33</option>
+                        <option value="34">34</option>
+                        <option value="35">35</option>
+                        <option value="36">36</option>
+                        <option value="37">37</option>
+                        <option value="38">38</option>
+                        <option value="39">39</option>
+                        <option value="40">40</option>
+                        <option value="41">41</option>
+                        <option value="42">42</option>
+                        <option value="43">43</option>
+                        <option value="44">44</option>
+                        <option value="45">45</option>
+                        <option value="46">46</option>
+                        <option value="47">47</option>
+                        <option value="48">48</option>
+                        <option value="49">49</option>
+                        <option value="50">50</option>
+                        <option value="51">51</option>
+                        <option value="52">52</option>
+                        <option value="53">53</option>
+                        <option value="54">54</option>
+                        <option value="55">55</option>
+                        <option value="56">56</option>
+                        <option value="57">57</option>
+                        <option value="58">58</option>
+                        <option value="59">59</option>
+                    </select>
+                    <select id="single-schedule-ampm" class="input-field time-select">
+                        <option value="AM">AM</option>
+                        <option value="PM" selected>PM</option>
+                    </select>
+                </div>
+            </div>
+            <button id="single-schedule-confirm" class="btn btn-primary btn-block">📅 Schedule</button>
+            <div id="single-schedule-status" class="status-message" hidden></div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+    <!-- ============ SCHEDULED JOBS TOGGLE BUTTON ============ -->
+    <div style="display: flex; justify-content: center; margin: 20px 0;">
+      <button id="toggle-scheduled-jobs-btn" class="btn btn-primary" style="padding: 12px 32px; font-size: 16px;">
+        📅 View Scheduled Jobs
+      </button>
+    </div>
+
+    <!-- ============ SCHEDULED JOBS SECTION (COLLAPSIBLE) ============ -->
+    <div id="scheduled-jobs-container" style="display: none; transition: all 0.3s ease;">
+      <div class="scheduled-posts-section premium-card">
+        <div class="scheduled-posts-header">
+          <div class="scheduled-posts-title">
+            <span class="scheduled-icon">📅</span>
+            <h3>Scheduled Jobs</h3>
+            <span class="badge" id="scheduled-count-badge">Loading...</span>
+          </div>
+          <div class="scheduled-posts-actions">
+            <button id="refresh-scheduled-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+            <button id="close-scheduled-btn" class="btn btn-sm btn-danger">✕ Close</button>
+          </div>
+        </div>
+        
+        <!-- Status Summary -->
+        <div class="scheduled-summary" id="scheduled-summary">
+          <div class="summary-item">
+            <span class="summary-value" id="summary-total">0</span>
+            <span class="summary-label">Total</span>
+          </div>
+          <div class="summary-item pending">
+            <span class="summary-value" id="summary-pending">0</span>
+            <span class="summary-label">⏳ Pending</span>
+          </div>
+          <div class="summary-item posted">
+            <span class="summary-value" id="summary-posted">0</span>
+            <span class="summary-label">✅ Posted</span>
+          </div>
+          <div class="summary-item failed">
+            <span class="summary-value" id="summary-failed">0</span>
+            <span class="summary-label">❌ Failed</span>
+          </div>
+        </div>
+        
+        <!-- Filters -->
+        <div class="scheduled-filters">
+          <select id="scheduled-filter-status" class="input-field">
+            <option value="all">All Status</option>
+            <option value="pending">⏳ Pending</option>
+            <option value="posted">✅ Posted</option>
+            <option value="failed">❌ Failed</option>
+          </select>
+          <select id="scheduled-filter-pipeline" class="input-field">
+            <option value="">All Pipelines</option>
+          </select>
+        </div>
+        
+        <!-- Scheduled Posts List -->
+        <div id="scheduled-posts-list">
+          <div class="loading-state">
+            <div class="loading-spinner"></div>
+            <p style="color: var(--text-muted); margin-top: 12px;">Loading scheduled posts...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="foot">
+    <p>Only for content you own or have permission to save. Respect creators' rights.</p>
+    <div class="foot-extra">
+      <span>🔐 Encrypted</span>
+      <span>⚡ Premium</span>
+      <span>🛡️ Secure</span>
+    </div>
+  </footer>
+
+</div>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
