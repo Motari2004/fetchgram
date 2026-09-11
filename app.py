@@ -68,311 +68,224 @@ def get_db_connection():
         return None
 
 def init_db():
+    """Create missing tables and migrate missing columns safely.
+
+    This function is idempotent: it can run on every application startup.
+    Buffer organization_id is intentionally not stored.
+    """
     conn = get_db_connection()
     if not conn:
         return
-    
+
+    cur = None
     try:
         cur = conn.cursor()
-        
-        # User cookies table
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS user_cookies (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_id TEXT NOT NULL,
-                cookie_data JSONB NOT NULL,
-                username TEXT,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                UNIQUE(user_id)
-            );
-        """)
-        
-        # Scraped reels table
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS scraped_reels (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_id TEXT NOT NULL,
-                job_id TEXT NOT NULL,
-                usernames TEXT[] NOT NULL,
-                results JSONB NOT NULL,
-                status TEXT DEFAULT 'completed',
-                total_profiles INTEGER DEFAULT 0,
-                total_reels INTEGER DEFAULT 0,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                UNIQUE(user_id, job_id)
-            );
-        """)
-        
-        # Pipelines table
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pipelines (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name TEXT NOT NULL,
-                profile_username TEXT NOT NULL,
-                facebook_account_id TEXT NOT NULL,
-                facebook_page_name TEXT,
-                daily_limit INTEGER DEFAULT 2,
-                is_active BOOLEAN DEFAULT TRUE,
-                last_run TIMESTAMP WITH TIME ZONE,
-                total_posted INTEGER DEFAULT 0,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-        """)
-        
-        # Posted reels table
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS posted_reels (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-                reel_url TEXT NOT NULL,
-                direct_video_url TEXT,
-                caption TEXT,
-                facebook_post_id TEXT,
-                facebook_post_url TEXT,
-                posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                status TEXT DEFAULT 'success',
-                error_message TEXT,
-                UNIQUE(pipeline_id, reel_url)
-            );
-        """)
-        
-        # Add columns if they don't exist
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS direct_video_url TEXT;")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS caption TEXT;")
-        
-        # Pipeline runs log
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pipeline_runs (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-                run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                reels_posted INTEGER DEFAULT 0,
-                reels_failed INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'completed',
-                error_message TEXT
-            );
-        """)
-        
-        # Reel cache table
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS reel_cache (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                reel_url TEXT NOT NULL UNIQUE,
-                direct_url TEXT NOT NULL,
-                caption TEXT,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-        """)
-        
-        # Sync status table
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS sync_status (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                username TEXT NOT NULL UNIQUE,
-                status TEXT DEFAULT 'idle',
-                total_reels INTEGER DEFAULT 0,
-                captions_fetched INTEGER DEFAULT 0,
-                captions_skipped INTEGER DEFAULT 0,
-                errors INTEGER DEFAULT 0,
-                started_at TIMESTAMP WITH TIME ZONE,
-                completed_at TIMESTAMP WITH TIME ZONE,
-                last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                job_id TEXT
-            );
-        """)
-        
-        # Scheduled posts table
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS scheduled_posts (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                reel_url TEXT NOT NULL,
-                direct_video_url TEXT NOT NULL,
-                caption TEXT,
-                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-                scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL,
-                status TEXT DEFAULT 'pending',
-                error_message TEXT,
-                posted_at TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-        """)
-        
-        # Pending posts table (kept for backward compatibility but not used in new flow)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS pending_posts (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                reel_url TEXT NOT NULL UNIQUE,
-                direct_video_url TEXT NOT NULL,
-                pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-                profile_username TEXT NOT NULL,
-                facebook_account_id TEXT NOT NULL,
-                caption TEXT,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                status TEXT DEFAULT 'pending',
-                attempts INTEGER DEFAULT 0,
-                error_message TEXT,
-                facebook_post_id TEXT,
-                facebook_post_url TEXT,
-                wakeup_sent BOOLEAN DEFAULT FALSE,
-                real_fetch_attempts INTEGER DEFAULT 0,
-                webhook_received BOOLEAN DEFAULT FALSE
-            );
-        """)
-        
-        # Add columns if they don't exist
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS wakeup_sent BOOLEAN DEFAULT FALSE;")
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;")
-        cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;")
-        
-        # ========== NEW: ZERNIO KEYS TABLE ==========
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS zernio_keys (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name TEXT NOT NULL,
-                api_key TEXT NOT NULL UNIQUE,
-                facebook_account_id TEXT NOT NULL,
-                facebook_page_name TEXT,
-                daily_limit INTEGER DEFAULT 50,
-                usage_count INTEGER DEFAULT 0,
-                last_used TIMESTAMP WITH TIME ZONE,
-                is_active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-        """)
-        
-        # Add zernio_key_id to pipelines
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS publisher_provider TEXT DEFAULT 'zernio';")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS source_mode TEXT DEFAULT 'scraped';")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_key_id UUID;")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_id TEXT;")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_name TEXT;")
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_platform TEXT;")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS buffer_keys (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name TEXT NOT NULL, api_key TEXT NOT NULL UNIQUE,
-                usage_count INTEGER DEFAULT 0,
-                is_active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-        """)
-        # Safe migrations for existing installations.
-        # CREATE TABLE IF NOT EXISTS does not add columns to an already-existing table.
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS name TEXT;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS api_key TEXT;")
-        
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS usage_count INTEGER DEFAULT 0;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
-        cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
-        # Create the channels table first. ALTER TABLE cannot run against a
-        # table that does not exist, which caused initialization to stop on
-        # fresh databases.
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS buffer_channels (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                buffer_key_id UUID REFERENCES buffer_keys(id) ON DELETE CASCADE,
-                channel_id TEXT NOT NULL,
-                name TEXT,
-                display_name TEXT,
-                service TEXT,
-                external_link TEXT,
-                is_disconnected BOOLEAN DEFAULT FALSE,
-                is_locked BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                UNIQUE(buffer_key_id, channel_id)
-            );
-        """)
 
-        # Safe migrations for existing installations.
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS name TEXT;")
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS display_name TEXT;")
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS service TEXT;")
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS external_link TEXT;")
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS is_disconnected BOOLEAN DEFAULT FALSE;")
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS is_locked BOOLEAN DEFAULT FALSE;")
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
-        cur.execute("ALTER TABLE buffer_channels ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();")
-        # Buffer does not persist organization_id; it is only used transiently\n        # when querying Buffer's channel API. Remove legacy columns from older schemas.\n        cur.execute("ALTER TABLE buffer_keys DROP COLUMN IF EXISTS organization_id;")\n        cur.execute("ALTER TABLE buffer_channels DROP COLUMN IF EXISTS organization_id;")\n\n        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_active ON buffer_keys(is_active);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_channels_key ON buffer_channels(buffer_key_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_channels_service ON buffer_channels(service);")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_provider TEXT DEFAULT 'zernio';")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_account_id TEXT;")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_platform TEXT;")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_post_id TEXT;")
-        cur.execute("ALTER TABLE posted_reels ADD COLUMN IF NOT EXISTS publisher_post_url TEXT;")
+        def add_column(table, column, definition):
+            cur.execute(
+                f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {definition};'
+            )
 
-        
-        # ========== NEW: APP SETTINGS TABLE ==========
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS app_settings (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                setting_key TEXT NOT NULL UNIQUE,
-                setting_value TEXT,
-                setting_type TEXT DEFAULT 'string',
-                description TEXT,
-                is_encrypted BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-        """)
-        
-        # Insert default settings
+        # Create every table first. This is important: never ALTER a table
+        # before CREATE TABLE IF NOT EXISTS has guaranteed it exists.
+        cur.execute("""CREATE TABLE IF NOT EXISTS user_cookies (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT NOT NULL,
+            cookie_data JSONB NOT NULL, username TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), UNIQUE(user_id));""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS scraped_reels (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT NOT NULL,
+            job_id TEXT NOT NULL, usernames TEXT[] NOT NULL, results JSONB NOT NULL,
+            status TEXT DEFAULT 'completed', total_profiles INTEGER DEFAULT 0,
+            total_reels INTEGER DEFAULT 0, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), UNIQUE(user_id, job_id));""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS pipelines (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL,
+            profile_username TEXT NOT NULL, facebook_account_id TEXT, facebook_page_name TEXT,
+            daily_limit INTEGER DEFAULT 2, is_active BOOLEAN DEFAULT TRUE,
+            last_run TIMESTAMP WITH TIME ZONE, total_posted INTEGER DEFAULT 0,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS posted_reels (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE, reel_url TEXT NOT NULL,
+            direct_video_url TEXT, caption TEXT, facebook_post_id TEXT, facebook_post_url TEXT,
+            posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), status TEXT DEFAULT 'success',
+            error_message TEXT, UNIQUE(pipeline_id, reel_url));""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS pipeline_runs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+            run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), reels_posted INTEGER DEFAULT 0,
+            reels_failed INTEGER DEFAULT 0, status TEXT DEFAULT 'completed', error_message TEXT);""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS reel_cache (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), reel_url TEXT NOT NULL UNIQUE,
+            direct_url TEXT NOT NULL, caption TEXT, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS sync_status (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), username TEXT NOT NULL UNIQUE,
+            status TEXT DEFAULT 'idle', total_reels INTEGER DEFAULT 0, captions_fetched INTEGER DEFAULT 0,
+            captions_skipped INTEGER DEFAULT 0, errors INTEGER DEFAULT 0,
+            started_at TIMESTAMP WITH TIME ZONE, completed_at TIMESTAMP WITH TIME ZONE,
+            last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(), job_id TEXT);""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS scheduled_posts (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), reel_url TEXT NOT NULL,
+            direct_video_url TEXT NOT NULL, caption TEXT,
+            pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+            scheduled_time TIMESTAMP WITH TIME ZONE NOT NULL, status TEXT DEFAULT 'pending',
+            error_message TEXT, posted_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS pending_posts (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), reel_url TEXT NOT NULL UNIQUE,
+            direct_video_url TEXT NOT NULL, pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
+            profile_username TEXT NOT NULL, facebook_account_id TEXT NOT NULL, caption TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, error_message TEXT,
+            facebook_post_id TEXT, facebook_post_url TEXT, wakeup_sent BOOLEAN DEFAULT FALSE,
+            real_fetch_attempts INTEGER DEFAULT 0, webhook_received BOOLEAN DEFAULT FALSE);""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS zernio_keys (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL,
+            api_key TEXT NOT NULL UNIQUE, facebook_account_id TEXT NOT NULL, facebook_page_name TEXT,
+            daily_limit INTEGER DEFAULT 50, usage_count INTEGER DEFAULT 0,
+            last_used TIMESTAMP WITH TIME ZONE, is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS buffer_keys (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL,
+            api_key TEXT NOT NULL UNIQUE, usage_count INTEGER DEFAULT 0, is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS buffer_channels (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            buffer_key_id UUID REFERENCES buffer_keys(id) ON DELETE CASCADE,
+            channel_id TEXT NOT NULL, name TEXT, display_name TEXT, service TEXT NOT NULL,
+            external_link TEXT, is_disconnected BOOLEAN DEFAULT FALSE, is_locked BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(), updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            UNIQUE(buffer_key_id, channel_id));""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS app_settings (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), setting_key TEXT NOT NULL UNIQUE,
+            setting_value TEXT, setting_type TEXT DEFAULT 'string', description TEXT,
+            is_encrypted BOOLEAN DEFAULT FALSE, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());""")
+
+        # Add every known column to every table. Existing rows are preserved.
+        columns = {
+            'user_cookies': {
+                'user_id':'TEXT','cookie_data':'JSONB','username':'TEXT',
+                'created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
+            'scraped_reels': {
+                'user_id':'TEXT','job_id':'TEXT','usernames':'TEXT[]','results':'JSONB','status':"TEXT DEFAULT 'completed'",
+                'total_profiles':'INTEGER DEFAULT 0','total_reels':'INTEGER DEFAULT 0',
+                'created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
+            'pipelines': {
+                'name':'TEXT','profile_username':'TEXT','facebook_account_id':'TEXT','facebook_page_name':'TEXT',
+                'daily_limit':'INTEGER DEFAULT 2','is_active':'BOOLEAN DEFAULT TRUE','last_run':'TIMESTAMP WITH TIME ZONE',
+                'total_posted':'INTEGER DEFAULT 0','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
+                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','zernio_key_id':'UUID',
+                'publisher_provider':"TEXT DEFAULT 'zernio'",'source_mode':"TEXT DEFAULT 'scraped'",
+                'buffer_key_id':'UUID','buffer_channel_id':'TEXT','buffer_channel_name':'TEXT','buffer_platform':'TEXT'},
+            'posted_reels': {
+                'pipeline_id':'UUID','reel_url':'TEXT','direct_video_url':'TEXT','caption':'TEXT',
+                'facebook_post_id':'TEXT','facebook_post_url':'TEXT','posted_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
+                'status':"TEXT DEFAULT 'success'",'error_message':'TEXT','publisher_provider':"TEXT DEFAULT 'zernio'",
+                'publisher_account_id':'TEXT','publisher_platform':'TEXT','publisher_post_id':'TEXT','publisher_post_url':'TEXT'},
+            'pipeline_runs': {
+                'pipeline_id':'UUID','run_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','reels_posted':'INTEGER DEFAULT 0',
+                'reels_failed':'INTEGER DEFAULT 0','status':"TEXT DEFAULT 'completed'",'error_message':'TEXT'},
+            'reel_cache': {'reel_url':'TEXT','direct_url':'TEXT','caption':'TEXT','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
+            'sync_status': {
+                'username':'TEXT','status':"TEXT DEFAULT 'idle'",'total_reels':'INTEGER DEFAULT 0',
+                'captions_fetched':'INTEGER DEFAULT 0','captions_skipped':'INTEGER DEFAULT 0','errors':'INTEGER DEFAULT 0',
+                'started_at':'TIMESTAMP WITH TIME ZONE','completed_at':'TIMESTAMP WITH TIME ZONE',
+                'last_updated':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','job_id':'TEXT'},
+            'scheduled_posts': {
+                'reel_url':'TEXT','direct_video_url':'TEXT','caption':'TEXT','pipeline_id':'UUID',
+                'scheduled_time':'TIMESTAMP WITH TIME ZONE','status':"TEXT DEFAULT 'pending'",'error_message':'TEXT',
+                'posted_at':'TIMESTAMP WITH TIME ZONE','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
+                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
+            'pending_posts': {
+                'reel_url':'TEXT','direct_video_url':'TEXT','pipeline_id':'UUID','profile_username':'TEXT',
+                'facebook_account_id':'TEXT','caption':'TEXT','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
+                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','status':"TEXT DEFAULT 'pending'",'attempts':'INTEGER DEFAULT 0',
+                'error_message':'TEXT','facebook_post_id':'TEXT','facebook_post_url':'TEXT','wakeup_sent':'BOOLEAN DEFAULT FALSE',
+                'real_fetch_attempts':'INTEGER DEFAULT 0','webhook_received':'BOOLEAN DEFAULT FALSE'},
+            'zernio_keys': {
+                'name':'TEXT','api_key':'TEXT','facebook_account_id':'TEXT','facebook_page_name':'TEXT',
+                'daily_limit':'INTEGER DEFAULT 50','usage_count':'INTEGER DEFAULT 0','last_used':'TIMESTAMP WITH TIME ZONE',
+                'is_active':'BOOLEAN DEFAULT TRUE','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
+                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
+            'buffer_keys': {
+                'name':'TEXT','api_key':'TEXT','usage_count':'INTEGER DEFAULT 0','is_active':'BOOLEAN DEFAULT TRUE',
+                'created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
+            'buffer_channels': {
+                'buffer_key_id':'UUID','channel_id':'TEXT','name':'TEXT','display_name':'TEXT','service':'TEXT',
+                'external_link':'TEXT','is_disconnected':'BOOLEAN DEFAULT FALSE','is_locked':'BOOLEAN DEFAULT FALSE',
+                'created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()','updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'},
+            'app_settings': {
+                'setting_key':'TEXT','setting_value':'TEXT','setting_type':"TEXT DEFAULT 'string'",'description':'TEXT',
+                'is_encrypted':'BOOLEAN DEFAULT FALSE','created_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()',
+                'updated_at':'TIMESTAMP WITH TIME ZONE DEFAULT NOW()'}
+        }
+
+        for table, table_columns in columns.items():
+            for column, definition in table_columns.items():
+                add_column(table, column, definition)
+
+        # Remove organization_id from old Buffer schemas. It is not part of this app's DB model.
+        cur.execute('ALTER TABLE buffer_keys DROP COLUMN IF EXISTS organization_id;')
+        cur.execute('ALTER TABLE buffer_channels DROP COLUMN IF EXISTS organization_id;')
+
+        # Default application settings.
         cur.execute("""
             INSERT INTO app_settings (setting_key, setting_value, description) VALUES
-                ('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption', 'Caption service endpoint'),
-                ('zernio_base_url', 'https://zernio.com/api/v1', 'Zernio API base URL'),
-                ('scraper_base_url', 'https://ig-reels-scraper.onrender.com', 'Instagram scraper service URL'),
-                ('max_reels_per_scrape', '50', 'Maximum reels to scrape per profile'),
-                ('max_scrolls_per_scrape', '200', 'Maximum scrolls per profile'),
-                ('enable_auto_sync', 'true', 'Auto-sync captions after scrape')
+            ('caption_service_url','https://copytxt-caption-automation.onrender.com/api/caption','Caption service endpoint'),
+            ('zernio_base_url','https://zernio.com/api/v1','Zernio API base URL'),
+            ('scraper_base_url','https://ig-reels-scraper.onrender.com','Instagram scraper service URL'),
+            ('max_reels_per_scrape','50','Maximum reels to scrape per profile'),
+            ('max_scrolls_per_scrape','200','Maximum scrolls per profile'),
+            ('enable_auto_sync','true','Auto-sync captions after scrape')
             ON CONFLICT (setting_key) DO NOTHING;
         """)
-        
-        # Create indexes
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id ON scraped_reels(user_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at ON scraped_reels(created_at DESC);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id ON user_cookies(user_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_posted_reels_pipeline_id ON posted_reels(pipeline_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_posted_reels_posted_at ON posted_reels(posted_at);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_is_active ON pipelines(is_active);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_reel_cache_reel_url ON reel_cache(reel_url);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_reel_cache_created_at ON reel_cache(created_at);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_sync_status_username ON sync_status(username);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_sync_status_status ON sync_status(status);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_scheduled_time ON scheduled_posts(scheduled_time);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_status ON scheduled_posts(status);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_pipeline_id ON scheduled_posts(pipeline_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_processing ON scheduled_posts(status, updated_at) WHERE status = 'processing';")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_posts_due ON scheduled_posts(status, scheduled_time);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_reel_url ON pending_posts(reel_url);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_status ON pending_posts(status);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at ON pending_posts(created_at DESC);")
-        
-        # ========== NEW INDEXES ==========
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_api_key ON zernio_keys(api_key);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);")
-        
+
+        # Useful indexes.
+        indexes = [
+            'CREATE INDEX IF NOT EXISTS idx_scraped_reels_user_id ON scraped_reels(user_id);',
+            'CREATE INDEX IF NOT EXISTS idx_scraped_reels_created_at ON scraped_reels(created_at DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_user_cookies_user_id ON user_cookies(user_id);',
+            'CREATE INDEX IF NOT EXISTS idx_posted_reels_pipeline_id ON posted_reels(pipeline_id);',
+            'CREATE INDEX IF NOT EXISTS idx_posted_reels_posted_at ON posted_reels(posted_at);',
+            'CREATE INDEX IF NOT EXISTS idx_pipelines_is_active ON pipelines(is_active);',
+            'CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);',
+            'CREATE INDEX IF NOT EXISTS idx_reel_cache_reel_url ON reel_cache(reel_url);',
+            'CREATE INDEX IF NOT EXISTS idx_reel_cache_created_at ON reel_cache(created_at);',
+            'CREATE INDEX IF NOT EXISTS idx_sync_status_username ON sync_status(username);',
+            'CREATE INDEX IF NOT EXISTS idx_sync_status_status ON sync_status(status);',
+            'CREATE INDEX IF NOT EXISTS idx_scheduled_posts_scheduled_time ON scheduled_posts(scheduled_time);',
+            'CREATE INDEX IF NOT EXISTS idx_scheduled_posts_status ON scheduled_posts(status);',
+            'CREATE INDEX IF NOT EXISTS idx_scheduled_posts_pipeline_id ON scheduled_posts(pipeline_id);',
+            "CREATE INDEX IF NOT EXISTS idx_scheduled_posts_processing ON scheduled_posts(status, updated_at) WHERE status = 'processing';",
+            'CREATE INDEX IF NOT EXISTS idx_scheduled_posts_due ON scheduled_posts(status, scheduled_time);',
+            'CREATE INDEX IF NOT EXISTS idx_pending_posts_reel_url ON pending_posts(reel_url);',
+            'CREATE INDEX IF NOT EXISTS idx_pending_posts_status ON pending_posts(status);',
+            'CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at ON pending_posts(created_at DESC);',
+            'CREATE INDEX IF NOT EXISTS idx_zernio_keys_api_key ON zernio_keys(api_key);',
+            'CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);',
+            'CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);',
+            'CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);',
+            'CREATE INDEX IF NOT EXISTS idx_buffer_keys_active ON buffer_keys(is_active);',
+            'CREATE INDEX IF NOT EXISTS idx_buffer_channels_key ON buffer_channels(buffer_key_id);',
+            'CREATE INDEX IF NOT EXISTS idx_buffer_channels_service ON buffer_channels(service);'
+        ]
+        for statement in indexes:
+            cur.execute(statement)
+
         conn.commit()
-        app.logger.info("✅ Database tables ready with all columns (including Zernio keys and app settings)")
+        app.logger.info('Database initialization/migration completed successfully.')
+
     except Exception as e:
-        app.logger.error(f"❌ Database init error: {e}")
+        conn.rollback()
+        app.logger.error(f'Database init/migration error: {e}')
         import traceback
         app.logger.error(traceback.format_exc())
     finally:
-        cur.close()
+        if cur:
+            cur.close()
         conn.close()
 
 # Initialize database on startup
@@ -2267,7 +2180,7 @@ def sync_buffer_channels(buffer_key_id, api_key):
     if not conn: raise Exception("Database connection failed")
     channels=[]
     try:
-        cur=conn.cursor(); first_org=orgs[0]["id"] if orgs else None
+        cur=conn.cursor()
         for org in orgs:
             for ch in buffer_get_channels(api_key,org["id"]):
                 cur.execute("""
@@ -2276,7 +2189,8 @@ def sync_buffer_channels(buffer_key_id, api_key):
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                     ON CONFLICT (buffer_key_id,channel_id) DO UPDATE SET
                       name=EXCLUDED.name,display_name=EXCLUDED.display_name,
-                      service=EXCLUDED.service,external_link=EXCLUDED.external_link,is_disconnected=EXCLUDED.is_disconnected,
+                      service=EXCLUDED.service,external_link=EXCLUDED.external_link,
+                      is_disconnected=EXCLUDED.is_disconnected,
                       is_locked=EXCLUDED.is_locked,updated_at=NOW()
                 """,(buffer_key_id,ch["id"],ch.get("name"),ch.get("displayName"),ch.get("service"),ch.get("externalLink"),bool(ch.get("isDisconnected")),bool(ch.get("isLocked"))))
                 channels.append({"id":ch["id"],"name":ch.get("name"),"display_name":ch.get("displayName"),"service":ch.get("service"),"external_link":ch.get("externalLink"),"is_disconnected":bool(ch.get("isDisconnected")),"is_locked":bool(ch.get("isLocked"))})
