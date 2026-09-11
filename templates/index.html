@@ -495,6 +495,77 @@
 
 
 
+<!-- ============ BUFFER KEYS MANAGEMENT (Twitter + TikTok) ============ -->
+<div class="zernio-keys-section premium-card">
+    <div class="zernio-keys-header">
+        <div class="zernio-keys-title">
+            <span class="zernio-keys-icon">🐦</span>
+            <h3>Buffer API Keys (Twitter & TikTok)</h3>
+            <span class="badge" id="buffer-keys-count">0 keys</span>
+        </div>
+        <div class="zernio-keys-actions">
+            <button id="add-buffer-key-btn" class="btn btn-sm btn-primary">➕ Add Key</button>
+            <button id="refresh-buffer-keys-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+        </div>
+    </div>
+    <div id="buffer-keys-list">
+        <div class="loading-state">
+            <div class="loading-spinner"></div>
+            <p style="color: var(--text-muted); margin-top: 12px;">Loading Buffer keys...</p>
+        </div>
+    </div>
+</div>
+
+<!-- ============ ADD BUFFER KEY MODAL ============ -->
+<div id="add-buffer-key-modal" class="modal-overlay" hidden>
+    <div class="modal-content premium-card">
+        <div class="modal-header">
+            <h3>🐦 Add Buffer API Key</h3>
+            <button id="add-buffer-key-modal-close" class="modal-close">✕</button>
+        </div>
+        <div class="modal-body">
+            <p class="modal-desc">
+                Enter your Buffer personal API key. Connected Twitter/X and TikTok channels
+                will be auto-discovered.
+            </p>
+
+            <div class="form-group">
+                <label for="buffer-key-name">Name (optional)</label>
+                <input type="text" id="buffer-key-name" class="input-field" placeholder="My Buffer Key" />
+            </div>
+
+            <div class="form-group">
+                <label for="buffer-key-api">API Key</label>
+                <input type="text" id="buffer-key-api" class="input-field" placeholder="Paste your Buffer API key" />
+                <span style="font-size: 11px; color: var(--text-muted);">
+                    🔑 Get it from Buffer → Settings → API → New Key
+                </span>
+            </div>
+
+            <div class="form-group">
+                <label for="buffer-key-daily-limit">Daily Limit</label>
+                <input type="number" id="buffer-key-daily-limit" class="input-field" value="50" min="1" max="500" />
+            </div>
+
+            <div class="form-group" style="margin-top: 16px;">
+                <button id="save-buffer-key-btn" class="btn btn-primary btn-block">Save Key</button>
+            </div>
+
+            <div id="add-buffer-key-status" class="status-message" hidden></div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
 <!-- ============ PIPELINES SECTION ============ -->
 <div class="pipelines-section premium-card" id="pipelines-section">
     <div class="pipelines-header">
@@ -510,33 +581,62 @@
     
     <div id="pipelines-status" class="status-message" hidden></div>
     
-    <!-- Create Pipeline -->
-    <div class="pipeline-create">
-        <details>
-            <summary>➕ Create New Pipeline</summary>
-            <div class="pipeline-create-form">
-                <div class="form-group">
-                    <label>Pipeline Name</label>
-                    <input type="text" id="pipeline-name" class="input-field" placeholder="My Instagram Pipeline" />
-                </div>
-                <div class="form-group">
-                    <label>Profile Username</label>
-                    <input type="text" id="pipeline-username" class="input-field" placeholder="elenaajoyce" />
-                </div>
+<!-- Create Pipeline -->
+<div class="pipeline-create">
+    <details>
+        <summary>➕ Create New Pipeline</summary>
+        <div class="pipeline-create-form">
+            <div class="form-group">
+                <label>Platform</label>
+                <select id="pipeline-platform" class="input-field">
+                    <option value="facebook">📘 Facebook</option>
+                    <option value="twitter">🐦 Twitter / X</option>
+                    <option value="tiktok">🎵 TikTok</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Pipeline Name</label>
+                <input type="text" id="pipeline-name" class="input-field" placeholder="My Instagram Pipeline" />
+            </div>
+
+            <div class="form-group">
+                <label>Profile Username</label>
+                <input type="text" id="pipeline-username" class="input-field" placeholder="elenaajoyce" />
+            </div>
+
+            <!-- Facebook-only -->
+            <div id="pipeline-facebook-group">
                 <div class="form-group">
                     <label>Facebook Account ID</label>
                     <select id="pipeline-facebook-account" class="input-field">
                         <option value="">Select Facebook account...</option>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label>Daily Post Limit</label>
-                    <input type="number" id="pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />
-                </div>
-                <button id="create-pipeline-btn" class="btn btn-primary">Create Pipeline</button>
             </div>
-        </details>
-    </div>
+
+            <!-- Buffer-only (Twitter / TikTok) -->
+            <div id="pipeline-buffer-group" style="display: none;">
+                <div class="form-group">
+                    <label>Buffer Channel</label>
+                    <select id="pipeline-buffer-channel" class="input-field">
+                        <option value="">Select channel...</option>
+                    </select>
+                    <span style="font-size: 11px; color: var(--text-muted);">
+                        Channels come from your connected Buffer keys.
+                    </span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Daily Post Limit</label>
+                <input type="number" id="pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />
+            </div>
+
+            <button id="create-pipeline-btn" class="btn btn-primary">Create Pipeline</button>
+        </div>
+    </details>
+</div>
     
     <!-- Pipelines List -->
     <div id="pipelines-list">
@@ -556,55 +656,76 @@
         </div>
         <div class="modal-body">
             <p class="modal-desc">Update your pipeline configuration.</p>
-            
+
             <input type="hidden" id="edit-pipeline-id" />
-            
+
+            <div class="form-group">
+                <label for="edit-pipeline-platform">Platform</label>
+                <select id="edit-pipeline-platform" class="input-field">
+                    <option value="facebook">📘 Facebook</option>
+                    <option value="twitter">🐦 Twitter / X</option>
+                    <option value="tiktok">🎵 TikTok</option>
+                </select>
+            </div>
+
             <div class="form-group">
                 <label for="edit-pipeline-name">Pipeline Name</label>
                 <input type="text" id="edit-pipeline-name" class="input-field" placeholder="My Pipeline" />
             </div>
-            
+
             <div class="form-group">
                 <label for="edit-pipeline-username">Profile Username</label>
                 <input type="text" id="edit-pipeline-username" class="input-field" placeholder="nasa" />
             </div>
-            
-            <div class="form-group">
-                <label for="edit-pipeline-facebook-account">Facebook Account</label>
-                <select id="edit-pipeline-facebook-account" class="input-field">
-                    <option value="">Select Facebook account...</option>
-                </select>
+
+            <!-- Facebook-only -->
+            <div id="edit-pipeline-facebook-group">
+                <div class="form-group">
+                    <label for="edit-pipeline-facebook-account">Facebook Account</label>
+                    <select id="edit-pipeline-facebook-account" class="input-field">
+                        <option value="">Select Facebook account...</option>
+                    </select>
+                </div>
             </div>
-            
+
+            <!-- Buffer-only (Twitter / TikTok) -->
+            <div id="edit-pipeline-buffer-group" style="display: none;">
+                <div class="form-group">
+                    <label for="edit-pipeline-buffer-channel">Buffer Channel</label>
+                    <select id="edit-pipeline-buffer-channel" class="input-field">
+                        <option value="">Select channel...</option>
+                    </select>
+                </div>
+            </div>
+
             <div class="form-group">
                 <label for="edit-pipeline-daily-limit">Daily Post Limit</label>
                 <input type="number" id="edit-pipeline-daily-limit" class="input-field" value="2" min="1" max="50" />
             </div>
-            
-            <!-- ✅ ZERNIO KEY INFO - Shows current key assigned to pipeline -->
+
+            <!-- Current account / key info -->
             <div class="form-group">
-                <label>🔑 Current Zernio Key</label>
-                <div id="edit-pipeline-key-info" style="padding: 8px 12px; background: var(--bg-secondary); border-radius: 4px; font-size: 13px; border-left: 3px solid var(--accent);" hidden></div>
+                <label>🔑 Current Account</label>
+                <div id="edit-pipeline-key-info"
+                     style="padding: 8px 12px; background: var(--bg-secondary); border-radius: 4px; font-size: 13px; border-left: 3px solid var(--accent);"
+                     hidden></div>
             </div>
-            
+
             <div class="form-group checkbox-group">
                 <label class="checkbox-label">
                     <input type="checkbox" id="edit-pipeline-active" checked />
                     <span>Active</span>
                 </label>
             </div>
-            
+
             <div class="form-group">
                 <button id="save-pipeline-edit-btn" class="btn btn-primary btn-block">Save Changes</button>
             </div>
-            
+
             <div id="edit-pipeline-status" class="status-message" hidden></div>
         </div>
     </div>
 </div>
-
-
-
 
 
 
