@@ -6779,6 +6779,7 @@ def get_pipelines():
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
         # ✅ FIX 1: Get pipelines first WITHOUT LEFT JOIN
+        # ✅ Added Buffer columns so the UI can render the platform label
         cur.execute("""
             SELECT 
                 p.id,
@@ -6792,7 +6793,11 @@ def get_pipelines():
                 p.total_posted,
                 p.created_at,
                 p.updated_at,
-                p.zernio_key_id
+                p.zernio_key_id,
+                p.platform,
+                p.buffer_key_id,
+                p.buffer_channel_id,
+                p.buffer_channel_name
             FROM pipelines p
             ORDER BY p.created_at DESC
         """)
