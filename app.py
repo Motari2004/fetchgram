@@ -3478,6 +3478,25 @@ def run_all_active_pipelines():
 
 # ============== ROUTES ==============
 
+# ============== HEALTH / ROUTE DISCOVERY ==============
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify({
+        "status": "ok",
+        "service": "Fetchgram",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "database": bool(get_db_connection()),
+    })
+
+@app.route("/api/routes", methods=["GET"])
+def api_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        methods = sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"})
+        routes.append({"path": str(rule), "methods": methods})
+    routes.sort(key=lambda x: x["path"])
+    return jsonify({"status": "success", "count": len(routes), "routes": routes})
+
 @app.route("/")
 def index():
     return render_template("index.html")
