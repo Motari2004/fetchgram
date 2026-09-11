@@ -2671,8 +2671,82 @@ def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled
     
     
     
-    
-    
+ # ============== TWITTER WEIGHTED CHARACTER HELPERS ==============
+
+def _twitter_weighted_length(text):
+    """
+    Approximate Twitter's weighted character count.
+
+    - Emojis and supplementary-plane characters count as 2
+    - URLs count as a fixed 23 characters
+    - Everything else counts as 1 per code point
+    """
+    if not text:
+        return 0
+
+    import re as _re
+
+    url_re = _re.compile(r'https?://\S+')
+    urls = url_re.findall(text)
+    text_no_urls = url_re.sub('', text)
+    url_weight = 23 * len(urls)
+
+    weight = 0
+    for ch in text_no_urls:
+        cp = ord(ch)
+        if cp <= 0x10FF:
+            weight += 1
+        elif cp <= 0xFFFF:
+            weight += 2
+        else:
+            weight += 2
+
+    return weight + url_weight
+
+
+def _truncate_for_twitter(text, limit=250):
+    """
+    Truncate text so its Twitter-weighted length is <= limit.
+
+    Prefers cutting on word boundaries. Appends '…' if anything was removed.
+    Default limit of 250 leaves headroom for the media card that Twitter
+    attaches when a video is present.
+    """
+    if not text:
+        return ""
+
+    if _twitter_weighted_length(text) <= limit:
+        return text
+
+    budget = limit - 1  # reserve 1 for the ellipsis
+
+    # Try word-boundary truncation first
+    words = text.split()
+    out = []
+    used = 0
+    for w in words:
+        wlen = _twitter_weighted_length(w + ' ')
+        if used + wlen > budget:
+            break
+        out.append(w)
+        used += wlen
+
+    if out:
+        return ' '.join(out) + '…'
+
+    # Fallback: cut by code point
+    acc = []
+    used = 0
+    for ch in text:
+        w = _twitter_weighted_length(ch)
+        if used + w > budget:
+            break
+        acc.append(ch)
+        used += w
+
+    return ''.join(acc) + '…'
+
+
 # ============== BUFFER — TWITTER PUBLISHER ==============
 
 def publish_to_twitter(video_url, text, channel_id, key_id, thumbnail_offset=1000):
@@ -2686,6 +2760,17 @@ def publish_to_twitter(video_url, text, channel_id, key_id, thumbnail_offset=100
     key = get_buffer_key_by_id(key_id)
     if not key:
         return {"error": f"Buffer key {key_id} not found"}
+
+    # Truncate using Twitter's weighted-character rules and leave
+    # headroom for the media card (Twitter reserves ~23 chars when
+    # a tweet contains media or a link).
+    tweet_text = _truncate_for_twitter(text or "", 250)
+
+    app.logger.info(
+        f"📏 Tweet prepared — cp_len={len(tweet_text)} "
+        f"weighted={_twitter_weighted_length(tweet_text)} "
+        f"preview={tweet_text[:60]!r}"
+    )
 
     query = """
     mutation CreatePost($input: CreatePostInput!) {
@@ -2701,7 +2786,7 @@ def publish_to_twitter(video_url, text, channel_id, key_id, thumbnail_offset=100
     variables = {
         "input": {
             "channelId": channel_id,
-            "text": text[:280],  # Twitter hard limit
+            "text": tweet_text,
             "schedulingType": "automatic",
             "mode": "shareNow",
             "assets": [
