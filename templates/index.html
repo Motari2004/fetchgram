@@ -436,6 +436,64 @@
       </div>
     </div>
 
+    <!-- ============ BUFFER (TIKTOK) KEYS MANAGEMENT ============ -->
+    <div class="zernio-keys-section premium-card">
+        <div class="zernio-keys-header">
+            <div class="zernio-keys-title">
+                <span class="zernio-keys-icon">🎵</span>
+                <h3>Buffer API Keys (TikTok)</h3>
+                <span class="badge" id="buffer-keys-count">0 keys</span>
+            </div>
+            <div class="zernio-keys-actions">
+                <button id="add-buffer-key-btn" class="btn btn-sm btn-primary">➕ Add Key</button>
+                <button id="refresh-buffer-keys-btn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+            </div>
+        </div>
+        
+        <div id="buffer-keys-list">
+            <div class="loading-state">
+                <div class="loading-spinner"></div>
+                <p style="color: var(--text-muted); margin-top: 12px;">Loading keys...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ ADD BUFFER KEY MODAL ============ -->
+    <div id="add-buffer-key-modal" class="modal-overlay" hidden>
+        <div class="modal-content premium-card">
+            <div class="modal-header">
+                <h3>🎵 Add Buffer API Key</h3>
+                <button id="add-buffer-key-modal-close" class="modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">
+                    Enter your Buffer API key. TikTok channels linked to this key
+                    will be auto-discovered.
+                </p>
+                
+                <div class="form-group">
+                    <label for="buffer-key-name">Name (optional)</label>
+                    <input type="text" id="buffer-key-name" class="input-field"
+                           placeholder="Main TikTok Buffer" />
+                </div>
+                
+                <div class="form-group">
+                    <label for="buffer-key-api">API Key</label>
+                    <input type="text" id="buffer-key-api" class="input-field"
+                           placeholder="Buffer Personal Access Token" />
+                </div>
+                
+                <div class="form-group" style="margin-top: 16px;">
+                    <button id="save-buffer-key-btn" class="btn btn-primary btn-block">
+                        Save Key
+                    </button>
+                </div>
+                
+                <div id="add-buffer-key-status" class="status-message" hidden></div>
+            </div>
+        </div>
+    </div>
+
     <!-- ============ ZERNIO KEYS MANAGEMENT ============ -->
     <div class="zernio-keys-section premium-card">
         <div class="zernio-keys-header">
@@ -493,6 +551,23 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
 
 
 <!-- ============ PIPELINES SECTION ============ -->
@@ -610,11 +685,61 @@
 
 
 
+    <!-- ============ TIKTOK (BUFFER) POST SECTION ============ -->
+    <div id="tiktok-section" class="tiktok-section premium-card" hidden>
+        <div class="tiktok-header">
+            <div class="tiktok-header-left">
+                <span class="tiktok-icon">🎵</span>
+                <h3>Post to TikTok</h3>
+            </div>
+            <div class="tiktok-header-right">
+                <span class="badge" id="tiktok-status-badge">Loading...</span>
+                <button id="refresh-tiktok-btn" class="btn btn-sm btn-ghost" title="Refresh channels">🔄</button>
+            </div>
+        </div>
 
+        <div class="tiktok-body">
+            <div class="form-group">
+                <label for="tiktok-channel-select">TikTok Channel</label>
+                <select id="tiktok-channel-select" class="input-field">
+                    <option value="">Loading channels...</option>
+                </select>
+            </div>
 
+            <div class="form-group">
+                <label for="tiktok-text">Caption</label>
+                <textarea id="tiktok-text" class="tiktok-textarea" rows="2" maxlength="150"
+                          placeholder="Your TikTok caption…">Check out this video! 🎬</textarea>
+                <span class="char-count" id="tiktok-char-count">0/150</span>
+            </div>
 
+            <div class="form-group">
+                <label for="tiktok-mode">Mode</label>
+                <select id="tiktok-mode" class="input-field">
+                    <option value="addToQueue">Add to queue</option>
+                    <option value="shareNow">Share now</option>
+                    <option value="shareNext">Share next</option>
+                </select>
+            </div>
 
+            <div class="form-group">
+                <label for="tiktok-thumb-offset">Thumbnail offset (ms)</label>
+                <input type="number" id="tiktok-thumb-offset" class="input-field" value="1000" min="0" />
+            </div>
 
+            <button id="tiktok-post-btn" class="btn btn-primary btn-block">
+                <span class="btn-content">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M3 10L7 14L17 6" stroke="currentColor" stroke-width="2"
+                              stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Post to TikTok
+                </span>
+            </button>
+
+            <div id="tiktok-status" class="status-message" hidden></div>
+        </div>
+    </div>
 
     <!-- ============ BLUESKY CONFIGURATION MODAL ============ -->
     <div id="bluesky-modal" class="modal-overlay" hidden>

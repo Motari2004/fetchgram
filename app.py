@@ -67,6 +67,24 @@ def get_db_connection():
         app.logger.error(f"Database connection error: {e}")
         return None
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def init_db():
     conn = get_db_connection()
     if not conn:
@@ -229,7 +247,7 @@ def init_db():
         cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS real_fetch_attempts INTEGER DEFAULT 0;")
         cur.execute("ALTER TABLE pending_posts ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT FALSE;")
         
-        # ========== NEW: ZERNIO KEYS TABLE ==========
+        # ========== ZERNIO KEYS TABLE ==========
         cur.execute("""
             CREATE TABLE IF NOT EXISTS zernio_keys (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -249,7 +267,22 @@ def init_db():
         # Add zernio_key_id to pipelines
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS zernio_key_id UUID REFERENCES zernio_keys(id);")
         
-        # ========== NEW: APP SETTINGS TABLE ==========
+        # ========== BUFFER KEYS TABLE (TikTok) ==========
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS buffer_keys (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name TEXT NOT NULL,
+                api_key TEXT NOT NULL UNIQUE,
+                tiktok_channel_id TEXT,
+                tiktok_channel_name TEXT,
+                is_active BOOLEAN DEFAULT TRUE,
+                last_used TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+        
+        # ========== APP SETTINGS TABLE ==========
         cur.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -268,6 +301,7 @@ def init_db():
             INSERT INTO app_settings (setting_key, setting_value, description) VALUES
                 ('caption_service_url', 'https://copytxt-caption-automation.onrender.com/api/caption', 'Caption service endpoint'),
                 ('zernio_base_url', 'https://zernio.com/api/v1', 'Zernio API base URL'),
+                ('buffer_api_url', 'https://api.buffer.com', 'Buffer GraphQL API URL'),
                 ('scraper_base_url', 'https://ig-reels-scraper.onrender.com', 'Instagram scraper service URL'),
                 ('max_reels_per_scrape', '50', 'Maximum reels to scrape per profile'),
                 ('max_scrolls_per_scrape', '200', 'Maximum scrolls per profile'),
@@ -296,14 +330,20 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_status ON pending_posts(status);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pending_posts_created_at ON pending_posts(created_at DESC);")
         
-        # ========== NEW INDEXES ==========
+        # Zernio indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_api_key ON zernio_keys(api_key);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);")
+        
+        # ========== BUFFER KEYS INDEXES ==========
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_api_key ON buffer_keys(api_key);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_is_active ON buffer_keys(is_active);")
+        
+        # App settings indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);")
         
         conn.commit()
-        app.logger.info("✅ Database tables ready with all columns (including Zernio keys and app settings)")
+        app.logger.info("✅ Database tables ready (cookies, reels, pipelines, Zernio, Buffer, settings)")
     except Exception as e:
         app.logger.error(f"❌ Database init error: {e}")
         import traceback
@@ -311,6 +351,24 @@ def init_db():
     finally:
         cur.close()
         conn.close()
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
 
 # Initialize database on startup
 init_db()
@@ -525,6 +583,87 @@ def get_key_usage_status(key_id):
 
 # Load Zernio keys on startup
 load_zernio_keys()
+
+
+
+
+
+
+
+
+# ============== BUFFER KEY MANAGER (TikTok) ==============
+
+BUFFER_KEYS = {}   # {id: {...key fields...}}
+
+def load_buffer_keys():
+    """Load all active Buffer keys from DB into memory."""
+    global BUFFER_KEYS
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, name, api_key, tiktok_channel_id, tiktok_channel_name,
+                   is_active, last_used
+            FROM buffer_keys
+            WHERE is_active = TRUE
+            ORDER BY created_at ASC
+        """)
+        rows = cur.fetchall()
+        BUFFER_KEYS = {str(r['id']): dict(r) for r in rows}
+        cur.close()
+        conn.close()
+        app.logger.info(f"✅ Loaded {len(rows)} Buffer keys")
+        return rows
+    except Exception as e:
+        app.logger.error(f"Error loading Buffer keys: {e}")
+        return []
+
+
+def get_best_buffer_key():
+    """Return the first active Buffer key (least-used if you later add counters)."""
+    if not BUFFER_KEYS:
+        load_buffer_keys()
+    if not BUFFER_KEYS:
+        return None
+    # Prefer keys with a channel assigned
+    with_channel = [k for k in BUFFER_KEYS.values() if k.get('tiktok_channel_id')]
+    if with_channel:
+        return with_channel[0]
+    return next(iter(BUFFER_KEYS.values()))
+
+
+def get_buffer_key_by_id(key_id):
+    if not BUFFER_KEYS:
+        load_buffer_keys()
+    return BUFFER_KEYS.get(str(key_id))
+
+
+def touch_buffer_key(key_id):
+    """Update last_used on a Buffer key."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE buffer_keys SET last_used = NOW(), updated_at = NOW() WHERE id = %s",
+            (key_id,)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        app.logger.warning(f"Failed to touch Buffer key: {e}")
+
+
+# Load on startup
+load_buffer_keys()
+
+
+
+
 
 
 
@@ -4737,6 +4876,394 @@ def zernio_list_accounts():
         app.logger.error(traceback.format_exc())
         return jsonify({"status": "error", "message": str(e), "accounts": []}), 500
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ============== BUFFER API ROUTES (TikTok) ==============
+
+def buffer_graphql(query, variables=None, api_key=None):
+    """
+    Key-aware Buffer GraphQL helper.
+
+    If api_key is omitted, uses the best available key from BUFFER_KEYS.
+    """
+    if variables is None:
+        variables = {}
+    if not api_key:
+        key = get_best_buffer_key()
+        if not key:
+            raise Exception("No Buffer API key configured. Add one in the UI.")
+        api_key = key['api_key']
+
+    res = requests.post(
+        "https://api.buffer.com",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        json={"query": query, "variables": variables},
+        timeout=60,
+    )
+    data = res.json()
+    if data.get("errors"):
+        raise Exception("; ".join(e.get("message", "") for e in data["errors"]))
+    return data.get("data")
+
+
+def _discover_tiktok_channels(api_key):
+    """Return list of TikTok channels for a Buffer key."""
+    try:
+        orgs_data = buffer_graphql(
+            """query { account { id organizations { id name } } }""",
+            api_key=api_key,
+        )
+    except Exception as e:
+        app.logger.warning(f"Buffer org lookup failed: {e}")
+        return []
+
+    orgs = (orgs_data.get("account") or {}).get("organizations") or []
+    channels = []
+    for org in orgs:
+        try:
+            ch_data = buffer_graphql(
+                """query GetChannels($input: ChannelsInput!) {
+                  channels(input: $input) {
+                    id name service displayName isDisconnected
+                  }
+                }""",
+                {"input": {"organizationId": org["id"]}},
+                api_key=api_key,
+            )
+            for c in ch_data.get("channels") or []:
+                if c.get("service") == "tiktok" and not c.get("isDisconnected"):
+                    channels.append({
+                        "id": c["id"],
+                        "name": c.get("displayName") or c.get("name") or c["id"],
+                    })
+        except Exception as e:
+            app.logger.warning(f"Buffer channel lookup for org {org.get('id')} failed: {e}")
+    return channels
+
+
+@app.route('/api/buffer/keys', methods=['GET'])
+def get_buffer_keys():
+    """List all Buffer keys with their discovered TikTok channels."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, name, api_key, tiktok_channel_id, tiktok_channel_name,
+                   is_active, last_used, created_at
+            FROM buffer_keys
+            ORDER BY created_at DESC
+        """)
+        keys = cur.fetchall()
+
+        for k in keys:
+            raw = k['api_key'] or ''
+            k['api_key_masked'] = (
+                raw[:8] + '...' + raw[-4:] if len(raw) > 12 else '***'
+            )
+            k['channels'] = _discover_tiktok_channels(raw) if raw else []
+
+        return jsonify({"status": "success", "keys": keys, "total": len(keys)})
+    except Exception as e:
+        app.logger.error(f"get_buffer_keys error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.route('/api/buffer/keys', methods=['POST'])
+def create_buffer_key():
+    """Add a new Buffer key. Validates it and discovers TikTok channels."""
+    data = request.get_json(silent=True) or {}
+    api_key = (data.get('api_key') or '').strip()
+    name = (data.get('name') or '').strip()
+
+    if not api_key:
+        return jsonify({"error": "api_key is required"}), 400
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    try:
+        # Auto-name if not given
+        if not name:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM buffer_keys")
+            name = f"Buffer Key {cur.fetchone()[0] + 1}"
+            cur.close()
+
+        # Validate by discovering channels
+        channels = _discover_tiktok_channels(api_key)
+        first = channels[0] if channels else None
+
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO buffer_keys (name, api_key, tiktok_channel_id, tiktok_channel_name)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+        """, (
+            name,
+            api_key,
+            first["id"] if first else None,
+            first["name"] if first else None,
+        ))
+        key_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        load_buffer_keys()
+
+        return jsonify({
+            "status": "success",
+            "message": f"Buffer key '{name}' added with {len(channels)} TikTok channel(s)",
+            "key_id": key_id,
+            "channels": channels,
+        })
+    except Exception as e:
+        app.logger.error(f"create_buffer_key error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/buffer/keys/<key_id>', methods=['PUT'])
+def update_buffer_key(key_id):
+    """Update a Buffer key (name, active, default channel)."""
+    data = request.get_json(silent=True) or {}
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    try:
+        updates, params = [], []
+        for field in ('name', 'api_key', 'tiktok_channel_id',
+                      'tiktok_channel_name', 'is_active'):
+            if field in data:
+                updates.append(f"{field} = %s")
+                params.append(data[field])
+
+        if not updates:
+            return jsonify({"error": "No fields to update"}), 400
+
+        updates.append("updated_at = NOW()")
+        params.append(key_id)
+
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE buffer_keys SET {', '.join(updates)} WHERE id = %s",
+            params
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        load_buffer_keys()
+        return jsonify({"status": "success", "message": "Buffer key updated"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/buffer/keys/<key_id>', methods=['DELETE'])
+def delete_buffer_key(key_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM buffer_keys WHERE id = %s RETURNING id", (key_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if deleted:
+            load_buffer_keys()
+            return jsonify({"status": "success", "message": "Buffer key deleted"})
+        return jsonify({"error": "Key not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/buffer/keys/validate', methods=['POST'])
+def validate_buffer_key():
+    """Validate a Buffer key and return its TikTok channels."""
+    data = request.get_json(silent=True) or {}
+    api_key = (data.get('api_key') or '').strip()
+    if not api_key:
+        return jsonify({"valid": False, "message": "API key required"}), 400
+
+    try:
+        channels = _discover_tiktok_channels(api_key)
+        return jsonify({
+            "valid": True,
+            "channels": channels,
+            "account_count": len(channels),
+        })
+    except Exception as e:
+        return jsonify({"valid": False, "message": str(e)}), 400
+
+
+@app.route('/api/buffer/channels', methods=['GET'])
+def get_all_buffer_channels():
+    """All TikTok channels across all active Buffer keys (for the post dropdown)."""
+    try:
+        if not BUFFER_KEYS:
+            load_buffer_keys()
+
+        all_channels = []
+        for key_id, key in BUFFER_KEYS.items():
+            for c in _discover_tiktok_channels(key['api_key']):
+                all_channels.append({
+                    "id": c["id"],
+                    "name": c["name"],
+                    "key_id": key_id,
+                    "key_name": key['name'],
+                })
+
+        return jsonify({"status": "success", "channels": all_channels})
+    except Exception as e:
+        app.logger.error(f"get_all_buffer_channels error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/tiktok/post', methods=['POST'])
+def post_to_tiktok():
+    """
+    Post a video URL to TikTok via Buffer.
+
+    Body:
+        channelId       (required)
+        videoUrl        (required, public http/https)
+        text            (required, 1-150 chars)
+        thumbnailOffset (optional, ms, default 1000)
+        mode            (optional: addToQueue | shareNow | shareNext)
+        key_id          (optional; uses best key if omitted)
+    """
+    data = request.get_json(silent=True) or {}
+    channel_id = data.get("channelId")
+    text = (data.get("text") or "").strip()
+    video_url = data.get("videoUrl")
+    thumbnail_offset = data.get("thumbnailOffset")
+    mode = data.get("mode") or "addToQueue"
+    key_id = data.get("key_id")
+
+    if not channel_id:
+        return jsonify({"status": "error", "error": "channelId required"}), 400
+    if not text or len(text) > 150:
+        return jsonify({"status": "error", "error": "Caption must be 1–150 characters"}), 400
+    if not video_url or not str(video_url).startswith("http"):
+        return jsonify({"status": "error", "error": "A public video URL is required"}), 400
+
+    key = get_buffer_key_by_id(key_id) if key_id else get_best_buffer_key()
+    if not key:
+        return jsonify({
+            "status": "error",
+            "error": "No Buffer API key configured. Add one in the UI."
+        }), 400
+
+    try:
+        result = buffer_graphql(
+            """mutation CreatePost($input: CreatePostInput!) {
+              createPost(input: $input) {
+                ... on PostActionSuccess {
+                  post { id text status dueAt shareMode }
+                }
+                ... on MutationError { message }
+              }
+            }""",
+            {
+                "input": {
+                    "channelId": channel_id,
+                    "text": text,
+                    "schedulingType": "automatic",
+                    "mode": mode,
+                    "assets": [{
+                        "video": {
+                            "url": video_url,
+                            "metadata": {
+                                "thumbnailOffset": int(thumbnail_offset)
+                                if thumbnail_offset else 1000
+                            },
+                        }
+                    }],
+                }
+            },
+            api_key=key['api_key'],
+        )
+
+        post = (result or {}).get("createPost") or {}
+        if post.get("message"):
+            raise Exception(post["message"])
+
+        touch_buffer_key(key['id'])
+        return jsonify({"status": "success", "post": post.get("post")})
+    except Exception as e:
+        app.logger.error(f"TikTok post error: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ============== ZERNIO KEYS API ==============
 
 @app.route('/api/zernio/keys', methods=['GET'])
@@ -5066,6 +5593,33 @@ def get_key_stats(key_id):
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
 # ============== SYNC STATUS ROUTE ==============
 
