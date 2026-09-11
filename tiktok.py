@@ -213,10 +213,16 @@ def post_video_to_tiktok(
     if not video_url or not str(video_url).startswith("http"):
         raise ValueError("A public video URL is required")
 
+    from datetime import datetime, timezone
+
     caption = (text or "").strip()
+    if not caption:
+        caption = "🎬"
     if len(caption) > 2200:
         caption = caption[:2200]
 
+    # Buffer modes: addToQueue | customScheduled
+    # "Publish now" (no schedule, not queue) -> customScheduled at current UTC
     if due_at:
         share_mode = "customScheduled"
     elif mode:
@@ -224,7 +230,8 @@ def post_video_to_tiktok(
     elif add_to_queue:
         share_mode = "addToQueue"
     else:
-        share_mode = "addToQueue"
+        share_mode = "customScheduled"
+        due_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     input_data: Dict[str, Any] = {
         "channelId": channel_id,
@@ -243,11 +250,16 @@ def post_video_to_tiktok(
         ],
     }
 
-    if due_at:
+    if due_at and share_mode == "customScheduled":
         if due_at.endswith("Z") or "+" in due_at:
             input_data["dueAt"] = due_at
         else:
             input_data["dueAt"] = due_at + "Z"
+
+    logger.info(
+        f"Buffer createPost payload: channel={channel_id} mode={share_mode} "
+        f"dueAt={input_data.get('dueAt')} video={video_url[:80]}..."
+    )
 
     data = buffer(
         """
