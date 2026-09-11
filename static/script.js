@@ -2352,6 +2352,16 @@ async function loadPipelines() {
   }
 }
 
+
+
+
+
+
+
+
+
+
+
 function renderPipelines(pipelines) {
   if (!pipelinesList) return;
 
@@ -2373,21 +2383,12 @@ function renderPipelines(pipelines) {
 
     const statusText = p.is_active ? '🟢 Active' : '🔴 Inactive';
 
-    // Determine the account label based on platform
-    let accountLabel = 'Channel';
-    let accountValue = '—';
-    if (platform === 'facebook') {
-      accountLabel = 'Facebook';
-      accountValue = p.facebook_page_name || p.facebook_account_id || '—';
-    } else if (platform === 'twitter') {
-      accountLabel = 'Twitter / X';
-      accountValue = p.buffer_channel_name || p.buffer_channel_id || '—';
-    } else if (platform === 'tiktok') {
-      accountLabel = 'TikTok';
-      accountValue = p.buffer_channel_name || p.buffer_channel_id || '—';
-    } else {
-      accountValue = p.buffer_channel_name || p.facebook_page_name || '—';
-    }
+    // Account row shows the platform name only
+    const accountLabel = 'Platform';
+    const accountValue =
+      platform === 'twitter' ? 'Twitter' :
+      platform === 'tiktok'  ? 'TikTok'  :
+      'Facebook';
 
     // Get counts with defaults
     const posted = p.success_count || 0;
@@ -2428,7 +2429,7 @@ function renderPipelines(pipelines) {
           </div>
           <div class="pipeline-detail">
             <span class="pipeline-label">${accountLabel}:</span>
-            <span class="pipeline-value">${escapeHtml(accountValue)}</span>
+            <span class="pipeline-value">${accountValue}</span>
           </div>
           <div class="pipeline-detail">
             <span class="pipeline-label">Daily Limit:</span>
@@ -2496,6 +2497,25 @@ function renderPipelines(pipelines) {
     btn.addEventListener('click', () => deletePipeline(btn.dataset.id, btn.dataset.name));
   });
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ==================== DELETE PIPELINE ====================
 
 async function deletePipeline(pipelineId, pipelineName) {
