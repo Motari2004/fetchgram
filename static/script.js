@@ -2578,50 +2578,70 @@ async function editPipeline(pipelineId) {
             document.getElementById('edit-pipeline-daily-limit').value = pipeline.daily_limit || 2;
             document.getElementById('edit-pipeline-active').checked = pipeline.is_active;
             
-            // ✅ Show current account AND key info
+            // ✅ Show current account AND key info (platform-aware)
             const keyInfoEl = document.getElementById('edit-pipeline-key-info');
             if (keyInfoEl) {
-                let accountName = 'Unknown Account';
-                let keyName = 'No key';
-                
-                // Find the account in zernioAccounts
-                const account = zernioAccounts.find(a => a.id === pipeline.facebook_account_id);
-                if (account) {
-                    accountName = account.name || account.id;
-                }
-                
-                if (pipeline.zernio_key_id) {
-                    const key = zernioKeys.find(k => k.id === pipeline.zernio_key_id);
-                    keyName = key ? key.name : 'Unknown Key';
-                    keyInfoEl.textContent = `📱 ${accountName} (🔑 ${keyName})`;
-                    keyInfoEl.style.color = 'var(--success)';
-                    keyInfoEl.style.borderLeftColor = '#22c55e';
-                } else {
-                    keyInfoEl.textContent = `⚠️ ${accountName} - No key assigned!`;
-                    keyInfoEl.style.color = 'var(--error)';
-                    keyInfoEl.style.borderLeftColor = '#ef4444';
-                }
                 keyInfoEl.hidden = false;
+                const p = (pipeline.platform || 'facebook').toLowerCase();
+
+                if (p === 'facebook') {
+                    let accountName = 'Unknown Account';
+                    let keyName = 'No key';
+
+                    const account = (zernioAccounts || []).find(a => a.id === pipeline.facebook_account_id);
+                    if (account) accountName = account.name || account.id;
+
+                    if (pipeline.zernio_key_id) {
+                        const key = (zernioKeys || []).find(k => k.id === pipeline.zernio_key_id);
+                        keyName = key ? key.name : 'Unknown Key';
+                        keyInfoEl.textContent = `📱 ${accountName} (🔑 ${keyName})`;
+                        keyInfoEl.style.color = 'var(--success)';
+                        keyInfoEl.style.borderLeftColor = '#22c55e';
+                    } else {
+                        keyInfoEl.textContent = `⚠️ ${accountName} - No key assigned!`;
+                        keyInfoEl.style.color = 'var(--error)';
+                        keyInfoEl.style.borderLeftColor = '#ef4444';
+                    }
+                } else {
+                    // Twitter or TikTok pipeline (Buffer)
+                    const icon = p === 'twitter' ? '🐦' : '🎵';
+                    const channelName = pipeline.buffer_channel_name
+                        || pipeline.buffer_channel_id
+                        || 'Unknown channel';
+
+                    const key = (bufferKeys || []).find(k => k.id === pipeline.buffer_key_id);
+                    const keyName = key ? key.name : 'Unknown Key';
+
+                    if (pipeline.buffer_key_id && pipeline.buffer_channel_id) {
+                        keyInfoEl.textContent = `${icon} ${channelName} (🔑 ${keyName})`;
+                        keyInfoEl.style.color = 'var(--success)';
+                        keyInfoEl.style.borderLeftColor = '#22c55e';
+                    } else {
+                        keyInfoEl.textContent = `⚠️ ${channelName} - No Buffer key assigned!`;
+                        keyInfoEl.style.color = 'var(--error)';
+                        keyInfoEl.style.borderLeftColor = '#ef4444';
+                    }
+                }
             }
             
             // ✅ Populate accounts and select the current one
-// Populate the right account dropdown based on platform
-const platform = (pipeline.platform || 'facebook').toLowerCase();
-const fbGroup = document.getElementById('edit-pipeline-facebook-group');
-const bufferGroup = document.getElementById('edit-pipeline-buffer-group');
-const platformSelect = document.getElementById('edit-pipeline-platform');
+            // Populate the right account dropdown based on platform
+            const platform = (pipeline.platform || 'facebook').toLowerCase();
+            const fbGroup = document.getElementById('edit-pipeline-facebook-group');
+            const bufferGroup = document.getElementById('edit-pipeline-buffer-group');
+            const platformSelect = document.getElementById('edit-pipeline-platform');
 
-if (platformSelect) platformSelect.value = platform;
+            if (platformSelect) platformSelect.value = platform;
 
-if (platform === 'facebook') {
-    if (fbGroup) fbGroup.style.display = 'block';
-    if (bufferGroup) bufferGroup.style.display = 'none';
-    await populateEditFacebookAccounts(pipeline.facebook_account_id);
-} else {
-    if (fbGroup) fbGroup.style.display = 'none';
-    if (bufferGroup) bufferGroup.style.display = 'block';
-    await populateEditBufferChannels(pipeline.buffer_channel_id, platform);
-}
+            if (platform === 'facebook') {
+                if (fbGroup) fbGroup.style.display = 'block';
+                if (bufferGroup) bufferGroup.style.display = 'none';
+                await populateEditFacebookAccounts(pipeline.facebook_account_id);
+            } else {
+                if (fbGroup) fbGroup.style.display = 'none';
+                if (bufferGroup) bufferGroup.style.display = 'block';
+                await populateEditBufferChannels(pipeline.buffer_channel_id, platform);
+            }
             
         } else {
             showEditPipelineStatus('❌ Failed to load pipeline data', 'error');
@@ -2631,8 +2651,6 @@ if (platform === 'facebook') {
         showEditPipelineStatus(`❌ Error: ${error.message}`, 'error');
     }
 }
-
-
 
 
 
