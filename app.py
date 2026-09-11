@@ -2162,14 +2162,37 @@ def buffer_graphql(api_key, query, variables=None, timeout=60):
     return body.get("data") or {}
 
 def buffer_get_organizations(api_key):
-    data=buffer_graphql(api_key,"""query GetOrganizations { account { organizations { id name } } }""")
+    # Buffer's current API exposes organizations under account.organizations.
+    # channelCount is useful for diagnosing a valid key whose organization has
+    # no connected channels. The organization ID is used only transiently and
+    # is never stored in our database.
+    data=buffer_graphql(api_key,"""
+        query GetOrganizations {
+          account {
+            organizations {
+              id
+              name
+              channelCount
+            }
+          }
+        }
+    """)
     return data.get("account",{}).get("organizations",[])
 
 def buffer_get_channels(api_key, organization_id):
+    # Keep this query aligned with Buffer's documented Get Channels example.
+    # organizationId is required by Buffer but remains transient.
     data=buffer_graphql(api_key,"""
-        query GetChannels($organizationId: ID!) {
+        query GetChannels($organizationId: OrganizationId!) {
           channels(input: { organizationId: $organizationId }) {
-            id name displayName service avatar externalLink isDisconnected isLocked
+            id
+            name
+            displayName
+            service
+            avatar
+            externalLink
+            isDisconnected
+            isLocked
           }
         }
     """,{"organizationId":organization_id})
@@ -2181,8 +2204,15 @@ def sync_buffer_channels(buffer_key_id, api_key):
     channels=[]
     try:
         cur=conn.cursor()
+        app.logger.info(f"🔎 Buffer API returned {len(orgs)} organization(s)")
         for org in orgs:
-            for ch in buffer_get_channels(api_key,org["id"]):
+            org_id=org.get("id")
+            org_name=org.get("name") or "Unnamed organization"
+            reported_count=org.get("channelCount")
+            app.logger.info(f"🏢 Buffer organization: {org_name} ({org_id}) reported channelCount={reported_count}")
+            org_channels=buffer_get_channels(api_key,org_id)
+            app.logger.info(f"📡 Buffer returned {len(org_channels)} channel(s) for {org_name}")
+            for ch in org_channels:
                 cur.execute("""
                     INSERT INTO buffer_channels
                     (buffer_key_id,channel_id,name,display_name,service,external_link,is_disconnected,is_locked,updated_at)

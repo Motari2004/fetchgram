@@ -5448,9 +5448,9 @@ async function loadBufferAccounts() {
                 bufferChannelsFlat.push({
                     account_id: acc.id, key_id: acc.id,
                     account_name: acc.name,
-                    channel_id: ch.channel_id,
+                    channel_id: ch.channel_id || ch.id,
                     service: ch.service,
-                    display_name: ch.display_name || ch.channel_id,
+                    display_name: ch.display_name || ch.name || ch.channel_id || ch.id,
                 });
             });
         });
@@ -5505,8 +5505,8 @@ function renderBufferAccounts(accounts) {
                         ${channels.map(ch => `
                             <div class="key-account-item">
                                 <span class="account-icon">${serviceIcon[ch.service] || '🔗'}</span>
-                                <span class="account-name">${escapeHtml(ch.display_name || ch.channel_id)}</span>
-                                <span class="account-id">${escapeHtml(ch.service)}</span>
+                                <span class="account-name">${escapeHtml(ch.display_name || ch.name || ch.channel_id || ch.id)}</span>
+                                <span class="account-id">${escapeHtml(ch.service || '')}</span>
                                 <span class="account-status">✅</span>
                             </div>
                         `).join('') || '<span style="color:var(--text-muted);font-size:13px;">No channels found</span>'}
@@ -5549,7 +5549,7 @@ async function syncBufferAccount(accountId, btn) {
         const res = await fetch(`/api/buffer/keys/${accountId}/refresh`, { method: 'POST', credentials: 'same-origin' });
         const data = await res.json();
         if (res.ok) {
-            showToast(`✅ Synced ${data.channels_synced} channels`, 'success');
+            showToast(`✅ Synced ${data.count ?? (data.channels || []).length} channels`, 'success');
             loadBufferAccounts();
         } else {
             showToast(`❌ ${data.error || 'Sync failed'}`, 'error');
