@@ -2354,44 +2354,51 @@ async function loadPipelines() {
 
 function renderPipelines(pipelines) {
   if (!pipelinesList) return;
-  
+
   if (!pipelines || pipelines.length === 0) {
     pipelinesList.innerHTML = `<div class="empty-state">No pipelines created yet.</div>`;
     return;
   }
-  
+
   let html = `<div class="pipelines-grid">`;
-  
+
   pipelines.forEach(p => {
     const statusClass = p.is_active ? 'active' : 'inactive';
 
-
-    const platformIcon = p.platform === 'twitter' ? '🐦' :
-                     p.platform === 'tiktok'  ? '🎵' :
-                     '📘';
-
+    const platform = (p.platform || 'facebook').toLowerCase();
+    const platformIcon =
+      platform === 'twitter' ? '🐦' :
+      platform === 'tiktok'  ? '🎵' :
+      '📘';
 
     const statusText = p.is_active ? '🟢 Active' : '🔴 Inactive';
-    
 
-
-
-
-
-
-
+    // Determine the account label based on platform
+    let accountLabel = 'Channel';
+    let accountValue = '—';
+    if (platform === 'facebook') {
+      accountLabel = 'Facebook';
+      accountValue = p.facebook_page_name || p.facebook_account_id || '—';
+    } else if (platform === 'twitter') {
+      accountLabel = 'Twitter / X';
+      accountValue = p.buffer_channel_name || p.buffer_channel_id || '—';
+    } else if (platform === 'tiktok') {
+      accountLabel = 'TikTok';
+      accountValue = p.buffer_channel_name || p.buffer_channel_id || '—';
+    } else {
+      accountValue = p.buffer_channel_name || p.facebook_page_name || '—';
+    }
 
     // Get counts with defaults
     const posted = p.success_count || 0;
     const failed = p.failed_count || 0;
     const pending = p.pending_posts || 0;
     const processing = p.processing_posts || 0;
-    
-    // Only show if > 0
+
     const showPending = pending > 0;
     const showProcessing = processing > 0;
     const showFailed = failed > 0;
-    
+
     html += `
       <div class="pipeline-card">
         <div class="pipeline-card-header">
@@ -2420,8 +2427,8 @@ function renderPipelines(pipelines) {
             <span class="pipeline-value">@${escapeHtml(p.profile_username)}</span>
           </div>
           <div class="pipeline-detail">
-            <span class="pipeline-label">Facebook:</span>
-            <span class="pipeline-value">${escapeHtml(p.facebook_page_name || p.facebook_account_id)}</span>
+            <span class="pipeline-label">${accountLabel}:</span>
+            <span class="pipeline-value">${escapeHtml(accountValue)}</span>
           </div>
           <div class="pipeline-detail">
             <span class="pipeline-label">Daily Limit:</span>
@@ -2441,7 +2448,7 @@ function renderPipelines(pipelines) {
             <span class="pipeline-label">Last Post:</span>
             <span class="pipeline-value">${new Date(p.last_post_time).toLocaleString()}</span>
           </div>` : ''}
-          
+
           <!-- STATUS SUMMARY BADGES -->
           <div class="pipeline-status-summary">
             <span class="status-badge-summary posted">
@@ -2464,32 +2471,31 @@ function renderPipelines(pipelines) {
       </div>
     `;
   });
-  
+
   html += `</div>`;
   pipelinesList.innerHTML = html;
-  
+
   // Add event listeners
   document.querySelectorAll('.run-pipeline-btn').forEach(btn => {
     btn.addEventListener('click', () => runPipeline(btn.dataset.id));
   });
-  
+
   document.querySelectorAll('.reset-pipeline-btn').forEach(btn => {
     btn.addEventListener('click', () => resetPipeline(btn.dataset.id));
   });
-  
+
   document.querySelectorAll('.toggle-pipeline-btn').forEach(btn => {
     btn.addEventListener('click', () => togglePipeline(btn.dataset.id, btn.dataset.active === 'true'));
   });
-  
+
   document.querySelectorAll('.edit-pipeline-btn').forEach(btn => {
     btn.addEventListener('click', () => editPipeline(btn.dataset.id));
   });
-  
+
   document.querySelectorAll('.delete-pipeline-btn').forEach(btn => {
     btn.addEventListener('click', () => deletePipeline(btn.dataset.id, btn.dataset.name));
   });
 }
-
 // ==================== DELETE PIPELINE ====================
 
 async function deletePipeline(pipelineId, pipelineName) {
