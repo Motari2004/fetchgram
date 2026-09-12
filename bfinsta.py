@@ -81,28 +81,6 @@ def get_db_connection():
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def init_db():
     conn = get_db_connection()
     if not conn:
@@ -356,9 +334,6 @@ def init_db():
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_key_id UUID REFERENCES buffer_keys(id);")
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_id TEXT;")
         cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS buffer_channel_name TEXT;")
-
-        # ← NEW: Instagram account (Zernio) — required for Instagram pipelines
-        cur.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS instagram_account_id TEXT;")
         
         # buffer_keys — protects against an earlier minimal schema
         cur.execute("ALTER TABLE buffer_keys ADD COLUMN IF NOT EXISTS organization_id TEXT;")
@@ -442,9 +417,6 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_zernio_keys_is_active ON zernio_keys(is_active);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_zernio_key_id ON pipelines(zernio_key_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_app_settings_setting_key ON app_settings(setting_key);")
-
-        # ← NEW: Instagram account index
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pipelines_instagram_account_id ON pipelines(instagram_account_id);")
         
         # Buffer indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_buffer_keys_api_key ON buffer_keys(api_key);")
@@ -461,7 +433,7 @@ def init_db():
         conn.commit()
         app.logger.info(
             "✅ Database tables ready — Buffer keys, Zernio keys, app settings, "
-            "Instagram accounts, and platform-aware pipelines all present"
+            "and platform-aware pipelines all present"
         )
     except Exception as e:
         app.logger.error(f"❌ Database init error: {e}")
@@ -474,15 +446,6 @@ def init_db():
     finally:
         cur.close()
         conn.close()
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2575,29 +2538,15 @@ def post_to_bluesky(video_url, text, thumbnail_url=None, identifier=None, passwo
 
 # ============== ZERNIO (FACEBOOK) INTEGRATION ==============
 
-def publish_to_zernio(video_url, text, account_id, platform="facebook",
-                      publish_now=True, scheduled_time=None, key_id=None):
+def publish_to_facebook(video_url, text, account_id, publish_now=True, scheduled_time=None, key_id=None):
     """
-    Publish to Facebook or Instagram via Zernio.
-
-    Args:
-        video_url: Direct video URL
-        text: Caption / post text
-        account_id: Zernio account ID (Facebook Page ID or Instagram account ID)
-        platform: "facebook" or "instagram"
-        publish_now: If True, publish immediately
-        scheduled_time: ISO timestamp (used if publish_now=False)
-        key_id: Optional specific Zernio key ID to use
+    Publish to Facebook using a specific Zernio key or the best available.
 
     Returns a dict with one of these shapes:
       - Success:         {"post": {...}, "already_posted": False}
       - Already posted:  {"post": {"_id": <existingPostId>, ...}, "already_posted": True}
       - Failure:         {"error": "...", "status_code": <int>}
     """
-    platform = (platform or "facebook").lower()
-    if platform not in ("facebook", "instagram"):
-        return {"error": f"Unsupported Zernio platform: {platform}", "status_code": 400}
-
     # Get the key to use
     zernio_base_url = get_zernio_base_url()
 
@@ -2609,29 +2558,21 @@ def publish_to_zernio(video_url, text, account_id, platform="facebook",
     if not key:
         return {"error": "No available Zernio keys with remaining capacity"}
 
-    app.logger.info(f"📤 Using Zernio key: {key['name']} (platform: {platform})")
+    app.logger.info(f"📤 Using Zernio key: {key['name']}")
 
     headers = {
         "Authorization": f"Bearer {key['api_key']}",
         "Content-Type": "application/json"
     }
 
-    # ---------- Build platform entry ----------
-    platform_entry = {
-        "platform": platform,
-        "accountId": account_id or key['facebook_account_id']
-    }
-
-    # Instagram Reels require contentType hint
-    if platform == "instagram":
-        platform_entry["platformSpecificData"] = {
-            "contentType": "reels",
-            "shareToFeed": True
-        }
-
     payload = {
         "content": text,
-        "platforms": [platform_entry],
+        "platforms": [
+            {
+                "platform": "facebook",
+                "accountId": account_id or key['facebook_account_id']
+            }
+        ],
         "mediaItems": [
             {
                 "type": "video",
@@ -2688,7 +2629,7 @@ def publish_to_zernio(video_url, text, account_id, platform="facebook",
 
         if is_duplicate:
             app.logger.info(
-                f"♻️ {platform.capitalize()} publish skipped — content already exists "
+                f"♻️ Facebook publish skipped — content already exists "
                 f"(existingPostId={existing_post_id})"
             )
             return {
@@ -2697,7 +2638,7 @@ def publish_to_zernio(video_url, text, account_id, platform="facebook",
                     "_id": existing_post_id,
                     "platforms": [
                         {
-                            "platform": platform,
+                            "platform": "facebook",
                             "publishedUrl": existing_post_url
                         }
                     ]
@@ -2707,49 +2648,15 @@ def publish_to_zernio(video_url, text, account_id, platform="facebook",
 
         # ---------- Genuine hard failure ----------
         app.logger.warning(
-            f"⚠️ {platform.capitalize()} publish hard failure "
+            f"⚠️ Facebook publish hard failure "
             f"(status={response.status_code}): {response.text[:200]}"
         )
         return {"error": response.text, "status_code": response.status_code}
 
     except Exception as e:
         return {"error": str(e)}
-
-
-# ---------- Backward-compatible wrapper ----------
-def publish_to_facebook(video_url, text, account_id, publish_now=True,
-                        scheduled_time=None, key_id=None):
-    """
-    Legacy wrapper. Kept so existing callers don't break.
-    Delegates to publish_to_zernio with platform='facebook'.
-    """
-    return publish_to_zernio(
-        video_url=video_url,
-        text=text,
-        account_id=account_id,
-        platform="facebook",
-        publish_now=publish_now,
-        scheduled_time=scheduled_time,
-        key_id=key_id,
-    )
-
-
-# ---------- New Instagram convenience wrapper ----------
-def publish_to_instagram(video_url, text, account_id, publish_now=True,
-                         scheduled_time=None, key_id=None):
-    """
-    Publish a Reel to Instagram via Zernio.
-    Delegates to publish_to_zernio with platform='instagram'.
-    """
-    return publish_to_zernio(
-        video_url=video_url,
-        text=text,
-        account_id=account_id,
-        platform="instagram",
-        publish_now=publish_now,
-        scheduled_time=scheduled_time,
-        key_id=key_id,
-    )
+    
+    
     
     
     
@@ -3023,12 +2930,10 @@ def dispatch_publish(pipeline, video_url, caption, scheduled_post_id=None):
     with the same keys). Required keys depend on the platform:
 
       Facebook:  facebook_account_id, zernio_key_id
-      Instagram: instagram_account_id (falls back to facebook_account_id),
-                 zernio_key_id
       Twitter:   buffer_channel_id,   buffer_key_id
       TikTok:    buffer_channel_id,   buffer_key_id
 
-    Returns:
+    Returns the same dict shape as publish_to_facebook:
       Success:         {"post": {...}, "already_posted": bool, "external_url": str|None}
       Hard failure:    {"error": "...", "status_code": int}
     """
@@ -3048,30 +2953,6 @@ def dispatch_publish(pipeline, video_url, caption, scheduled_post_id=None):
                 "status_code": 400,
             }
         return publish_to_facebook(
-            video_url=video_url,
-            text=caption,
-            account_id=account_id,
-            publish_now=True,
-            key_id=pipeline.get("zernio_key_id"),
-        )
-
-    # ---------- INSTAGRAM (Zernio) ----------
-    if platform == "instagram":
-        # Prefer the dedicated column; fall back to the legacy column
-        # for pipelines created before instagram_account_id existed.
-        account_id = (
-            pipeline.get("instagram_account_id")
-            or pipeline.get("facebook_account_id")
-        )
-        if not account_id:
-            return {
-                "error": (
-                    "Missing instagram_account_id (or facebook_account_id) "
-                    "on pipeline for instagram platform"
-                ),
-                "status_code": 400,
-            }
-        return publish_to_instagram(
             video_url=video_url,
             text=caption,
             account_id=account_id,
@@ -3122,6 +3003,9 @@ def dispatch_publish(pipeline, video_url, caption, scheduled_post_id=None):
         "error": f"Unsupported platform: {platform}",
         "status_code": 400,
     }
+    
+    
+    
     
     
     
@@ -5535,108 +5419,67 @@ def debug_zernio_memory():
 
 @app.route('/api/zernio/accounts', methods=['GET'])
 def zernio_list_accounts():
-    """
-    List ALL connected Zernio accounts (Facebook + Instagram) from ALL keys.
-
-    Query params:
-      ?platform=facebook   → only Facebook accounts
-      ?platform=instagram  → only Instagram accounts
-      (no param)           → all platforms
-
-    Each account object includes a "platform" field so the frontend can
-    group/filter without re-fetching.
-    """
+    """List ALL connected Zernio Facebook accounts from ALL keys."""
     try:
         # ✅ Get ALL keys, not just the best one
         if not ZERNIO_KEYS:
             return jsonify({
-                "status": "error",
-                "message": "No Zernio keys available. Please add a key first.",
+                "status": "error", 
+                "message": "No Zernio keys available. Please add a key first.", 
                 "accounts": []
             }), 503
-
-        # ✅ Optional platform filter
-        platform_filter = (request.args.get('platform') or '').strip().lower()
-
-        all_accounts = []
+        
+        all_facebook_accounts = []
         zernio_base_url = get_zernio_base_url()
-
+        
         # ✅ Loop through ALL keys
         for key_id, key_data in ZERNIO_KEYS.items():
             try:
                 headers = {
-                    "Authorization": f"Bearer {key_data['api_key']}",
+                    "Authorization": f"Bearer {key_data['api_key']}", 
                     "Content-Type": "application/json"
                 }
-
+                
                 app.logger.info(f"🔑 Fetching accounts with key: {key_data['name']}")
-
-                response = requests.get(
-                    f"{zernio_base_url}/accounts",
-                    headers=headers,
-                    timeout=30
-                )
-
+                
+                response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
+                
                 if response.status_code == 200:
                     data = response.json()
                     accounts = data.get('accounts', [])
-
+                    
                     for account in accounts:
-                        acct_platform = (account.get('platform') or '').lower()
-
-                        # ← CHANGED: accept both facebook and instagram
-                        if acct_platform not in ('facebook', 'instagram'):
-                            continue
-
-                        # ← NEW: respect ?platform= filter when supplied
-                        if platform_filter and acct_platform != platform_filter:
-                            continue
-
-                        all_accounts.append({
-                            "id": account.get('_id'),
-                            "name": account.get('displayName', 'Unknown'),
-                            "platform": acct_platform,          # ← NEW field
-                            "page_id": account.get('profileData', {}).get('id', 'N/A'),
-                            "username": account.get('username', 'N/A'),
-                            "status": account.get('platformStatus', 'unknown'),
-                            "key_id": key_id,
-                            "key_name": key_data['name']
-                        })
-
-                    app.logger.info(
-                        f"✅ Key {key_data['name']}: processed {len(accounts)} accounts"
-                    )
+                        if account.get('platform') == 'facebook':
+                            all_facebook_accounts.append({
+                                "id": account.get('_id'),
+                                "name": account.get('displayName', 'Unknown'),
+                                "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                                "username": account.get('username', 'N/A'),
+                                "status": account.get('platformStatus', 'unknown'),
+                                "key_id": key_id,           # ✅ Add key ID
+                                "key_name": key_data['name'] # ✅ Add key name
+                            })
+                    
+                    app.logger.info(f"✅ Found {len(accounts)} total accounts for key: {key_data['name']}")
                 else:
-                    app.logger.warning(
-                        f"⚠️ Key {key_data['name']} returned {response.status_code}"
-                    )
-
+                    app.logger.warning(f"⚠️ Key {key_data['name']} returned {response.status_code}")
+                    
             except requests.exceptions.Timeout:
                 app.logger.warning(f"⏰ Timeout for key: {key_data['name']}")
             except requests.exceptions.ConnectionError as e:
                 app.logger.warning(f"🔌 Connection error for key {key_data['name']}: {e}")
             except Exception as e:
                 app.logger.warning(f"❌ Error fetching accounts for key {key_data['name']}: {e}")
-
-        # ← NEW: split counts for convenience
-        facebook_count = sum(1 for a in all_accounts if a['platform'] == 'facebook')
-        instagram_count = sum(1 for a in all_accounts if a['platform'] == 'instagram')
-
-        app.logger.info(
-            f"✅ Found {len(all_accounts)} total accounts across all keys "
-            f"(FB: {facebook_count}, IG: {instagram_count})"
-        )
-
+        
+        app.logger.info(f"✅ Found {len(all_facebook_accounts)} total Facebook accounts across all keys")
+        
         return jsonify({
-            "status": "success",
-            "accounts": all_accounts,
-            "total": len(all_accounts),
-            "facebook_count": facebook_count,
-            "instagram_count": instagram_count,
-            "platform_filter": platform_filter or None,
+            "status": "success", 
+            "accounts": all_facebook_accounts, 
+            "total": len(all_facebook_accounts),
             "keys_processed": len(ZERNIO_KEYS)
         })
-
+        
     except Exception as e:
         app.logger.error(f"❌ Error fetching Zernio accounts: {e}")
         import traceback
@@ -5647,7 +5490,7 @@ def zernio_list_accounts():
 
 @app.route('/api/zernio/keys', methods=['GET'])
 def get_zernio_keys():
-    """Get all Zernio keys with their Facebook AND Instagram accounts."""
+    """Get all Zernio keys with their Facebook accounts."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
@@ -5680,11 +5523,9 @@ def get_zernio_keys():
             else:
                 key['api_key_masked'] = '***'
             
-            # ⭐ FETCH ALL Facebook + Instagram accounts for this key
+            # ⭐ FETCH ALL Facebook accounts for this key from the API
             key['accounts'] = []
             key['account_count'] = 0
-            key['facebook_count'] = 0
-            key['instagram_count'] = 0
             
             try:
                 headers = {
@@ -5699,36 +5540,36 @@ def get_zernio_keys():
                     data = response.json()
                     accounts = data.get('accounts', [])
                     
-                    key_accounts = []
+                    facebook_accounts = []
                     for account in accounts:
-                        acct_platform = (account.get('platform') or '').lower()
-                        if acct_platform not in ('facebook', 'instagram'):
-                            continue
-                        key_accounts.append({
-                            "id": account.get('_id'),
-                            "name": account.get('displayName', 'Unknown'),
-                            "platform": acct_platform,   # ← NEW field
-                            "page_id": account.get('profileData', {}).get('id', 'N/A'),
-                            "status": account.get('platformStatus', 'unknown')
-                        })
+                        if account.get('platform') == 'facebook':
+                            facebook_accounts.append({
+                                "id": account.get('_id'),
+                                "name": account.get('displayName', 'Unknown'),
+                                "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                                "status": account.get('platformStatus', 'unknown')
+                            })
                     
-                    key['accounts'] = key_accounts
-                    key['account_count'] = len(key_accounts)
-                    key['facebook_count'] = sum(1 for a in key_accounts if a['platform'] == 'facebook')
-                    key['instagram_count'] = sum(1 for a in key_accounts if a['platform'] == 'instagram')
-                    app.logger.info(
-                        f"✅ Found {len(key_accounts)} accounts for key {key['name']} "
-                        f"(FB: {key['facebook_count']}, IG: {key['instagram_count']})"
-                    )
+                    key['accounts'] = facebook_accounts
+                    key['account_count'] = len(facebook_accounts)
+                    app.logger.info(f"✅ Found {len(facebook_accounts)} accounts for key: {key['name']}")
                 else:
                     app.logger.warning(f"⚠️ API returned {response.status_code} for key {key['name']}")
+                    key['accounts'] = []
+                    key['account_count'] = 0
                     
             except requests.exceptions.Timeout:
                 app.logger.warning(f"⏰ Timeout fetching accounts for key {key['name']}")
+                key['accounts'] = []
+                key['account_count'] = 0
             except requests.exceptions.ConnectionError as e:
                 app.logger.warning(f"🔌 Connection error for key {key['name']}: {e}")
+                key['accounts'] = []
+                key['account_count'] = 0
             except Exception as e:
                 app.logger.warning(f"❌ Error fetching accounts for key {key['name']}: {e}")
+                key['accounts'] = []
+                key['account_count'] = 0
         
         return jsonify({
             "status": "success",
@@ -5747,38 +5588,32 @@ def get_zernio_keys():
 
 @app.route('/api/zernio/keys', methods=['POST'])
 def create_zernio_key():
-    """Add a new Zernio key - auto-discovers Facebook + Instagram accounts."""
+    """Add a new Zernio key - auto-discovers accounts."""
     data = request.get_json(silent=True) or {}
-
+    
     api_key = data.get('api_key')
     name = data.get('name')
     daily_limit = data.get('daily_limit', 50)
-
+    
     if not api_key:
         return jsonify({"error": "API key is required"}), 400
-
-    # Auto-generate incrementing name if not provided or if it's "Key 1"
+    
+    # 🔥 FIX: Auto-generate incrementing name if not provided or if it's "Key 1"
     if not name or name == "Key 1":
         conn = get_db_connection()
         if conn:
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT COUNT(*) FROM zernio_keys")
-                count = cur.fetchone()[0]
-                cur.close()
-                conn.close()
-                name = f"Key {count + 1}"
-            except Exception:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                name = "Key"
-
+            cur = conn.cursor()
+            # Count existing keys
+            cur.execute("SELECT COUNT(*) FROM zernio_keys")
+            count = cur.fetchone()[0]
+            cur.close()
+            conn.close()
+            name = f"Key {count + 1}"
+    
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
-
+    
     try:
         # First, validate the key and fetch accounts
         zernio_base_url = get_zernio_base_url()
@@ -5786,52 +5621,39 @@ def create_zernio_key():
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
-
+        
         app.logger.info(f"🔍 Validating key: {api_key[:10]}...")
-
+        
         response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
-
+        
         if response.status_code != 200:
             return jsonify({
                 "error": f"Invalid API key or unable to connect. Status: {response.status_code}"
             }), 400
-
+        
         data = response.json()
         accounts = data.get('accounts', [])
-
-        # ← CHANGED: accept Facebook AND Instagram accounts
-        validated_accounts = []
+        
+        facebook_accounts = []
         for account in accounts:
-            acct_platform = (account.get('platform') or '').lower()
-            if acct_platform not in ('facebook', 'instagram'):
-                continue
-            validated_accounts.append({
-                "id": account.get('_id'),
-                "name": account.get('displayName', 'Unknown'),
-                "platform": acct_platform,   # ← NEW field
-                "page_id": account.get('profileData', {}).get('id', 'N/A'),
-                "status": account.get('platformStatus', 'unknown')
-            })
-
-        if not validated_accounts:
+            if account.get('platform') == 'facebook':
+                facebook_accounts.append({
+                    "id": account.get('_id'),
+                    "name": account.get('displayName', 'Unknown'),
+                    "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                    "status": account.get('platformStatus', 'unknown')
+                })
+        
+        if not facebook_accounts:
             return jsonify({
-                "error": (
-                    "No Facebook or Instagram accounts found for this API key. "
-                    "Please check your key."
-                )
+                "error": "No Facebook accounts found for this API key. Please check your key."
             }), 400
-
-        facebook_count = sum(1 for a in validated_accounts if a['platform'] == 'facebook')
-        instagram_count = sum(1 for a in validated_accounts if a['platform'] == 'instagram')
-
-        app.logger.info(
-            f"✅ Found {len(validated_accounts)} accounts "
-            f"(FB: {facebook_count}, IG: {instagram_count})"
-        )
-
-        # Use the first account as the default (either FB or IG)
-        first_account = validated_accounts[0]
-
+        
+        app.logger.info(f"✅ Found {len(facebook_accounts)} Facebook accounts")
+        
+        # Use the first Facebook account as the default
+        first_account = facebook_accounts[0]
+        
         # Save the key
         cur = conn.cursor()
         cur.execute("""
@@ -5841,28 +5663,23 @@ def create_zernio_key():
             VALUES (%s, %s, %s, %s, %s)
             RETURNING id
         """, (name, api_key, first_account['id'], first_account['name'], daily_limit))
-
+        
         key_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
-
+        
         # Reload keys
         load_zernio_keys()
-
+        
         return jsonify({
             "status": "success",
-            "message": (
-                f"Zernio key '{name}' added with {len(validated_accounts)} accounts "
-                f"(FB: {facebook_count}, IG: {instagram_count})"
-            ),
+            "message": f"Zernio key '{name}' added with {len(facebook_accounts)} Facebook accounts",
             "key_id": key_id,
-            "accounts_found": len(validated_accounts),
-            "facebook_count": facebook_count,
-            "instagram_count": instagram_count,
-            "accounts": validated_accounts
+            "accounts_found": len(facebook_accounts),
+            "accounts": facebook_accounts
         })
-
+        
     except requests.exceptions.Timeout:
         return jsonify({"error": "Connection timeout - please check your key"}), 400
     except requests.exceptions.ConnectionError:
@@ -6552,7 +6369,7 @@ def webhook_caption():
                     updated = cur.fetchone()
                     if updated:
                         # ✅ FIX: Use aliases to avoid ID conflict
-                        # ← CHANGED: added p.instagram_account_id
+                        # ← CHANGED: added p.platform, p.buffer_key_id, p.buffer_channel_id
                         cur.execute("""
                             SELECT 
                                 sp.id as scheduled_id,
@@ -6570,7 +6387,6 @@ def webhook_caption():
                                 p.name as pipeline_name,
                                 p.profile_username,
                                 p.facebook_account_id,
-                                p.instagram_account_id,
                                 p.zernio_key_id,
                                 p.platform,
                                 p.buffer_key_id,
@@ -6610,7 +6426,7 @@ def webhook_caption():
                         conn.commit()
                         
                         # ✅ FIX: Use aliases to avoid ID conflict
-                        # ← CHANGED: added p.instagram_account_id
+                        # ← CHANGED: added p.platform, p.buffer_key_id, p.buffer_channel_id
                         cur.execute("""
                             SELECT 
                                 sp.id as scheduled_id,
@@ -6628,7 +6444,6 @@ def webhook_caption():
                                 p.name as pipeline_name,
                                 p.profile_username,
                                 p.facebook_account_id,
-                                p.instagram_account_id,
                                 p.zernio_key_id,
                                 p.platform,
                                 p.buffer_key_id,
@@ -6744,16 +6559,6 @@ def process_post_with_caption(post, caption):
     """
     Process a scheduled post that now has a caption.
     Publishes to the correct platform based on post['platform'].
-
-    The `post` dict must be the result of a JOIN between scheduled_posts
-    and pipelines, aliased as:
-        sp.id  -> scheduled_id
-        p.id   -> pipeline_id
-    and must include the platform's account fields:
-        facebook:  facebook_account_id, zernio_key_id
-        instagram: instagram_account_id, zernio_key_id
-        twitter:   buffer_channel_id,   buffer_key_id
-        tiktok:    buffer_channel_id,   buffer_key_id
     """
     try:
         # ✅ Use the correct IDs from aliases
@@ -6771,35 +6576,6 @@ def process_post_with_caption(post, caption):
         if not scheduled_id:
             app.logger.error("❌ No scheduled_id found in post")
             return
-
-        # ← NEW: Sanity check that the right account field made it into
-        # the row. If the JOIN SELECT is missing instagram_account_id, this
-        # catches it before we accidentally fall back to a Facebook page.
-        if pipeline_platform == 'instagram':
-            if not post.get('instagram_account_id'):
-                app.logger.error(
-                    f"❌ Instagram pipeline {pipeline_id} is missing "
-                    f"instagram_account_id in the row. Check the SELECT "
-                    f"in webhook_caption(). Refusing to publish."
-                )
-                # Return the post to pending so it can be retried after the
-                # SELECT is fixed — do NOT mark it failed.
-                mark_processing_post_retryable(
-                    scheduled_id,
-                    'Missing instagram_account_id on pipeline row'
-                )
-                return
-        elif pipeline_platform == 'facebook':
-            if not post.get('facebook_account_id'):
-                app.logger.error(
-                    f"❌ Facebook pipeline {pipeline_id} is missing "
-                    f"facebook_account_id in the row."
-                )
-                mark_processing_post_retryable(
-                    scheduled_id,
-                    'Missing facebook_account_id on pipeline row'
-                )
-                return
 
         # This legacy/webhook path must never publish a row already claimed by
         # the main scheduler. Only transition pending -> processing here.
@@ -6863,10 +6639,9 @@ def process_post_with_caption(post, caption):
             f"(key: {post.get('zernio_key_id') or post.get('buffer_key_id')})"
         )
 
-        # ← dispatch_publish reads post['platform'] and picks the right publisher.
+        # ← CHANGED: dispatch_publish reads post['platform'] and picks the right publisher.
         # The `post` dict must contain the same keys a pipeline row would:
         #   facebook:  facebook_account_id, zernio_key_id
-        #   instagram: instagram_account_id, zernio_key_id
         #   twitter:   buffer_channel_id,   buffer_key_id
         #   tiktok:    buffer_channel_id,   buffer_key_id
         result = dispatch_publish(
@@ -6887,19 +6662,19 @@ def process_post_with_caption(post, caption):
         if result and not result.get('error'):
             already_posted = result.get('already_posted', False)
 
-            # ← Facebook returns post._id; Buffer returns post.id
+            # ← CHANGED: Facebook returns post._id; Buffer returns post.id
             post_result_id = (
                 result.get('post', {}).get('_id')
                 or result.get('post', {}).get('id')
                 or result.get('post_id')
             )
 
-            # ← Buffer returns external_url at the top level.
-            # Fall back to Facebook / Instagram's platforms[].publishedUrl shape.
+            # ← CHANGED: Buffer returns external_url at the top level.
+            # Fall back to Facebook's platforms[].publishedUrl shape.
             post_url = result.get('external_url')
             if not post_url:
                 for platform in result.get('post', {}).get('platforms', []):
-                    if platform.get('platform') == pipeline_platform:
+                    if platform.get('platform') == 'facebook':
                         post_url = platform.get('publishedUrl')
                         break
 
@@ -6925,6 +6700,7 @@ def process_post_with_caption(post, caption):
             conn.commit()
 
             if already_posted:
+                # ← CHANGED: log shows the correct platform
                 app.logger.info(
                     f"♻️ Post {scheduled_id} already existed on "
                     f"{pipeline_platform} (existingPostId={post_result_id})"
@@ -6941,6 +6717,7 @@ def process_post_with_caption(post, caption):
                 result.get('error', 'Unknown error')
                 if result else 'Unknown error'
             )
+            # ← CHANGED: log shows the correct platform
             app.logger.error(
                 f"❌ {pipeline_platform} publish failed: {error_msg}"
             )
@@ -7002,14 +6779,13 @@ def get_pipelines():
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
         # ✅ FIX 1: Get pipelines first WITHOUT LEFT JOIN
-        # ✅ Added Buffer + Instagram columns so the UI can render the platform label
+        # ✅ Added Buffer columns so the UI can render the platform label
         cur.execute("""
             SELECT 
                 p.id,
                 p.name,
                 p.profile_username,
                 p.facebook_account_id,
-                p.instagram_account_id,
                 p.facebook_page_name,
                 p.daily_limit,
                 p.is_active,
@@ -7114,46 +6890,30 @@ def create_pipeline():
     profile_username = data.get('profile_username')
     daily_limit = data.get('daily_limit', 2)
 
-    # ← platform-first validation
+    # ← CHANGED: platform-first validation
     platform = (data.get('platform') or 'facebook').strip().lower()
 
     # Facebook-specific fields
     facebook_account_id = data.get('facebook_account_id')
-
-    # ← Instagram-specific field
-    instagram_account_id = data.get('instagram_account_id')
-
-    # Zernio key — shared by Facebook and Instagram
     zernio_key_id = data.get('zernio_key_id')
 
-    # ← Buffer-specific fields (Twitter / TikTok)
+    # ← CHANGED: Buffer-specific fields (Twitter / TikTok)
     buffer_key_id = data.get('buffer_key_id')
     buffer_channel_id = data.get('buffer_channel_id')
     buffer_channel_name = data.get('buffer_channel_name')
 
-    # ← name + profile_username required for all platforms
+    # ← CHANGED: name + profile_username required for all platforms
     if not name or not profile_username:
         return jsonify({
             "error": "name and profile_username are required"
         }), 400
 
-    # ← per-platform validation
+    # ← CHANGED: per-platform validation
     if platform == 'facebook':
         if not facebook_account_id:
             return jsonify({
                 "error": "facebook_account_id is required for facebook platform"
             }), 400
-
-    elif platform == 'instagram':
-        if not instagram_account_id:
-            return jsonify({
-                "error": "instagram_account_id is required for instagram platform"
-            }), 400
-        if not zernio_key_id:
-            return jsonify({
-                "error": "zernio_key_id is required for instagram platform"
-            }), 400
-
     elif platform in ('twitter', 'tiktok'):
         if not buffer_key_id or not buffer_channel_id:
             return jsonify({
@@ -7162,7 +6922,6 @@ def create_pipeline():
                     f"for {platform} platform"
                 )
             }), 400
-
     else:
         return jsonify({
             "error": f"Unsupported platform: {platform}"
@@ -7176,23 +6935,20 @@ def create_pipeline():
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO pipelines (
-                id, name, profile_username,
-                facebook_account_id, instagram_account_id,
-                daily_limit, is_active, zernio_key_id, platform,
+                id, name, profile_username, facebook_account_id, daily_limit,
+                is_active, zernio_key_id, platform,
                 buffer_key_id, buffer_channel_id, buffer_channel_name
             )
             VALUES (
-                gen_random_uuid(), %s, %s,
-                %s, %s,
-                %s, TRUE, %s, %s,
+                gen_random_uuid(), %s, %s, %s, %s,
+                TRUE, %s, %s,
                 %s, %s, %s
             )
             RETURNING id
         """, (
             name,
             profile_username,
-            facebook_account_id or '',   # keep NOT NULL constraint happy
-            instagram_account_id,        # NULL for non-Instagram pipelines
+            facebook_account_id or '',   # ← keep NOT NULL constraint happy for buffer pipelines
             daily_limit,
             zernio_key_id,
             platform,
@@ -7237,15 +6993,8 @@ def update_pipeline(pipeline_id):
             updates.append("name = %s"); params.append(data['name'])
         if 'profile_username' in data:
             updates.append("profile_username = %s"); params.append(data['profile_username'])
-
-        # Facebook
         if 'facebook_account_id' in data:
             updates.append("facebook_account_id = %s"); params.append(data['facebook_account_id'])
-
-        # ← NEW: Instagram account
-        if 'instagram_account_id' in data:
-            updates.append("instagram_account_id = %s"); params.append(data['instagram_account_id'])
-
         if 'daily_limit' in data:
             updates.append("daily_limit = %s"); params.append(data['daily_limit'])
         if 'is_active' in data:
@@ -7253,7 +7002,7 @@ def update_pipeline(pipeline_id):
         if 'zernio_key_id' in data:
             updates.append("zernio_key_id = %s"); params.append(data['zernio_key_id'])
 
-        # ← Buffer + platform fields
+        # ← CHANGED: Buffer + platform fields
         if 'platform' in data:
             updates.append("platform = %s"); params.append(data['platform'])
         if 'buffer_key_id' in data:
@@ -8189,86 +7938,63 @@ def get_setting_endpoint(key):
 
 @app.route('/api/zernio/validate-key', methods=['POST'])
 def validate_zernio_key():
-    """
-    Validate a Zernio API key and return associated accounts.
-
-    Returns both Facebook and Instagram accounts, each with a 'platform'
-    field so the frontend can group/filter them.
-    """
+    """Validate a Zernio API key and return associated accounts."""
     data = request.get_json(silent=True) or {}
     api_key = data.get('api_key')
-
+    
     if not api_key:
         return jsonify({"valid": False, "message": "API key required"}), 400
-
+    
     try:
         zernio_base_url = get_zernio_base_url()
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
-
+        
         # Try to fetch accounts with this key
         response = requests.get(f"{zernio_base_url}/accounts", headers=headers, timeout=30)
-
+        
         if response.status_code == 200:
-            payload = response.json()
-            accounts = payload.get('accounts', [])
-
-            # ← CHANGED: accept Facebook AND Instagram accounts
-            validated_accounts = []
+            data = response.json()
+            accounts = data.get('accounts', [])
+            
+            facebook_accounts = []
             for account in accounts:
-                acct_platform = (account.get('platform') or '').lower()
-                if acct_platform not in ('facebook', 'instagram'):
-                    continue
-                validated_accounts.append({
-                    "id": account.get('_id'),
-                    "name": account.get('displayName', 'Unknown'),
-                    "platform": acct_platform,   # ← NEW field
-                    "page_id": account.get('profileData', {}).get('id', 'N/A'),
-                    "status": account.get('platformStatus', 'unknown')
-                })
-
-            facebook_count = sum(1 for a in validated_accounts if a['platform'] == 'facebook')
-            instagram_count = sum(1 for a in validated_accounts if a['platform'] == 'instagram')
-
-            # First account of either type, used for auto-fill
-            first_account = validated_accounts[0] if validated_accounts else None
-
+                if account.get('platform') == 'facebook':
+                    facebook_accounts.append({
+                        "id": account.get('_id'),
+                        "name": account.get('displayName', 'Unknown'),
+                        "page_id": account.get('profileData', {}).get('id', 'N/A'),
+                        "status": account.get('platformStatus', 'unknown')
+                    })
+            
+            # Get the first Facebook account for auto-fill
+            first_account = facebook_accounts[0] if facebook_accounts else None
+            
             # Try to get key info from the response
-            key_name = (
-                payload.get('key_name')
-                or payload.get('name')
-                or f"Key with {len(validated_accounts)} accounts"
-            )
-
-            app.logger.info(
-                f"✅ Validated key: {len(validated_accounts)} accounts "
-                f"(FB: {facebook_count}, IG: {instagram_count})"
-            )
-
+            key_name = data.get('key_name') or data.get('name') or f"Key {len(facebook_accounts)} accounts"
+            
             return jsonify({
                 "valid": True,
-                "accounts": validated_accounts,
-                "account_count": len(validated_accounts),
-                "facebook_count": facebook_count,
-                "instagram_count": instagram_count,
+                "accounts": facebook_accounts,
+                "account_count": len(facebook_accounts),
                 "name": key_name,
                 "first_account": first_account
             })
-
         else:
             return jsonify({
                 "valid": False,
                 "message": f"Invalid API key or unable to connect. Status: {response.status_code}"
             }), 400
-
+            
     except requests.exceptions.Timeout:
         return jsonify({"valid": False, "message": "Connection timeout - please check your key"}), 400
     except requests.exceptions.ConnectionError:
         return jsonify({"valid": False, "message": "Could not connect to Zernio API"}), 400
     except Exception as e:
         return jsonify({"valid": False, "message": str(e)}), 400
+
 
 
 

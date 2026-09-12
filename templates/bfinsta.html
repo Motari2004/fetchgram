@@ -588,18 +588,11 @@
         <div class="pipeline-create-form">
             <div class="form-group">
                 <label>Platform</label>
-
-
-
-<select id="pipeline-platform" class="input-field">
-    <option value="facebook">📘 Facebook</option>
-    <option value="instagram">📸 Instagram</option>
-    <option value="twitter">🐦 Twitter / X</option>
-    <option value="tiktok">🎵 TikTok</option>
-</select>
-
-
-
+                <select id="pipeline-platform" class="input-field">
+                    <option value="facebook">📘 Facebook</option>
+                    <option value="twitter">🐦 Twitter / X</option>
+                    <option value="tiktok">🎵 TikTok</option>
+                </select>
             </div>
 
             <div class="form-group">
@@ -613,17 +606,14 @@
             </div>
 
             <!-- Facebook-only -->
-<div id="pipeline-facebook-group">
-    <div class="form-group">
-        <label id="pipeline-facebook-label">Facebook Account</label>
-        <select id="pipeline-facebook-account" class="input-field">
-            <option value="">Select account...</option>
-        </select>
-        <span style="font-size: 11px; color: var(--text-muted);">
-            Accounts come from your connected Zernio keys.
-        </span>
-    </div>
-</div>
+            <div id="pipeline-facebook-group">
+                <div class="form-group">
+                    <label>Facebook Account ID</label>
+                    <select id="pipeline-facebook-account" class="input-field">
+                        <option value="">Select Facebook account...</option>
+                    </select>
+                </div>
+            </div>
 
             <!-- Buffer-only (Twitter / TikTok) -->
             <div id="pipeline-buffer-group" style="display: none;">
@@ -671,21 +661,11 @@
 
             <div class="form-group">
                 <label for="edit-pipeline-platform">Platform</label>
-
-
-
-
-
-<select id="edit-pipeline-platform" class="input-field">
-    <option value="facebook">📘 Facebook</option>
-    <option value="instagram">📸 Instagram</option>
-    <option value="twitter">🐦 Twitter / X</option>
-    <option value="tiktok">🎵 TikTok</option>
-</select>
-
-
-
-
+                <select id="edit-pipeline-platform" class="input-field">
+                    <option value="facebook">📘 Facebook</option>
+                    <option value="twitter">🐦 Twitter / X</option>
+                    <option value="tiktok">🎵 TikTok</option>
+                </select>
             </div>
 
             <div class="form-group">
@@ -699,14 +679,14 @@
             </div>
 
             <!-- Facebook-only -->
-<div id="edit-pipeline-facebook-group">
-    <div class="form-group">
-        <label for="edit-pipeline-facebook-account" id="edit-pipeline-facebook-label">Facebook Account</label>
-        <select id="edit-pipeline-facebook-account" class="input-field">
-            <option value="">Select account...</option>
-        </select>
-    </div>
-</div>
+            <div id="edit-pipeline-facebook-group">
+                <div class="form-group">
+                    <label for="edit-pipeline-facebook-account">Facebook Account</label>
+                    <select id="edit-pipeline-facebook-account" class="input-field">
+                        <option value="">Select Facebook account...</option>
+                    </select>
+                </div>
+            </div>
 
             <!-- Buffer-only (Twitter / TikTok) -->
             <div id="edit-pipeline-buffer-group" style="display: none;">

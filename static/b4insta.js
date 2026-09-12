@@ -847,24 +847,16 @@ async function _loadZernioAccountsWithRetry() {
             
             data.keys.forEach(key => {
                 if (key.accounts && key.accounts.length > 0) {
-
-
-
                     key.accounts.forEach(account => {
                         allAccounts.push({
                             id: account.id,
                             name: account.name,
-                            platform: account.platform || 'facebook',  // ← NEW
                             page_id: account.page_id,
                             status: account.status,
-                            key_id: key.id,
-                            key_name: key.name
+                            key_id: key.id,        // ✅ Store the key ID
+                            key_name: key.name     // ✅ Track which key it belongs to
                         });
                     });
-
-
-
-
                 }
             });
             
@@ -936,94 +928,6 @@ async function _loadZernioAccountsWithRetry() {
         return false;
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-function populatePipelineZernioAccounts(platform) {
-    const select = document.getElementById('pipeline-facebook-account');
-    if (!select) return;
-
-    select.innerHTML = '';
-
-    const defaultOption = document.createElement('option');
-    defaultOption.value = '';
-    defaultOption.textContent = platform === 'instagram'
-        ? 'Select Instagram account...'
-        : 'Select Facebook account...';
-    defaultOption.disabled = true;
-    defaultOption.selected = true;
-    select.appendChild(defaultOption);
-
-    // Filter the cached zernioAccounts list by platform
-    const filtered = (zernioAccounts || []).filter(
-        a => (a.platform || 'facebook').toLowerCase() === platform
-    );
-
-    if (filtered.length === 0) {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = platform === 'instagram'
-            ? '❌ No Instagram accounts — connect one in Zernio'
-            : '❌ No Facebook accounts — add a Zernio key';
-        opt.disabled = true;
-        select.appendChild(opt);
-        return;
-    }
-
-    // Group by key name
-    const grouped = {};
-    filtered.forEach(account => {
-        const keyName = account.key_name || 'Unknown Key';
-        if (!grouped[keyName]) grouped[keyName] = [];
-        grouped[keyName].push(account);
-    });
-
-    Object.keys(grouped).forEach(keyName => {
-        const optgroup = document.createElement('optgroup');
-        optgroup.label = `🔑 ${keyName}`;
-
-        grouped[keyName].forEach(account => {
-            const option = document.createElement('option');
-            option.value = account.id;
-            option.textContent = account.name;
-            option.dataset.keyId = account.key_id || '';
-            option.dataset.keyName = account.key_name || '';
-            option.dataset.platform = account.platform || 'facebook';
-            optgroup.appendChild(option);
-        });
-
-        select.appendChild(optgroup);
-    });
-
-    if (filtered.length === 1) {
-        select.value = filtered[0].id;
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
 
 function populateZernioAccountSelect(accounts) {
     if (!zernioAccountSelect) return;
@@ -1141,117 +1045,6 @@ function populatePipelineFacebookAccounts(accounts) {
     
     console.log(`✅ Populated pipeline dropdown with ${accounts.length} accounts`);
 }
-
-
-
-
-
-
-
-
-
-
-async function populateEditZernioAccounts(selectedId, platform) {
-    const select = document.getElementById('edit-pipeline-facebook-account');
-    if (!select) return;
-
-    select.innerHTML = '<option value="">Loading...</option>';
-
-    // Use cached zernioAccounts if loaded; otherwise fetch
-    let accounts = zernioAccounts;
-    if (!accounts || accounts.length === 0) {
-        try {
-            const res = await fetch('/api/zernio/accounts', { credentials: 'same-origin' });
-            const data = await res.json();
-            accounts = data.accounts || [];
-        } catch (e) {
-            console.error('Error loading Zernio accounts:', e);
-            accounts = [];
-        }
-    }
-
-    const filtered = accounts.filter(
-        a => (a.platform || 'facebook').toLowerCase() === platform
-    );
-
-    select.innerHTML = '';
-
-    const defaultOption = document.createElement('option');
-    defaultOption.value = '';
-    defaultOption.textContent = platform === 'instagram'
-        ? 'Select Instagram account...'
-        : 'Select Facebook account...';
-    select.appendChild(defaultOption);
-
-    if (filtered.length === 0) {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = platform === 'instagram'
-            ? '❌ No Instagram accounts found'
-            : '❌ No Facebook accounts found';
-        opt.disabled = true;
-        select.appendChild(opt);
-        return;
-    }
-
-    // Group by key
-    const grouped = {};
-    filtered.forEach(account => {
-        const keyName = account.key_name || 'Unknown Key';
-        if (!grouped[keyName]) grouped[keyName] = [];
-        grouped[keyName].push(account);
-    });
-
-    let foundSelected = false;
-
-    Object.keys(grouped).forEach(keyName => {
-        const optgroup = document.createElement('optgroup');
-        optgroup.label = `🔑 ${keyName}`;
-
-        grouped[keyName].forEach(account => {
-            const option = document.createElement('option');
-            option.value = account.id;
-            option.textContent = account.name || account.id;
-            option.dataset.keyId = account.key_id || '';
-            option.dataset.keyName = account.key_name || '';
-            option.dataset.platform = account.platform || 'facebook';
-
-            if (account.id === selectedId) {
-                option.selected = true;
-                foundSelected = true;
-            }
-            optgroup.appendChild(option);
-        });
-
-        select.appendChild(optgroup);
-    });
-
-    // Fallback if the stored account isn't in the list (deleted / different key)
-    if (selectedId && !foundSelected) {
-        const opt = document.createElement('option');
-        opt.value = selectedId;
-        opt.textContent = `⚠️ ${selectedId}`;
-        opt.disabled = true;
-        opt.selected = true;
-        select.appendChild(opt);
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function populateEditFacebookAccounts(selectedId) {
     const select = document.getElementById('edit-pipeline-facebook-account');
@@ -2585,10 +2378,9 @@ function renderPipelines(pipelines) {
     const statusClass = p.is_active ? 'active' : 'inactive';
 
 
-    const platformIcon = p.platform === 'twitter'   ? '🐦' :
-                         p.platform === 'tiktok'    ? '🎵' :
-                         p.platform === 'instagram' ? '📸' :
-                         '📘';
+    const platformIcon = p.platform === 'twitter' ? '🐦' :
+                     p.platform === 'tiktok'  ? '🎵' :
+                     '📘';
 
 
     const statusText = p.is_active ? '🟢 Active' : '🔴 Inactive';
@@ -2639,24 +2431,10 @@ function renderPipelines(pipelines) {
             <span class="pipeline-label">Profile:</span>
             <span class="pipeline-value">@${escapeHtml(p.profile_username)}</span>
           </div>
-
-
-
-
-
 <div class="pipeline-detail">
   <span class="pipeline-label">Platform:</span>
-  <span class="pipeline-value">${
-      p.platform === 'twitter'   ? 'Twitter' :
-      p.platform === 'tiktok'    ? 'TikTok' :
-      p.platform === 'instagram' ? 'Instagram' :
-      'Facebook'
-  }</span>
+  <span class="pipeline-value">${p.platform === 'twitter' ? 'Twitter' : p.platform === 'tiktok' ? 'TikTok' : 'Facebook'}</span>
 </div>
-
-
-
-
           <div class="pipeline-detail">
             <span class="pipeline-label">Daily Limit:</span>
             <span class="pipeline-value">${p.daily_limit}</span>
@@ -2806,27 +2584,12 @@ async function editPipeline(pipelineId) {
                 keyInfoEl.hidden = false;
                 const p = (pipeline.platform || 'facebook').toLowerCase();
 
-
-
-
-
-
-
-
-                if (p === 'facebook' || p === 'instagram') {
+                if (p === 'facebook') {
                     let accountName = 'Unknown Account';
                     let keyName = 'No key';
 
-                    const currentId = p === 'instagram'
-                        ? pipeline.instagram_account_id
-                        : pipeline.facebook_account_id;
-
-                    const account = (zernioAccounts || []).find(a => a.id === currentId);
+                    const account = (zernioAccounts || []).find(a => a.id === pipeline.facebook_account_id);
                     if (account) accountName = account.name || account.id;
-
-
-
-
 
                     if (pipeline.zernio_key_id) {
                         const key = (zernioKeys || []).find(k => k.id === pipeline.zernio_key_id);
@@ -2861,54 +2624,25 @@ async function editPipeline(pipelineId) {
                 }
             }
             
-
-
-
-
-
-
-
-
-
-
             // ✅ Populate accounts and select the current one
             // Populate the right account dropdown based on platform
             const platform = (pipeline.platform || 'facebook').toLowerCase();
             const fbGroup = document.getElementById('edit-pipeline-facebook-group');
             const bufferGroup = document.getElementById('edit-pipeline-buffer-group');
             const platformSelect = document.getElementById('edit-pipeline-platform');
-            const fbLabel = document.getElementById('edit-pipeline-facebook-label');
 
             if (platformSelect) platformSelect.value = platform;
 
-            // Zernio platforms (facebook + instagram) share the same account dropdown
-            if (platform === 'facebook' || platform === 'instagram') {
+            if (platform === 'facebook') {
                 if (fbGroup) fbGroup.style.display = 'block';
                 if (bufferGroup) bufferGroup.style.display = 'none';
-
-                if (fbLabel) {
-                    fbLabel.textContent = platform === 'instagram'
-                        ? 'Instagram Account'
-                        : 'Facebook Account';
-                }
-
-                const currentAccountId = platform === 'instagram'
-                    ? pipeline.instagram_account_id
-                    : pipeline.facebook_account_id;
-
-                await populateEditZernioAccounts(currentAccountId, platform);
+                await populateEditFacebookAccounts(pipeline.facebook_account_id);
             } else {
                 if (fbGroup) fbGroup.style.display = 'none';
                 if (bufferGroup) bufferGroup.style.display = 'block';
-                if (fbLabel) fbLabel.textContent = 'Facebook Account';
                 await populateEditBufferChannels(pipeline.buffer_channel_id, platform);
             }
-
-
-
-
-
-
+            
         } else {
             showEditPipelineStatus('❌ Failed to load pipeline data', 'error');
         }
@@ -3025,35 +2759,13 @@ document.getElementById('save-pipeline-edit-btn')?.addEventListener('click', asy
         platform
     };
 
-
-
-
-
-    if (platform === 'facebook' || platform === 'instagram') {
-        const accountSelect = document.getElementById('edit-pipeline-facebook-account');
-        const accountId = accountSelect.value;
-        const selectedOption = accountSelect.options[accountSelect.selectedIndex];
-        const zernioKeyId = selectedOption?.dataset?.keyId || null;
-
-        const platformLabel = platform === 'instagram' ? 'Instagram' : 'Facebook';
-
-        if (!accountId || !zernioKeyId) {
-            showEditPipelineStatus(`❌ Please select an ${platformLabel} account`, 'error');
-            this.disabled = false;
-            this.textContent = 'Save Changes';
-            return;
-        }
-
-        if (platform === 'instagram') {
-            payload.instagram_account_id = accountId;
-        } else {
-            payload.facebook_account_id = accountId;
-        }
-        payload.zernio_key_id = zernioKeyId;
+    if (platform === 'facebook') {
+        const accountId = document.getElementById('edit-pipeline-facebook-account').value;
+        const selectedOption = document.getElementById('edit-pipeline-facebook-account')
+            ?.options[document.getElementById('edit-pipeline-facebook-account').selectedIndex];
+        payload.facebook_account_id = accountId;
+        payload.zernio_key_id = selectedOption?.dataset?.keyId || null;
     } else {
-
-
-
         const channelSelect = document.getElementById('edit-pipeline-buffer-channel');
         const channelId = channelSelect?.value;
         const selectedOption = channelSelect?.options[channelSelect.selectedIndex];
@@ -3209,28 +2921,18 @@ createPipelineBtn?.addEventListener('click', async function() {
         platform,
     };
 
-    // Zernio platforms: Facebook + Instagram share the same account dropdown
-    if (platform === 'facebook' || platform === 'instagram') {
+    if (platform === 'facebook') {
         const accountSelect = pipelineFacebookAccount;
         const accountId = accountSelect?.value;
         const selectedOption = accountSelect?.options[accountSelect.selectedIndex];
         const zernioKeyId = selectedOption?.dataset?.keyId || null;
 
-        const platformLabel = platform === 'instagram' ? 'Instagram' : 'Facebook';
-
         if (!accountId || !zernioKeyId) {
-            showPipelinesStatus(`❌ Please select an ${platformLabel} account`, 'error');
+            showPipelinesStatus('❌ Please select a Facebook account', 'error');
             return;
         }
 
-        // Send the platform-specific account field.
-        // The backend accepts instagram_account_id for Instagram pipelines
-        // and facebook_account_id for Facebook pipelines.
-        if (platform === 'instagram') {
-            payload.instagram_account_id = accountId;
-        } else {
-            payload.facebook_account_id = accountId;
-        }
+        payload.facebook_account_id = accountId;
         payload.zernio_key_id = zernioKeyId;
 
     } else if (platform === 'twitter' || platform === 'tiktok') {
@@ -3266,12 +2968,7 @@ createPipelineBtn?.addEventListener('click', async function() {
         const data = await response.json();
 
         if (response.ok) {
-            const platformLabel = platform === 'instagram' ? 'Instagram'
-                               : platform === 'facebook'  ? 'Facebook'
-                               : platform === 'twitter'   ? 'Twitter'
-                               : platform === 'tiktok'    ? 'TikTok'
-                               : platform;
-            showPipelinesStatus(`✅ ${platformLabel} pipeline "${name}" created!`, 'success');
+            showPipelinesStatus(`✅ ${platform} pipeline "${name}" created!`, 'success');
             if (pipelineName) pipelineName.value = '';
             if (pipelineUsername) pipelineUsername.value = '';
             if (pipelineDailyLimit) pipelineDailyLimit.value = '2';
@@ -6221,20 +5918,10 @@ function handlePipelinePlatformChange() {
     const platform = (document.getElementById('pipeline-platform')?.value || 'facebook').toLowerCase();
     const fbGroup = document.getElementById('pipeline-facebook-group');
     const bufferGroup = document.getElementById('pipeline-buffer-group');
-    const fbLabel = document.getElementById('pipeline-facebook-label');
 
-    // Zernio platforms (facebook + instagram) share the same account dropdown
-    if (platform === 'facebook' || platform === 'instagram') {
+    if (platform === 'facebook') {
         if (fbGroup) fbGroup.style.display = 'block';
         if (bufferGroup) bufferGroup.style.display = 'none';
-
-        // Update the label so users know which platform they're picking for
-        if (fbLabel) {
-            fbLabel.textContent = platform === 'instagram' ? 'Instagram Account' : 'Facebook Account';
-        }
-
-        // Repopulate with only accounts of the selected platform
-        populatePipelineZernioAccounts(platform);
     } else {
         if (fbGroup) fbGroup.style.display = 'none';
         if (bufferGroup) bufferGroup.style.display = 'block';
