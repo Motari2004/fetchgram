@@ -4011,7 +4011,7 @@ function renderZernioKeys(keys) {
                 <div style="font-size: 32px; margin-bottom: 12px;">🔑</div>
                 <strong>No Zernio keys added</strong>
                 <p style="margin-top: 8px; font-size: 13px; color: var(--text-secondary);">
-                    Add your first Zernio API key to start posting to Facebook.
+                    Add your first Zernio API key to start posting to Facebook and Instagram.
                 </p>
                 <button id="empty-add-key-btn" class="btn btn-sm btn-primary" style="margin-top: 12px;">➕ Add Key</button>
             </div>
@@ -4029,7 +4029,18 @@ function renderZernioKeys(keys) {
         const isActive = key.is_active;
         // Use accounts from API response
         const accounts = key.accounts || [];
+        
+        // ← Split accounts by platform
+        const facebookAccounts = accounts.filter(a => (a.platform || 'facebook').toLowerCase() === 'facebook');
+        const instagramAccounts = accounts.filter(a => (a.platform || '').toLowerCase() === 'instagram');
+        
         const accountCount = accounts.length;
+        
+        // Build the badge text — show FB / IG counts separately
+        let countBadgeText = `${accountCount} account${accountCount !== 1 ? 's' : ''}`;
+        if (facebookAccounts.length > 0 && instagramAccounts.length > 0) {
+            countBadgeText = `${facebookAccounts.length} FB · ${instagramAccounts.length} IG`;
+        }
         
         html += `
             <div class="zernio-key-card ${isActive ? '' : 'inactive'}">
@@ -4040,7 +4051,7 @@ function renderZernioKeys(keys) {
                         <span class="key-status-badge ${isActive ? 'active' : 'inactive'}">
                             ${isActive ? 'Active' : 'Inactive'}
                         </span>
-                        <span class="key-account-count-badge">${accountCount} account${accountCount !== 1 ? 's' : ''}</span>
+                        <span class="key-account-count-badge">${countBadgeText}</span>
                     </div>
                     <div class="zernio-key-actions">
                         <button class="btn btn-sm btn-ghost toggle-key-btn" data-id="${key.id}" data-active="${isActive}" title="Toggle Key">
@@ -4055,15 +4066,15 @@ function renderZernioKeys(keys) {
                         <span class="key-value key-masked">${key.api_key_masked || '***'}</span>
                     </div>
                     
-                    <!-- Show ALL Facebook accounts with ✅ -->
+                    ${facebookAccounts.length > 0 ? `
+                    <!-- Facebook accounts -->
                     <div class="key-accounts-section">
                         <div class="key-detail" style="border-bottom: none; margin-bottom: 4px; font-weight: 600;">
-                            <span class="key-label">Facebook Accounts:</span>
-                            <span class="key-value" style="color: var(--accent);">${accountCount}</span>
+                            <span class="key-label">📘 Facebook:</span>
+                            <span class="key-value" style="color: var(--accent);">${facebookAccounts.length}</span>
                         </div>
-                        ${accountCount > 0 ? `
                         <div class="key-accounts-list">
-                            ${accounts.map((account, idx) => `
+                            ${facebookAccounts.map(account => `
                                 <div class="key-account-item">
                                     <span class="account-icon">📱</span>
                                     <span class="account-name">${escapeHtml(account.name)}</span>
@@ -4072,12 +4083,34 @@ function renderZernioKeys(keys) {
                                 </div>
                             `).join('')}
                         </div>
-                        ` : `
-                        <div class="key-accounts-empty">
-                            <span style="color: var(--text-muted); font-size: 13px;">No Facebook accounts found</span>
-                        </div>
-                        `}
                     </div>
+                    ` : ''}
+                    
+                    ${instagramAccounts.length > 0 ? `
+                    <!-- Instagram accounts -->
+                    <div class="key-accounts-section">
+                        <div class="key-detail" style="border-bottom: none; margin-bottom: 4px; font-weight: 600;">
+                            <span class="key-label">📸 Instagram:</span>
+                            <span class="key-value" style="color: var(--accent);">${instagramAccounts.length}</span>
+                        </div>
+                        <div class="key-accounts-list">
+                            ${instagramAccounts.map(account => `
+                                <div class="key-account-item">
+                                    <span class="account-icon">📸</span>
+                                    <span class="account-name">${escapeHtml(account.name)}</span>
+                                    <span class="account-id">${escapeHtml(account.id)}</span>
+                                    <span class="account-status">✅</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                    
+                    ${accountCount === 0 ? `
+                    <div class="key-accounts-empty">
+                        <span style="color: var(--text-muted); font-size: 13px;">No accounts connected in Zernio</span>
+                    </div>
+                    ` : ''}
                 </div>
             </div>
         `;
