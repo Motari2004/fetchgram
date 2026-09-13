@@ -8,6 +8,7 @@ for a specific platform (twitter / instagram / tiktok / facebook).
 
 import os
 import re
+import time
 from google import genai
 from google.genai import types
 
@@ -15,6 +16,11 @@ from google.genai import types
 # ---------- Config ----------
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+# Retry behavior on transient errors (503, 429, timeouts).
+# Kept short so we don't blow Vercel's function timeout.
+MAX_RETRIES = 3
+RETRY_DELAYS = (0.5, 1.0, 2.0)  # seconds — total worst case ~3.5s
 
 _client = None
 
@@ -142,15 +148,40 @@ def _enforce_limit(text: str, platform: str) -> str:
     return truncated.rstrip() + "…"
 
 
+# ---------- Error classification ----------
+def _is_retryable_error(err: Exception) -> bool:
+    """
+    Return True for transient errors worth retrying:
+      - 503 UNAVAILABLE (Gemini high demand)
+      - 429 RESOURCE_EXHAUSTED (rate limit)
+      - Timeouts, connection errors
+    """
+    msg = str(err).lower()
+    return any(token in msg for token in (
+        "503",
+        "unavailable",
+        "429",
+        "resource_exhausted",
+        "resource exhausted",
+        "timeout",
+        "timed out",
+        "deadline",
+        "connection",
+        "temporarily",
+    ))
+
+
 # ---------- Public API ----------
 def regenerate_caption(source_caption: str, platform: str) -> str:
     """
     Regenerate a caption for the target platform using Gemini.
 
-    Returns the new caption, or the source caption unchanged if:
-      - API key is missing
-      - API call fails
-      - Response is empty
+    Retries on transient errors (503, 429, timeouts) with short backoff.
+    Falls back to the source caption on permanent failure or after
+    all retries are exhausted.
+
+    Returns:
+        A platform-optimized caption string, or the source caption.
     """
     if not source_caption or not source_caption.strip():
         return source_caption
@@ -161,25 +192,73 @@ def regenerate_caption(source_caption: str, platform: str) -> str:
 
     try:
         client = _get_client()
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.85,
-                max_output_tokens=800,
-            ),
-            contents=_build_user_prompt(source_caption, platform),
-        )
-        output = response.text
     except Exception as e:
-        print(f"[ai_caption] Gemini error: {e}")
+        print(f"[ai_caption] Gemini client init failed: {e}")
         return source_caption
 
-    if not output:
-        return source_caption
+    user_prompt = _build_user_prompt(source_caption, platform)
+    last_error = None
 
-    cleaned = _clean_output(output)
-    if not cleaned:
-        return source_caption
+    for attempt in range(MAX_RETRIES):
+        attempt_no = attempt + 1
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=0.85,
+                    max_output_tokens=800,
+                    # We don't use tools — disable AFC to silence the warning
+                    # and skip an unnecessary feature.
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        disable=True
+                    ),
+                    # Caption rewriting doesn't need reasoning.
+                    # Disabling thinking cuts latency roughly in half.
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+                contents=user_prompt,
+            )
+            output = response.text
 
-    return _enforce_limit(cleaned, platform)
+            if not output:
+                last_error = "empty response"
+                print(f"[ai_caption] Empty response (attempt {attempt_no}/{MAX_RETRIES})")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAYS[attempt])
+                    continue
+                break
+
+            cleaned = _clean_output(output)
+            if not cleaned:
+                last_error = "empty after cleaning"
+                print(f"[ai_caption] Empty after cleaning (attempt {attempt_no}/{MAX_RETRIES})")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAYS[attempt])
+                    continue
+                break
+
+            return _enforce_limit(cleaned, platform)
+
+        except Exception as e:
+            last_error = str(e)
+            retryable = _is_retryable_error(e)
+
+            if retryable and attempt < MAX_RETRIES - 1:
+                wait = RETRY_DELAYS[attempt]
+                # Shorten the error for logging
+                err_snip = str(e).split('\n')[0][:120]
+                print(
+                    f"[ai_caption] Gemini transient error on attempt "
+                    f"{attempt_no}/{MAX_RETRIES}: {err_snip} — retrying in {wait}s"
+                )
+                time.sleep(wait)
+                continue
+
+            # Permanent error or last attempt
+            err_snip = str(e).split('\n')[0][:160]
+            print(f"[ai_caption] Gemini error (non-retryable or exhausted): {err_snip}")
+            break
+
+    print(f"[ai_caption] All attempts failed ({last_error}); using source caption")
+    return source_caption
