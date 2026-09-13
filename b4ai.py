@@ -18,7 +18,6 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from ai_caption_regenerator import regenerate_caption as ai_regenerate_caption
 
 # Load .env file manually if it exists (for local development)
 try:
@@ -3020,10 +3019,6 @@ def dispatch_publish(pipeline, video_url, caption, scheduled_post_id=None):
     """
     Route a publish request to the correct platform publisher.
 
-    Before routing, the caption is regenerated with Gemini for the
-    target platform's voice (punchy for Twitter, story-driven for
-    Instagram, casual for TikTok, conversational for Facebook).
-
     The `pipeline` dict must be a row from the pipelines table (or a dict
     with the same keys). Required keys depend on the platform:
 
@@ -3043,32 +3038,6 @@ def dispatch_publish(pipeline, video_url, caption, scheduled_post_id=None):
         f"🚏 dispatch_publish → platform={platform} "
         f"(post_id={scheduled_post_id})"
     )
-
-    # ---------- AI CAPTION REGENERATION ----------
-    # Rewrite the caption for this platform's voice using Gemini.
-    # Falls back to the source caption on any failure so publishing
-    # never breaks because of an AI hiccup.
-    original_caption = caption or ""
-    try:
-        regenerated = ai_regenerate_caption(original_caption, platform)
-        if regenerated and regenerated != original_caption:
-            app.logger.info(
-                f"🤖 Gemini caption regenerated for {platform} "
-                f"({len(original_caption)} → {len(regenerated)} chars)"
-            )
-            caption = regenerated
-        else:
-            app.logger.info(
-                f"🤖 Gemini returned unchanged/empty caption for {platform}; "
-                f"using source caption"
-            )
-            caption = original_caption
-    except Exception as e:
-        app.logger.warning(
-            f"⚠️ Gemini caption regen failed for {platform}: {e}; "
-            f"using source caption"
-        )
-        caption = original_caption
 
     # ---------- FACEBOOK (Zernio) ----------
     if platform == "facebook":
